@@ -212,6 +212,9 @@ export const DICT_ZH: Record<string, string> = {
   'attach.sent': '发送',
   'attach.token': 'Token',
   'attach.tokensTip': '按 DeepSeek 官方图片尺寸换算（单图上限 384 tokens）估算的 token 消耗',
+  'markdown.code.copy': '复制',
+  'markdown.code.copied': '已复制',
+  'markdown.footnotes': '脚注',
 }
 
 export const DICT_EN: Record<string, string> = {
@@ -419,4 +422,7 @@ export const DICT_EN: Record<string, string> = {
   'attach.sent': 'Sent',
   'attach.token': 'Token',
   'attach.tokensTip': 'Estimated token cost via DeepSeek\'s official image-size conversion (384-token cap per image)',
+  'markdown.code.copy': 'Copy',
+  'markdown.code.copied': 'Copied',
+  'markdown.footnotes': 'Footnotes',
 }

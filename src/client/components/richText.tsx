@@ -6,6 +6,7 @@
 
 import type * as ReactNS from 'react'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MarkdownLabels } from '@deepseek-ai/dsh-client-ui-primitives'
 import { React } from '../react'
 import type { ViewKit } from '../viewkit'
 
@@ -19,6 +20,13 @@ export interface RichKit {
 
 export function makeRichText(kit: ViewKit): RichKit {
   const { t } = kit
+
+  // Reference-stable labels object so the MarkdownText streaming cache
+  // does not reset on every render. `t` is stable for the plugin lifetime.
+  const labels: MarkdownLabels = {
+    code: { copyLabel: t('markdown.code.copy'), copiedLabel: t('markdown.code.copied') },
+    footnotes: t('markdown.footnotes'),
+  }
 
   function useRichMode(): [RichMode, (mode: RichMode) => void] {
     // Markdown is the default view: the detail cards hold prose (prompts,
@@ -64,7 +72,7 @@ export function makeRichText(kit: ViewKit): RichKit {
 
   function RichText(props: { text: string; mode: RichMode }): ReactNS.ReactElement {
     if (props.mode === 'md') {
-      return <div className="lc-ts-desc-md"><MarkdownText text={props.text} /></div>
+      return <div className="lc-ts-desc-md"><MarkdownText text={props.text} labels={labels} /></div>
     }
     return <RawText text={props.text} />
   }
