@@ -14,7 +14,6 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 
 /** The namespace is the join key between the Host registration and the browser card. */
@@ -44,6 +43,6 @@ export const SettingsSchema: z<PluginSettings> = z.object({
 /** Serve the namespace while a settings provider is composed; inert otherwise. */
 export function installSettings(ctx: Context): void {
   ctx.inject(['settings'], (sctx) => {
-    sctx.settings.register(settingsNamespace(SETTINGS_NAMESPACE), SettingsSchema)
+    sctx.settings.register(SETTINGS_NAMESPACE, SettingsSchema)
   })
 }
