@@ -225,7 +225,7 @@ for (const [index, baseline] of BASELINES.entries()) {
       driver.onChanged((_s, key) => seen.push(key))
       const before = driver.snapshot(session)
       // A durable event family the fold ignores (registry still drives it through apply).
-      const foreign = { seq: 12, time: 1, type: 'assistant/chunk', data: {} } as unknown as TimelineEvent
+      const foreign = { seq: 12, time: 1, type: 'todo/write', data: {} } as unknown as TimelineEvent
       session.events[12] = foreign
       session.seq = 13
       driver.driveEvent(session, foreign)

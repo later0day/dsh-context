@@ -110,13 +110,15 @@ export interface TimelineState {
   /**
    * The open step's start instant, armed by `step/start` and consumed by the
    * `assistant/message` (TTFT/generation split) and `step/end` (wall time)
-   * that follow it; `assistant/chunk` stamps `firstToken` on the step's first
-   * token delta — absent when the stream carried none (legacy or aborted
-   * steps), which leaves that call's model time unattributed. One slot, not a
-   * map: steps are sequential in the log, so the newest `step/start` is the
-   * one those events close — a hostile interleaved log degrades to skipped
-   * durations, never to unbounded state. Same arm/remove lifecycle as
-   * `pendingShadowedSeqs`.
+   * that follow it; `firstToken` is stamped only when a failed
+   * `assistant/attempt` of the same step already delivered a token delta —
+   * the settled message reads its own embedded stream, so the common case
+   * never needs the slot to carry it. Absent when neither stream carried a
+   * token (aborted steps), which leaves that call's model time unattributed.
+   * One slot, not a map: steps are sequential in the log, so the newest
+   * `step/start` is the one those events close — a hostile interleaved log
+   * degrades to skipped durations, never to unbounded state. Same arm/remove
+   * lifecycle as `pendingShadowedSeqs`.
    */
   stepStart?: { time: number; firstToken?: number }
   /**
@@ -558,6 +560,56 @@ function isTokenDelta(chunk: unknown): boolean {
 }
 
 /**
+ * The instant of the first token delta inside one durable Assistant stream, or
+ * `undefined` when the stream carried none.
+ *
+ * Since dsh 0.1.3-alpha.1 there is no per-chunk `assistant/chunk` event: the
+ * settled `assistant/message` and each failed `assistant/attempt` EMBED their
+ * step's exact timed stream as run-compacted records (`AssistantStreamRecord`
+ * in `@deepseek-ai/dsh-llm`). A run stamps member N at `time0 + dt[0..N-1]`;
+ * `{type:'chunk', time, chunk}` carries a lone chunk verbatim. Reading the
+ * records here instead of depending on `@deepseek-ai/dsh-llm` keeps this
+ * plugin's dependency surface unchanged.
+ *
+ * A named `tool-call-chunks` run makes its first member a token even when that
+ * member's argument text is empty: the official expansion stamps the record's
+ * `name` onto every member, which is what `isTokenDelta` marks on.
+ *
+ * Untrusted-log rule of this fold: anything malformed is simply "no token" —
+ * never a throw, which would drop the event's whole request record.
+ */
+function firstTokenTimeOf(stream: unknown): number | undefined {
+  if (!Array.isArray(stream)) return undefined
+  for (const record of stream) {
+    if (record === null || typeof record !== 'object') continue
+    const r = record as Record<string, unknown>
+    if (r.type === 'chunk') {
+      if (typeof r.time === 'number' && isTokenDelta(r.chunk)) return r.time
+      continue
+    }
+    const isToolCallRun = r.type === 'tool-call-chunks'
+    // An unrecognized record type is skipped WHOLE — the official expansion
+    // throws on it, so reading its fields here would invent a token.
+    if (!isToolCallRun && r.type !== 'text-chunks' && r.type !== 'reasoning-chunks') continue
+    const members = isToolCallRun ? r.args : r.texts
+    if (!Array.isArray(members) || typeof r.time0 !== 'number') continue
+    const named = isToolCallRun && r.name !== undefined
+    const dt = Array.isArray(r.dt) ? r.dt : []
+    let time = r.time0
+    for (let index = 0; index < members.length; index += 1) {
+      if (index > 0) {
+        const gap = dt[index - 1]
+        if (typeof gap !== 'number') break
+        time += gap
+      }
+      const member: unknown = members[index]
+      if (typeof member === 'string' && (member !== '' || named)) return time
+    }
+  }
+  return undefined
+}
+
+/**
  * The fold's private timing accumulator: created on first use, and CLONED on
  * every later ensure() (see `applyTimeline`) — the object left in the
  * persisted previous state is never written into in place.
@@ -677,21 +729,23 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         }
         break
       }
-      case 'assistant/chunk': {
-      // The token flood: every stream chunk is one event, so this case stays
-      // cheap and mostly reference-stable — only the open step's FIRST token
-      // delta stamps the slot (later deltas and steps without a slot return
-      // the same state). A malformed chunk just is not a token.
+      case 'assistant/attempt': {
+      // A model attempt that committed no surface message (failed, retried,
+      // cancelled, or stream-error) still embeds the stream it did deliver, so
+      // it can hold the open step's FIRST token — the harness's own stats fold
+      // takes the earliest of the attempts and the settled message. Only the
+      // first stamp lands (later attempts and steps without a slot return the
+      // same state); a stream with no token delta just is not a stamp.
         const start = state.stepStart
         if (start === undefined || start.firstToken !== undefined) return state
-        if (!isTokenDelta(data?.chunk)) return state
+        const first = firstTokenTimeOf(data?.stream)
+        if (first === undefined) return state
         const s = ensure()
-        s.stepStart = { time: start.time, firstToken: event.time }
+        s.stepStart = { time: start.time, firstToken: first }
         break
       }
       case 'step/start': {
         // Arm the single pending-step slot (see TimelineState.stepStart): the
-        // following assistant/chunk stamps the first token on it, and the
         // assistant/message and step/end price the model wait/generation and
         // the whole step against this instant. Always a state change (a new
         // slot value), even over an un-consumed predecessor — sequential logs
@@ -817,16 +871,20 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         }
         s.requests.push(record)
         // Timing: one completed model call; its wait/generation split prices
-        // off the slot's first-token stamp when the stream carried one (a
-        // chunk-less call — legacy log, aborted step — stays unattributed and
-        // lands in the card's residue). The pending slot stays armed —
-        // the step's tool calls and `step/end` still follow.
+        // off the step's first-token instant, read from THIS event's embedded
+        // stream (or already stamped on the slot by an earlier failed attempt
+        // of the same step). A call whose stream carried no token delta stays
+        // unattributed and lands in the card's residue. The pending slot stays
+        // armed — the step's tool calls and `step/end` still follow.
         const timing = ensureTiming(s)
         timing.calls += 1
         const stepStart = state.stepStart
-        if (stepStart !== undefined && stepStart.firstToken !== undefined) {
-          timing.ttftMs += durOf(stepStart.time, stepStart.firstToken)
-          timing.genMs += durOf(stepStart.firstToken, event.time)
+        if (stepStart !== undefined) {
+          const firstToken = stepStart.firstToken ?? firstTokenTimeOf(data?.stream)
+          if (firstToken !== undefined) {
+            timing.ttftMs += durOf(stepStart.time, firstToken)
+            timing.genMs += durOf(firstToken, event.time)
+          }
         }
         // `deriveEventMessage` returns `data.message` for assistant/message, or
         // null when the content array is empty (usage-only events project to no

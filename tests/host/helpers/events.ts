@@ -58,9 +58,53 @@ export function stepStart(seq: number, opts: { time?: number } = {}): TimelineEv
   return { type: 'step/start', seq, time: at(opts.time) }
 }
 
-/** assistant/chunk: one stream chunk of the open step (the token flood). */
-export function assistantChunk(seq: number, chunk: unknown, opts: { time?: number } = {}): TimelineEvent {
-  return { type: 'assistant/chunk', seq, time: at(opts.time), data: { chunk } }
+/**
+ * One run-compacted stream record: members are stamped from `time0`, each
+ * later one `dt[i-1]` after its predecessor (the durable
+ * `AssistantStreamRecord` run form embedded in settled Assistant events).
+ */
+export function run(
+  type: 'text-chunks' | 'reasoning-chunks' | 'tool-call-chunks',
+  time0: number,
+  members: unknown[],
+  opts: { dt?: number[]; index?: number; id?: string; name?: string } = {},
+): Record<string, unknown> {
+  const record: Record<string, unknown> = {
+    type,
+    time0,
+    index: opts.index ?? 0,
+    dt: opts.dt ?? Array.from({ length: Math.max(0, members.length - 1) }, () => 0),
+  }
+  if (type === 'tool-call-chunks') {
+    record.args = members
+    record.id = opts.id ?? 'call-1'
+    if (opts.name !== undefined) record.name = opts.name
+  } else {
+    record.texts = members
+  }
+  return record
+}
+
+/**
+ * One `{type:'chunk', time, chunk}` record — the durable form for a lone chunk
+ * the run compaction cannot fold (block boundaries, usage, finish, and
+ * unnameable tool-call deltas).
+ */
+export function rawChunk(time: number, chunk: unknown): Record<string, unknown> {
+  return { type: 'chunk', time, chunk }
+}
+
+/** A one-token text stream stamped at `time` — the common fixture. */
+export function tokenAt(time: number, text = 'x'): unknown[] {
+  return [run('text-chunks', time, [text])]
+}
+
+/**
+ * assistant/attempt: a settled model attempt that committed no surface
+ * message, carrying the stream it did deliver.
+ */
+export function assistantAttempt(seq: number, stream: unknown, opts: { time?: number } = {}): TimelineEvent {
+  return { type: 'assistant/attempt', seq, time: at(opts.time), data: { stream } }
 }
 
 export function stepEnd(seq: number, opts: { time?: number } = {}): TimelineEvent {
@@ -94,6 +138,8 @@ export function assistantMessage(seq: number, opts: {
   content?: ContentBlock[]
   /** Widened: hostile fixtures ride the same field (the fold re-proves every bucket). */
   usage?: Record<string, unknown>
+  /** The step's embedded timed stream (widened for malformed-log fixtures). */
+  stream?: unknown
   time?: number
   surfaceOp?: TimelineEvent['surfaceOp']
 }): TimelineEvent {
@@ -101,6 +147,7 @@ export function assistantMessage(seq: number, opts: {
   if (opts.turn !== undefined) data.turn = opts.turn
   if (opts.step !== undefined) data.step = opts.step
   if (opts.usage !== undefined) data.usage = opts.usage
+  if (opts.stream !== undefined) data.stream = opts.stream
   return { type: 'assistant/message', seq, time: at(opts.time), data, surfaceOp: opts.surfaceOp ?? 'append' }
 }
 
@@ -112,7 +159,7 @@ export function planMode(seq: number, data?: Record<string, unknown>): TimelineE
   return { type: 'plan/mode', seq, time: at(), ...(data === undefined ? {} : { data }) }
 }
 
-/** An event the fold does not care about (chunk, todo, …). */
-export function foreign(seq: number, type = 'assistant/chunk'): TimelineEvent {
+/** An event the fold does not care about (todo, hooks, …). */
+export function foreign(seq: number, type = 'todo/write'): TimelineEvent {
   return { type, seq, time: at(), data: {} }
 }
