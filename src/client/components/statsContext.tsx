@@ -1,15 +1,19 @@
 /**
- * The Context card: what the session's context IS and how it evolved — an
- * eight-cell 2×4 grid pairing the session's shape (turns / steps / live tool
- * calls / images) with the context-event tally (injections / compactions /
- * prunes) and the whole-session cost estimate. Count figures only: nothing
- * here is part of a spendable whole, so no pie — proportions live in the
- * composition card. The cost cell prices the host-folded cumulative billed
- * totals (complete session log, never trimmed) at the hardcoded DeepSeek V4
- * list prices (cost.ts) in the locale's currency; its hover bubble (a '?'
- * marker + styled DOM tip) explains the whole-session estimate and lists the
- * per-1M-token table straight from cost.ts, so printed rates can never drift
- * from the math.
+ * The Context card: what the session's context IS and how it evolved — a
+ * six-cell grid of the session's shape (turns / steps / human inputs / live
+ * tool calls), the whole-session cache-hit rate, and the whole-session cost
+ * estimate.
+ * Count figures only: nothing here is part of a spendable whole, so no pie —
+ * proportions live in the composition card, and the context-event tallies
+ * live on the events card's kind filters (contextView.tsx). The cache-hit
+ * cell reads the official `tokenUsage` projection — the same source and
+ * formula as the harness chat stats line under the composer, shown with one
+ * decimal — and dashes until a provider reports usage. The cost cell prices
+ * the host-folded cumulative billed totals (complete session log, never
+ * trimmed) at the hardcoded DeepSeek V4 list prices (cost.ts) in the locale's
+ * currency; its hover bubble (a '?' marker + styled DOM tip) explains the
+ * whole-session estimate and lists the per-1M-token table straight from
+ * cost.ts, so printed rates can never drift from the math.
  *
  * The counts arrive precomputed: the split-generation wire head carries them
  * (shared/types.ts `TimelineCounts` — computed over the retained records),
@@ -18,9 +22,11 @@
  */
 
 import { type ReactElement, type ReactNode } from 'react'
-import type { ContextEventRecord, RequestRecord, SessionCostUsage, TimelineCounts } from '../../shared/types'
+import type { ContextEventRecord, RequestRecord, SessionCostUsage, TimelineCounts, TokenUsage } from '../../shared/types'
 import { estimateSessionCost, formatCost, formatPriceRate, sessionPrices } from '../cost'
 import type { CostCurrency } from '../cost'
+import { cacheHitPercent } from '../format'
+import { numOf } from '../services'
 import type { ViewKit } from '../viewkit'
 
 /**
@@ -44,20 +50,23 @@ export function countsOfRecords(requests: readonly RequestRecord[], events: read
 }
 
 export function makeStatsContext(kit: ViewKit): (props: {
-  /** The session-shape and event tallies (host-precomputed on the split generation). */
+  /** The session-shape tally (host-precomputed on the split generation). */
   counts: TimelineCounts
+  /** The whole-session human-input tally (the user's messages + question answers; absent on older hosts). */
+  humanInputs?: number
   /** Tool calls with a result live in the current context (absent on older hosts). */
   toolCalls?: number
-  /** Image blocks live in the current context (absent on older hosts). */
-  images?: number
+  /** The official tokenUsage projection — the cache-hit cell's source (null until a provider reports). */
+  usage: TokenUsage | null
   cost?: SessionCostUsage
   locale: string
 }) => ReactElement {
   const { t, fmt } = kit
   return function StatsContext(props: {
     counts: TimelineCounts
+    humanInputs?: number
     toolCalls?: number
-    images?: number
+    usage: TokenUsage | null
     cost?: SessionCostUsage
     locale: string
   }): ReactElement {
@@ -78,6 +87,14 @@ export function makeStatsContext(kit: ViewKit): (props: {
         ))}
       </span>,
     ]
+    // The chat stats line's own figure, one decimal: prompt-side cache reads
+    // over the whole billed input (output excluded), dashed until reported.
+    const hit = props.usage === null ? null
+      : cacheHitPercent(
+        numOf(props.usage.cacheReadTokens),
+        numOf(props.usage.uncachedInputTokens) + numOf(props.usage.cacheReadTokens) + numOf(props.usage.cacheWriteTokens),
+        1,
+      )
     const cell = (label: string, value: string | number, tip?: ReactNode): ReactElement => (
       <div className={'lc-stat' + (tip === undefined ? '' : ' lc-stat-tipped')}>
         <span className="lc-stat-label">
@@ -96,12 +113,10 @@ export function makeStatsContext(kit: ViewKit): (props: {
         <div className="lc-stats">
           {cell(t('stats.turns'), props.counts.turns)}
           {cell(t('stats.steps'), props.counts.steps)}
+          {cell(t('stats.humanInputs'), props.humanInputs ?? 0, t('stats.humanInputsTip'))}
           {cell(t('stats.toolCalls'), props.toolCalls ?? 0)}
-          {cell(t('stats.images'), props.images ?? 0)}
+          {cell(t('stats.cacheHit'), hit === null ? '—' : `${hit}%`)}
           {cell(t('stats.cost'), cost === null ? '—' : formatCost(cost, currency), costTip)}
-          {cell(t('stats.injects'), props.counts.injects)}
-          {cell(t('stats.compactions'), props.counts.compactions)}
-          {cell(t('stats.prunes'), props.counts.prunes)}
         </div>
       </div>
     )

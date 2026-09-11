@@ -174,8 +174,13 @@ describe('ContextView — projection guards', () => {
     }))
     // Anchored headline: projected 100 of a 128k window.
     assert.ok(text(m.container).includes(DICT_EN['overview.used']))
-    // Cache-hit cell from the official tokenUsage projection (200 / 300).
-    assert.ok(text(m.container).includes('66.66%'))
+    // The Token card's center is the chat stats line's whole-session billed
+    // total off the official tokenUsage projection (100 + 200 + 0 + 50), and
+    // the Context card's cache-hit cell shows the line's own rate one decimal
+    // deep (200 / 300, truncated).
+    const tokensCard = queryAll(m.container, '.lc-head > .lc-col-donut')[0]
+    assert.equal(query(tokensCard, '.lc-donut-center b').textContent, '350')
+    assert.ok(text(m.container).includes('66.6%'))
     assert.ok(text(m.container).includes('m-only'))
     await m.unmount()
   })
@@ -485,15 +490,21 @@ describe('ContextView — interactions', () => {
   test('event-kind filter narrows, unions, drops, and resets', async () => {
     const m = await mountRich('sv-kinds')
     const countEvents = () => queryAll(m.container, '.lc-event').length
+    const kindBtn = (k: string) => query(m.container, `.lc-kinds [data-kind="${k}"]`) as HTMLElement
     assert.equal(countEvents(), 2)
+    // The buttons carry their per-kind tallies (richTimeline: 1 inject, 1 compaction, 0 prunes).
+    assert.deepEqual(
+      queryAll(m.container, '.lc-kinds .lc-kind-n').map(el => text(el)),
+      ['1', '1', '0'],
+    )
 
-    await click(buttonByText(m.container, DICT_EN['kind.inject']))
+    await click(kindBtn('inject'))
     assert.equal(countEvents(), 1)
-    await click(buttonByText(m.container, DICT_EN['kind.compaction']))
+    await click(kindBtn('compaction'))
     assert.equal(countEvents(), 2)
-    await click(buttonByText(m.container, DICT_EN['kind.compaction']))
+    await click(kindBtn('compaction'))
     assert.equal(countEvents(), 1)
-    await click(buttonByText(m.container, DICT_EN['kind.inject']))
+    await click(kindBtn('inject'))
     assert.equal(countEvents(), 2)
     await m.unmount()
   })
