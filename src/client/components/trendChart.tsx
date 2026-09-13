@@ -107,7 +107,10 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
   const STAGGER_CAP = 20
   // Neutral zebra, deliberately DISJOINT from the category palette — the strip must read as a partition layer, not a bottom segment of the
   // composition bars.
-  const TURN_FILLS = ['rgba(128,128,128,0.12)', 'rgba(128,128,128,0.26)']
+  const TURN_FILLS = [
+    'color-mix(in srgb, var(--color-neutral-500) 12%, transparent)',
+    'color-mix(in srgb, var(--color-neutral-500) 26%, transparent)',
+  ]
   // Turn labels render at natural width (a 2-digit "12" is wider than a 14px turn bar) and overflow their block.
   // Every label must stay on the single line, so the strip shrinks ALL labels to one font size — the largest at
   // which the tightest adjacent pair still clears the gap (analytic widths below, no measurement) — and the
@@ -201,7 +204,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     const enterStyle = { '--lc-i': Math.min(props.enterIndex, STAGGER_CAP) } as CSSProperties
     return (
       <div
-        className={'lc-bar'
+        className={'lc-bar hover:bg-(--dsw-alias-bg-layer-2)'
           + (props.selected ? ' lc-bar-selected' : '')
           + (props.hovered ? ' lc-bar-hovered' : '')
           + (props.inTurn ? ' lc-bar-in-turn' : '')}
@@ -218,14 +221,14 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
         ) : null}
         {diverge ? (
           <>
-            <div className="lc-bar-up" style={{ bottom: `${props.downPx}px`, ...enterStyle }}>
+            <div className="lc-bar-up animate-lc-bar-in motion-reduce:animate-none" style={{ bottom: `${props.downPx}px`, ...enterStyle }}>
               {CATS.map((c) => {
                 const d = req[c.key] || 0
                 if (d <= 0) return null
                 return <div key={c.key} data-cat={c.key} className="lc-cat-seg" style={{ height: `${Math.max(1, Math.round(d * (props.deltaScale as number)))}px`, background: c.color }} />
               })}
             </div>
-            <div className="lc-bar-down" style={{ top: `${props.upPx}px`, ...enterStyle }}>
+            <div className="lc-bar-down animate-lc-bar-in motion-reduce:animate-none" style={{ top: `${props.upPx}px`, ...enterStyle }}>
               {CATS.map((c) => {
                 const d = req[c.key] || 0
                 if (d >= 0) return null
@@ -234,7 +237,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
             </div>
           </>
         ) : (
-          <div className="lc-bar-stack" style={enterStyle}>
+          <div className="lc-bar-stack animate-lc-bar-in motion-reduce:animate-none" style={enterStyle}>
             {CATS.map((c) => {
               const v = req[c.key] || 0
               if (!v) return null

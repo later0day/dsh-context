@@ -6,6 +6,7 @@ import { CATS, CAT_COLOR, partsOf } from '../categories'
 import { dnaOf } from '../dna'
 import type { DnaItem } from '../dna'
 import type { ContentFetcher, ConversationNodeLike, HeaderFetcher } from '../services'
+import type { ContextSettings, DefaultToolSort } from '../settings'
 import type { ViewKit } from '../viewkit'
 import { blockSummaryOf, callSummaryOf, parseCallArgs } from '../callSummary'
 import type { DetailState } from '../timelineSource'
@@ -249,7 +250,7 @@ function RowToolbar(props: {
   return (
     <div className="lc-br-toolctl">
       <input
-        className="lc-br-tool-search"
+        className="lc-br-tool-search focus:border-(--dsw-alias-label-dimmed)"
         value={props.value}
         placeholder={props.placeholder}
         onChange={(ev: ChangeEvent<HTMLInputElement>) => { props.onChange(ev.target.value) }}
@@ -321,7 +322,7 @@ function ToolSchema(props: {
       <div className="lc-ts-json">
         <button
           type="button"
-          className="lc-ts-json-toggle"
+          className="lc-ts-json-toggle hover:text-(--dsw-alias-label-primary) hover:underline"
           onClick={() => { setJsonOpen(o => !o) }}
         >{(jsonOpen ? '▾ ' : '▸ ') + (jsonOpen ? props.labels.hide : props.labels.show)}</button>
         {jsonOpen ? <pre className="lc-ts-desc-body lc-br-dim">{schemaJson}</pre> : null}
@@ -581,6 +582,7 @@ const DNA_MIN_BAND = 0.35
 export function makeContextBrowser(
   kit: ViewKit,
   StackedBar: (props: StackedBarProps) => ReactElement,
+  settings: ContextSettings,
 ): (props: ContextBrowserProps) => ReactElement {
   const { t, fmt, fmtTime, catLabel } = kit
   const DetailNote = makeDetailNote(kit)
@@ -602,7 +604,9 @@ export function makeContextBrowser(
     // it, while step picks (setOpenCat(null) below) keep it so the same lens
     // compares epochs.
     const [rowQuery, setRowQuery] = useState('')
-    const [toolSort, setToolSort] = useState<'size' | 'name'>('size')
+    // Mount-time default from the plugin settings card; in-toolbar toggling
+    // stays mount-local and never writes back.
+    const [toolSort, setToolSort] = useState<DefaultToolSort>(() => settings.defaultToolSort())
     // DNA mode: the composition bar redraws as ONE band per context item in prompt order (dna.ts), hovered/clicked per item.
     const [dna, setDna] = useState(false)
     const [dnaKey, setDnaKey] = useState<string | null>(null)
@@ -735,6 +739,15 @@ export function makeContextBrowser(
 
     const byCat = byCatOf(view)
 
+    // Per-tool call-hit tally over the shown step's assembled surface: one
+    // tool-result node (the fold stamps `tool` on a paired result) is one
+    // completed call — the same accounting as the stats' toolCalls.
+    const toolHits = new Map<string, number>()
+    for (const n of view.nodes) {
+      if (n.cat === 'tool' && n.tool !== undefined) toolHits.set(n.tool, (toolHits.get(n.tool) ?? 0) + 1)
+    }
+    const toolHitsOf = (tool: HeaderTool): number => toolHits.get(tool.name) ?? 0
+
     // DNA mode: per-item bands in prompt order (dna.ts). The band label names the item the way its accordion row would
     // (skill name, tool name, injection form, else the category label), with the item's time appended.
     const dnaLabel = (it: DnaItem): string => {
@@ -820,7 +833,7 @@ export function makeContextBrowser(
       const open = openElem === key
       return (
         <div key={key} className={'lc-br-elem' + (open ? ' lc-br-elem-on' : '')}>
-          <button type="button" className="lc-br-elem-row" onClick={() => { toggleElem(key) }}>
+          <button type="button" className="lc-br-elem-row hover:bg-(--dsw-alias-interactive-bg-hover)" onClick={() => { toggleElem(key) }}>
             <span className={'lc-br-chev' + (open ? ' lc-br-chev-on' : '')} />
             {err ? <span className="lc-br-err-dot" title={t('node.failed')} /> : null}
             {tag !== null ? <span className="lc-br-tag">{tag}</span> : null}
@@ -880,14 +893,20 @@ export function makeContextBrowser(
               || schemaTextOf(row.schema).toLowerCase().includes(q)
           })
           // Size order mirrors the overview's Top chips — the producer's header
-          // order is not meaningful; name order gives lookup instead of ranking
-          // (names are unique keys, so a two-way comparison orders them fully).
-          .sort((a, b) => toolSort === 'size' ? b.tokens - a.tokens : (a.name < b.name ? -1 : 1))
+          // order is not meaningful; count order ranks by the call-hit tally of
+          // the shown step's surface (ties break by name); name order gives
+          // lookup instead of ranking (names are unique keys, so a two-way
+          // comparison orders them fully).
+          .sort((a, b) => toolSort === 'count'
+            ? (toolHitsOf(b) - toolHitsOf(a) || (a.name < b.name ? -1 : 1))
+            : toolSort === 'size'
+              ? b.tokens - a.tokens
+              : (a.name < b.name ? -1 : 1))
         // The toolbar stays mounted on an empty match, or the filter could
         // never be cleared from the UI.
         const toolctl = (
           <RowToolbar value={rowQuery} placeholder={t('tool.search')} tip={t('tool.sortTip')} onChange={setRowQuery}>
-            {(['size', 'name'] as const).map(k => (
+            {(['size', 'count', 'name'] as const).map(k => (
               <button
                 key={k}
                 type="button"
@@ -925,12 +944,18 @@ export function makeContextBrowser(
               // needs no extra frame around it. A tool whose provider predates
               // the attribution hook arrives with the UNKNOWN_TOOL_SOURCE
               // sentinel and renders a localized "unknown plugin" tag whose
-              // tooltip explains why no provider is shown.
-              const trailing = tool.plugin !== undefined
-                ? <span className="lc-br-tag lc-br-tool-plugin" title={tool.plugin === UNKNOWN_TOOL_SOURCE ? t('tool.unknownTitle') : t('tool.plugin')}>
-                  {tool.plugin === UNKNOWN_TOOL_SOURCE ? t('tool.unknown') : tool.plugin}
-                </span>
-                : null
+              // tooltip explains why no provider is shown. The hit tally always
+              // trails — a zero names a definition the shown step never called.
+              const trailing = (
+                <>
+                  {tool.plugin !== undefined
+                    ? <span className="lc-br-tag lc-br-tool-plugin" title={tool.plugin === UNKNOWN_TOOL_SOURCE ? t('tool.unknownTitle') : t('tool.plugin')}>
+                      {tool.plugin === UNKNOWN_TOOL_SOURCE ? t('tool.unknown') : tool.plugin}
+                    </span>
+                    : null}
+                  <span className="lc-br-hits" title={t('tool.hitsTip')}>{'×' + fmt(toolHitsOf(tool))}</span>
+                </>
+              )
               return elemRow('tool:' + tool.name, null, tool.name, tool.tokens, undefined,
                 toolBody(tool),
                 false, trailing)
@@ -1115,7 +1140,7 @@ export function makeContextBrowser(
               <div key={c.key} className={'lc-br-cat' + (openable ? '' : ' lc-br-cat-empty')}>
                 <button
                   type="button"
-                  className={'lc-br-cat-row' + (linked && props.hoverKey === c.key ? ' lc-br-cat-on' : '')}
+                  className={'lc-br-cat-row hover:bg-(--dsw-alias-interactive-bg-hover)' + (linked && props.hoverKey === c.key ? ' lc-br-cat-on' : '')}
                   /* v8 ignore start -- the handlers exist only when linked,
                      and linked already requires onHoverKey defined (above). */
                   onMouseEnter={linked ? () => { if (props.onHoverKey !== undefined) props.onHoverKey(c.key) } : undefined}

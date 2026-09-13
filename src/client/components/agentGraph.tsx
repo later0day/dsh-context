@@ -40,9 +40,9 @@ const CAPTION_H = 60
 /** Fallback arc color for pressure-only nodes (no composition data), by fill ratio. */
 export function ringColorOf(pct: number | null): string {
   if (pct === null) return 'var(--dsw-alias-border-l1)'
-  if (pct >= 90) return '#ef4444'
-  if (pct >= 70) return '#f59e0b'
-  return '#22c55e'
+  if (pct >= 90) return 'var(--color-red-500)'
+  if (pct >= 70) return 'var(--color-amber-500)'
+  return 'var(--color-green-500)'
 }
 
 export function makeAgentGraph(
@@ -165,12 +165,12 @@ export function makeAgentGraph(
               return (
                 <g key={link.to}>
                   <path
-                    className={'lc-agents-link' + (link.running ? ' lc-agents-link-live' : '')}
+                    className={'lc-agents-link stroke-[1.5px] stroke-opacity-45' + (link.running ? ' lc-agents-link-live' : '')}
                     d={d}
                     stroke={link.color}
                     fill="none"
                   />
-                  {link.running ? <path className="lc-agents-flow" d={d} stroke={link.color} fill="none" /> : null}
+                  {link.running ? <path className="lc-agents-flow animate-lc-agent-flow fill-none stroke-2" d={d} stroke={link.color} /> : null}
                 </g>
               )
             })}
@@ -249,6 +249,9 @@ function AgentNodeView(props: NodeViewProps): ReactElement {
     + (node.completed && !node.running ? ' lc-agent-done' : '')
     + (props.hovered ? ' lc-agent-hover' : '')
     + (node.isCurrent ? '' : ' lc-agent-clickable')
+    // The halo's hover/focus wash rides group variants on the node (the React
+    // hover state only drives the inspector; lc-agent-hover stays as a test anchor).
+    + ' group/agent'
   return (
     <g
       className={cls}
@@ -262,20 +265,30 @@ function AgentNodeView(props: NodeViewProps): ReactElement {
       onMouseLeave={() => { props.onHover(null) }}
     >
       {/* Halo carries the state: wash for self, breathing green while running, faint green for done. */}
-      <circle className="lc-agent-halo" r={AGENT_NODE_R + 9} />
-      <circle className="lc-agent-track" r={AGENT_NODE_R} />
+      <circle
+        className={'lc-agent-halo fill-transparent group-hover/agent:fill-[var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))] group-focus-visible/agent:fill-[var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))]'
+          + (node.running ? ' animate-lc-agent-glow' : '')}
+        r={AGENT_NODE_R + 9}
+      />
+      <circle
+        className="lc-agent-track fill-(--dsw-alias-bg-layer-1) stroke-(--dsw-alias-border-l1) stroke-[1.5px]"
+        r={AGENT_NODE_R}
+      />
       {segs.map(seg => (
         <circle
           key={seg.key}
-          className={'lc-agent-seg' + (seg.free ? ' lc-agent-free' : '')}
+          className={'lc-agent-seg fill-none stroke-9' + (seg.free ? ' lc-agent-free' : '')}
           r={AGENT_RING_R}
-          stroke={seg.free ? undefined : seg.color}
           strokeDasharray={`${seg.len} ${ring - seg.len}`}
           strokeDashoffset={-seg.offset}
+          // Inline style, not the stroke attribute: segment colors are CSS variables
+          // (var() is unusable in a presentation attribute). Free segments carry no
+          // inline stroke so the .lc-agent-free class rule keeps painting the remainder.
+          style={{ stroke: seg.free ? undefined : seg.color }}
           transform="rotate(-90)"
         />
       ))}
-      <text className="lc-agent-pct" textAnchor="middle" dy="0.32em">
+      <text className="lc-agent-pct fill-(--dsw-alias-label-primary)" textAnchor="middle" dy="0.32em">
         {pct !== null ? `${pct}%` : (node.head !== null ? props.fmt(node.head.tokens) : '—')}
       </text>
       {/* HTML caption (foreignObject): the full label wraps instead of truncating;

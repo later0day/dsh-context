@@ -53,9 +53,12 @@
  sidebar state. Inline-size containment is safe: every card's width comes
  from its flex row, never from its contents; the one fixed-position overlay
  (the image lightbox) portals to <body>, so the layout-containment fixed-CB
- trap cannot catch it.
+ trap cannot catch it. Border-box is load-bearing on the narrow pane: cards
+ carry the `min-w-[min(360px,100%)]` floor while riding this sheet's padding,
+ and the plugin ships no preflight reset — a content-box card reads the floor
+ as its content width and overflows its row by its own chrome (issue #65).
  */
-.lc-root .lc-card { padding: 7px 8px; margin-bottom: 7px; container: lc-card / inline-size; }
+.lc-root .lc-card { box-sizing: border-box; padding: 7px 8px; margin-bottom: 7px; container: lc-card / inline-size; }
 .lc-root .lc-cols { gap: 7px; margin-bottom: 7px; }
 /* Wraps under width pressure: toggle groups/kind chips in a header drop to
    their own line instead of spilling past the card edge. */
@@ -78,9 +81,10 @@
 .lc-gran-on .lc-kind-n { opacity: 0.85; }
 /*
  Shared tooltip-bubble chrome: pair `.lc-tip` with the owner's own tip class,
- then position locally (top/bottom anchor, width cap, whitespace, reveal rule).
- The component sheets carry the four shippers (.lc-stat-tip / .lc-brief-tip /
- .lc-fa-meta-tip / .lc-bar-tip); a new tip never re-declares this chrome.
+ then position locally (top/bottom anchor, width cap, whitespace); the reveal
+ rides a `group-hover/tip` variant on the owner. The component sheets carry
+ the four shippers (.lc-stat-tip / .lc-brief-tip / .lc-fa-meta-tip / .lc-bar-tip);
+ a new tip never re-declares this chrome.
  */
 .lc-tip { position: absolute; z-index: 6; width: max-content; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; padding: 6px 10px; font-size: 12px; color: var(--dsw-alias-label-primary); box-shadow: var(--dsw-shadow-lv3, 0 2px 8px rgba(0, 0, 0, 0.18)); pointer-events: none; opacity: 0; transition: opacity var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
 .lc-events, .lc-fa-list { display: flex; flex-direction: column; gap: 2px; height: 320px; overflow-y: auto; }
@@ -88,12 +92,6 @@
  The row owns the 14px vertical rhythm (lc-cols gap); cards drop their own bottom margin (incl. the last in a column) so every section boundary measures exactly one 14px whichever way the flex wraps.
  */
 .lc-cols { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
-/* Columns fold at 360px: the cards that pair up — the main row's composition/trend
-   against the browser, and the events card against file activity — read cramped at a
-   quarter-share of a narrow pane, so the main row needs 2 x 360px + the 7px gap to stay
-   side by side. min() caps the floor at the row's own width: on a sub-360px pane the
-   column narrows instead of overflowing. */
-.lc-col { flex: 1; min-width: min(360px, 100%); }
 .lc-cols > .lc-card { margin-bottom: 0; }
 .lc-col > .lc-card:last-child { margin-bottom: 0; }
 .lc-col-browser { display: flex; flex-direction: column; }
@@ -101,24 +99,19 @@
 /*
  Head band: TWO rows of two EQUAL-width cards — the session's shape beside
  the plugin card (context / plugin), then the two donut cards together
- (token / timing). `flex-basis: 0` + equal grow halves each row exactly, and
- `min-width: 0` lets the split ignore content. Each row is its own
- `lc-head-row` query container, so the split folds instead of crushing the
- cards (issue #48): below 720px of row width (a half under ~350px — where the
- donut cards' ring+legend single-line and the context card's 3-column cell
- grid both start to cramp) the pair stacks single-column. Cards under that
- end of the band sit under their own lc-card reflows (stats.css: the ring
- stacks over its legend, the cell grid folds), so the two-card line is the
- trade this threshold buys. Engines without container queries keep the wide
- two-across layout. The right Sidebar's panel renders only the donut row (it
- drops the context stats / plugin info row — see contextView.tsx); the same
- rules then stack the pair in the narrow pane.
+ (token / timing). The rows are `.lc-cols` flex-wrap rows and the cards ride
+ the shared column idiom (`flex-1 min-w-[min(360px,100%)]` in the
+ components): equal `flex: 1` halves each row exactly and the min-width
+ floor is the fold — below 2 x 360px + gap of row width (a half under
+ ~360px, where the donut cards' ring+legend single-line and the count grid
+ both start to cramp, issue #48) the pair wraps onto full-width lines. Cards
+ under that end of the band sit under their own lc-card reflows (stats.css:
+ the ring stacks over its legend, the cell grid folds), so the two-card
+ line is the trade this floor buys. Engines without container queries keep
+ the wide two-across layout. The right Sidebar's panel renders only the
+ donut row (it drops the context stats / plugin info row — see
+ contextView.tsx); the same wrap then stacks the pair in the narrow pane.
  */
-.lc-head { container: lc-head-row / inline-size; }
-.lc-head > .lc-card { flex: 1 1 0; min-width: 0; }
-@container lc-head-row (max-width: 720px) {
-  .lc-head > .lc-card { flex-basis: 100%; }
-}
 /* The context card's cell grid stretches to the plugin card's height, so the row reads as one level band. */
 .lc-head > .lc-card:has(.lc-stats) { display: flex; flex-direction: column; }
 .lc-head .lc-stats { flex: 1; align-content: stretch; }
@@ -127,7 +120,6 @@
 .lc-error { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 16px; }
 .lc-error-msg { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; padding: 4px 8px; max-width: 100%; overflow-wrap: anywhere; }
 .lc-error-retry { border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; padding: 4px 14px; border-radius: 6px; cursor: pointer; transition: border-color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
-.lc-error-retry:hover { border-color: var(--dsw-alias-label-primary); }
 .lc-foot { color: var(--dsw-alias-label-secondary); font-size: 12px; margin-top: 4px; }
 [data-conversation-scroll]:has(.lc-root) > [data-composer-seat]:not(:has([data-approval-key], [data-question-key], [data-plan-review-key])) { display: none; }
 /*

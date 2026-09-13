@@ -50,12 +50,14 @@ describe('createContextSettings defaults', () => {
       placement: 'all',
       granularity: 'step',
       mode: 'total',
+      toolSort: 'count',
       fileSort: 'count',
       writable: false,
     })
     assert.equal(s.defaultPlacement(), 'all')
     assert.equal(s.defaultGranularity(), 'step')
     assert.equal(s.defaultTrendMode(), 'total')
+    assert.equal(s.defaultToolSort(), 'count')
     assert.equal(s.defaultFileSort(), 'count')
   })
 })
@@ -169,6 +171,7 @@ describe('attach', () => {
         defaultPlacement: 'sidebar',
         defaultGranularity: 'turn',
         defaultTrendMode: 'delta',
+        defaultToolSort: 'name',
         defaultFileSort: 'path',
       },
       writable: true,
@@ -179,6 +182,7 @@ describe('attach', () => {
       placement: 'sidebar',
       granularity: 'turn',
       mode: 'delta',
+      toolSort: 'name',
       fileSort: 'path',
       writable: true,
     })
@@ -207,6 +211,7 @@ describe('attach', () => {
         placement: 'all',
         granularity: 'step',
         mode: 'total',
+        toolSort: 'count',
         fileSort: 'count',
         writable: false,
       })
@@ -217,12 +222,13 @@ describe('attach', () => {
     const s = createContextSettings()
     s.attach(new TestSettingsScope({
       status: 'ready',
-      value: { defaultPlacement: 'window', defaultGranularity: 'bogus', defaultTrendMode: 7, defaultFileSort: 'alpha' },
+      value: { defaultPlacement: 'window', defaultGranularity: 'bogus', defaultTrendMode: 7, defaultToolSort: 'alpha', defaultFileSort: 'alpha' },
       writable: false,
     }))
     assert.equal(s.defaultPlacement(), 'all')
     assert.equal(s.defaultGranularity(), 'step')
     assert.equal(s.defaultTrendMode(), 'total')
+    assert.equal(s.defaultToolSort(), 'count')
     assert.equal(s.defaultFileSort(), 'count')
   })
 
@@ -241,22 +247,25 @@ describe('attach', () => {
     const s = createContextSettings()
     s.attach(new TestSettingsScope({
       status: 'ready',
-      value: { defaultPlacement: 'all', defaultGranularity: 'step', defaultTrendMode: 'total', defaultFileSort: 'count' },
+      value: { defaultPlacement: 'all', defaultGranularity: 'step', defaultTrendMode: 'total', defaultToolSort: 'count', defaultFileSort: 'count' },
       writable: false,
     }))
     assert.equal(s.defaultPlacement(), 'all')
     assert.equal(s.defaultGranularity(), 'step')
     assert.equal(s.defaultTrendMode(), 'total')
+    assert.equal(s.defaultToolSort(), 'count')
     assert.equal(s.defaultFileSort(), 'count')
   })
 
   test('missing fields keep the current state', () => {
     const s = createContextSettings()
     s.set('defaultPlacement', 'tab')
+    s.set('defaultToolSort', 'size')
     s.attach(new TestSettingsScope({ status: 'ready', value: { defaultFileSort: 'latest' }, writable: false }))
     assert.equal(s.defaultPlacement(), 'tab', 'the in-session choice survives a section without the field')
     assert.equal(s.defaultGranularity(), 'step')
     assert.equal(s.defaultTrendMode(), 'total')
+    assert.equal(s.defaultToolSort(), 'size', 'the in-session tool sort survives a section without the field')
     assert.equal(s.defaultFileSort(), 'latest')
   })
 
@@ -278,8 +287,11 @@ describe('attach', () => {
     scope.emit({ status: 'ready', value: { defaultPlacement: 'sidebar' }, writable: true })
     assert.equal(calls, 4)
     assert.equal(s.defaultPlacement(), 'sidebar')
-    scope.emit({ status: 'ready', value: { defaultFileSort: 'path' }, writable: false })
+    scope.emit({ status: 'ready', value: { defaultToolSort: 'name' }, writable: true })
     assert.equal(calls, 5)
+    assert.equal(s.defaultToolSort(), 'name')
+    scope.emit({ status: 'ready', value: { defaultFileSort: 'path' }, writable: false })
+    assert.equal(calls, 6)
     assert.equal(s.store.getSnapshot().writable, false)
   })
 

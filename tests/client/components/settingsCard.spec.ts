@@ -21,7 +21,7 @@ function hookFor(state: SettingsState) {
 }
 
 function stateOf(partial: Partial<SettingsState> = {}): SettingsState {
-  return { status: 'ready', placement: 'all', granularity: 'step', mode: 'total', fileSort: 'count', writable: true, ...partial }
+  return { status: 'ready', placement: 'all', granularity: 'step', mode: 'total', toolSort: 'count', fileSort: 'count', writable: true, ...partial }
 }
 
 /** Menu items portaled into document.body while a select is open. */
@@ -65,7 +65,7 @@ describe('SettingsCard', () => {
     assert.equal(head.getAttribute('aria-label'), `${DICT_EN['settings.collapse']}: ${DICT_EN['settings.title']}`)
     assert.ok(card.className.includes('lc-settings-open'))
     const selects = queryAll(m.container, '.lc-settings-select')
-    assert.equal(selects.length, 4)
+    assert.equal(selects.length, 5)
     assert.ok(selects.every(s => (s as HTMLButtonElement).disabled))
     // Loading is not ready: no read-only note.
     assert.equal(m.container.querySelector('.lc-settings-note'), null)
@@ -107,8 +107,10 @@ describe('SettingsCard', () => {
     // The granularity row follows.
     assert.ok(text(selects[1]).includes(DICT_EN['gran.step']))
     assert.ok(text(selects[2]).includes(DICT_EN['gran.total']))
+    assert.ok(text(m.container).includes(DICT_EN['settings.toolSort']))
+    assert.ok(text(selects[3]).includes(DICT_EN['tool.sort.count']))
     assert.ok(text(m.container).includes(DICT_EN['settings.fileSort']))
-    assert.ok(text(selects[3]).includes(DICT_EN['files.sort.count']))
+    assert.ok(text(selects[4]).includes(DICT_EN['files.sort.count']))
 
     await click(selects[1])
     assert.equal(selects[1].getAttribute('aria-expanded'), 'true')
@@ -133,8 +135,25 @@ describe('SettingsCard', () => {
     ])
     assert.equal(document.body.querySelector('[role="menu"]'), null)
 
-    // The file-sort row writes the last field.
+    // The tool-sort row leads the file-sort one.
     await click(selects[3])
+    const toolItems = menuItems()
+    assert.deepEqual(toolItems.map(i => text(i)), [
+      DICT_EN['tool.sort.size'],
+      DICT_EN['tool.sort.count'],
+      DICT_EN['tool.sort.name'],
+    ])
+    await click(toolItems[2]) // 'By name'
+    assert.deepEqual(calls, [
+      ['defaultPlacement', 'sidebar'],
+      ['defaultGranularity', 'turn'],
+      ['defaultTrendMode', 'delta'],
+      ['defaultToolSort', 'name'],
+    ])
+    assert.equal(document.body.querySelector('[role="menu"]'), null)
+
+    // The file-sort row writes the last field.
+    await click(selects[4])
     const sortItems = menuItems()
     assert.deepEqual(sortItems.map(i => text(i)), [
       DICT_EN['files.sort.count'],
@@ -146,6 +165,7 @@ describe('SettingsCard', () => {
       ['defaultPlacement', 'sidebar'],
       ['defaultGranularity', 'turn'],
       ['defaultTrendMode', 'delta'],
+      ['defaultToolSort', 'name'],
       ['defaultFileSort', 'path'],
     ])
     assert.equal(document.body.querySelector('[role="menu"]'), null)
@@ -211,7 +231,7 @@ describe('SettingsCard', () => {
       const card = query(m.container, '.lc-settings-card')
       assert.ok(card.className.includes('lc-settings-open'))
       assert.equal(query(m.container, '.lc-settings-head').getAttribute('aria-expanded'), 'true')
-      assert.equal(queryAll(m.container, '.lc-settings-select').length, 4)
+      assert.equal(queryAll(m.container, '.lc-settings-select').length, 5)
       assert.equal(scrolled.length, 1, 'the card scrolls itself into view')
       assert.deepEqual(scrolled[0].arg, { block: 'nearest' })
       assert.equal(scrolled[0].el, card)

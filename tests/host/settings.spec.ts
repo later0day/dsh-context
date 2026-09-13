@@ -69,6 +69,7 @@ describe('installSettings', () => {
       defaultPlacement: 'all',
       defaultGranularity: 'step',
       defaultTrendMode: 'total',
+      defaultToolSort: 'count',
       defaultFileSort: 'count',
     }, 'schema defaults resolve')
   })
@@ -80,6 +81,7 @@ describe('installSettings', () => {
       defaultPlacement: 'all',
       defaultGranularity: 'turn',
       defaultTrendMode: 'total',
+      defaultToolSort: 'count',
       defaultFileSort: 'count',
     }, 'the update resolves over the schema defaults')
     assert.deepEqual(provider.doc['dsh-context'], { defaultGranularity: 'turn' }, 'the provider persisted the section')
@@ -89,6 +91,7 @@ describe('installSettings', () => {
       defaultPlacement: 'sidebar',
       defaultGranularity: 'turn',
       defaultTrendMode: 'delta',
+      defaultToolSort: 'count',
       defaultFileSort: 'path',
     }, 'every preference field resolves independently')
 
@@ -98,25 +101,27 @@ describe('installSettings', () => {
     )
     // The loose fields degrade instead of rejecting: a stale file sort or
     // placement resolves to the default.
-    await ctx.settings.update(ns, { defaultFileSort: 'net', defaultPlacement: 'window' })
+    await ctx.settings.update(ns, { defaultFileSort: 'net', defaultPlacement: 'window', defaultToolSort: 'net' })
     assert.deepEqual(ctx.settings.get(ns), {
       defaultPlacement: 'all',
       defaultGranularity: 'turn',
       defaultTrendMode: 'delta',
+      defaultToolSort: 'count',
       defaultFileSort: 'count',
     }, 'a stale value degrades to the schema default')
     assert.deepEqual(
       provider.doc['dsh-context'],
-      { defaultPlacement: 'window', defaultGranularity: 'turn', defaultTrendMode: 'delta', defaultFileSort: 'net' },
+      { defaultPlacement: 'window', defaultGranularity: 'turn', defaultTrendMode: 'delta', defaultToolSort: 'net', defaultFileSort: 'net' },
       'the stale value stays raw in storage and degrades at read',
     )
   })
 
   test('a stale persisted preference degrades to the default (loose)', async () => {
-    const { ctx } = await boot({ 'dsh-context': { defaultPlacement: 'window', defaultTrendMode: 'net', defaultFileSort: 'alpha' } })
+    const { ctx } = await boot({ 'dsh-context': { defaultPlacement: 'window', defaultTrendMode: 'net', defaultToolSort: 'alpha', defaultFileSort: 'alpha' } })
     const value = ctx.settings.get(ns) as PluginSettings
     assert.equal(value.defaultPlacement, 'all', 'the stale placement falls back instead of breaking the section')
     assert.equal(value.defaultTrendMode, 'total', 'the stale value falls back instead of breaking the section')
+    assert.equal(value.defaultToolSort, 'count', 'the stale tool sort falls back instead of breaking the section')
     assert.equal(value.defaultFileSort, 'count', 'the stale file sort falls back instead of breaking the section')
     assert.equal(value.defaultGranularity, 'step')
   })

@@ -12,11 +12,11 @@
  * members keeps the dependency graph honest.
  */
 
-import type { DefaultFileSort, DefaultGranularity, DefaultPlacement, DefaultTrendMode, SettingsField } from '../shared/types'
+import type { DefaultFileSort, DefaultGranularity, DefaultPlacement, DefaultToolSort, DefaultTrendMode, SettingsField } from '../shared/types'
 
 // The preference vocabulary is declared once in shared/types.ts; re-exported
 // here so client-side consumers keep their canonical import path.
-export type { DefaultFileSort, DefaultGranularity, DefaultPlacement, DefaultTrendMode, SettingsField } from '../shared/types'
+export type { DefaultFileSort, DefaultGranularity, DefaultPlacement, DefaultToolSort, DefaultTrendMode, SettingsField } from '../shared/types'
 
 /** The bound settings scope (ctx.settingsScope.bind result), as consumed. */
 export interface SettingsScopeLike {
@@ -37,6 +37,7 @@ export interface SettingsState {
   placement: DefaultPlacement
   granularity: DefaultGranularity
   mode: DefaultTrendMode
+  toolSort: DefaultToolSort
   fileSort: DefaultFileSort
   writable: boolean
 }
@@ -47,6 +48,7 @@ export interface ContextSettings {
   defaultPlacement(): DefaultPlacement
   defaultGranularity(): DefaultGranularity
   defaultTrendMode(): DefaultTrendMode
+  defaultToolSort(): DefaultToolSort
   defaultFileSort(): DefaultFileSort
   attach(scope: SettingsScopeLike): () => void
   /** Persist one preference choice (local echo, then the fenced scope write). */
@@ -57,6 +59,7 @@ type Prefs = {
   placement?: DefaultPlacement
   granularity?: DefaultGranularity
   mode?: DefaultTrendMode
+  toolSort?: DefaultToolSort
   fileSort?: DefaultFileSort
 }
 
@@ -67,17 +70,19 @@ function prefsOf(value: unknown): Prefs {
     ...(v.defaultPlacement === 'all' || v.defaultPlacement === 'tab' || v.defaultPlacement === 'sidebar' ? { placement: v.defaultPlacement } : {}),
     ...(v.defaultGranularity === 'step' || v.defaultGranularity === 'turn' ? { granularity: v.defaultGranularity } : {}),
     ...(v.defaultTrendMode === 'total' || v.defaultTrendMode === 'delta' ? { mode: v.defaultTrendMode } : {}),
+    ...(v.defaultToolSort === 'size' || v.defaultToolSort === 'count' || v.defaultToolSort === 'name' ? { toolSort: v.defaultToolSort } : {}),
     ...(v.defaultFileSort === 'count' || v.defaultFileSort === 'latest' || v.defaultFileSort === 'path' ? { fileSort: v.defaultFileSort } : {}),
   }
 }
 
 export function createContextSettings(): ContextSettings {
-  let state: SettingsState = { status: 'loading', placement: 'all', granularity: 'step', mode: 'total', fileSort: 'count', writable: false }
+  let state: SettingsState = { status: 'loading', placement: 'all', granularity: 'step', mode: 'total', toolSort: 'count', fileSort: 'count', writable: false }
   let scope: SettingsScopeLike | undefined
   const listeners = new Set<() => void>()
   const publish = (next: SettingsState): void => {
     if (next.status === state.status && next.placement === state.placement && next.granularity === state.granularity
-      && next.mode === state.mode && next.fileSort === state.fileSort && next.writable === state.writable) return
+      && next.mode === state.mode && next.toolSort === state.toolSort && next.fileSort === state.fileSort
+      && next.writable === state.writable) return
     state = next
     for (const listener of listeners) listener()
   }
@@ -98,6 +103,7 @@ export function createContextSettings(): ContextSettings {
       placement: prefs.placement ?? (rawPlacement === undefined ? state.placement : 'all'),
       granularity: prefs.granularity ?? state.granularity,
       mode: prefs.mode ?? state.mode,
+      toolSort: prefs.toolSort ?? state.toolSort,
       fileSort: prefs.fileSort ?? state.fileSort,
       writable: snap.writable,
     })
@@ -114,6 +120,7 @@ export function createContextSettings(): ContextSettings {
     defaultPlacement: () => state.placement,
     defaultGranularity: () => state.granularity,
     defaultTrendMode: () => state.mode,
+    defaultToolSort: () => state.toolSort,
     defaultFileSort: () => state.fileSort,
     attach(bound) {
       scope = bound

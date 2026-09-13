@@ -44,7 +44,7 @@ function PrefRow(props: PrefRowProps): ReactElement {
         anchor={(
           <button
             type="button"
-            className="lc-settings-select"
+            className="lc-settings-select hover:enabled:bg-(--dsw-alias-interactive-bg-hover) disabled:opacity-50 disabled:cursor-default"
             disabled={props.disabled}
             aria-haspopup="menu"
             aria-expanded={open}
@@ -127,6 +127,17 @@ export function makeSettingsCard(kit: ViewKit): (props: SettingsCardProps) => Re
                   { id: 'delta', label: t('gran.delta') },
                 ]}
                 onPick={(id) => { props.set?.('defaultTrendMode', id) }}
+              />
+              <PrefRow
+                label={t('settings.toolSort')}
+                value={state.toolSort}
+                disabled={disabled}
+                options={[
+                  { id: 'size', label: t('tool.sort.size') },
+                  { id: 'count', label: t('tool.sort.count') },
+                  { id: 'name', label: t('tool.sort.name') },
+                ]}
+                onPick={(id) => { props.set?.('defaultToolSort', id) }}
               />
               <PrefRow
                 label={t('settings.fileSort')}

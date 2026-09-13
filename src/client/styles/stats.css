@@ -4,10 +4,6 @@
  * the composition overview's big number, and the cards' shared anatomy
  * — section heading, donut, slice list, plugin-info rows.
  */
-/* The context card's six count cells: the session's shape, the cache-hit
-   rate, and the cost — 3×2 by default (the cells stay wide enough for the
-   longest English label), folding to a single row on wide cards. */
-.lc-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .lc-stat { background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; padding: 6px 6px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 /* The 5-cell stats grid shares a half-width head-row card with a sibling, so its cells are moderate: tighter padding plus a corner-pinned '?' (out of the label's line) keep the longest labels on one line. */
 .lc-stats .lc-stat { padding: 6px 3px; }
@@ -16,13 +12,11 @@
 .lc-stat-value { color: var(--dsw-alias-label-primary); font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
 .lc-stat-sub { color: var(--dsw-alias-label-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /*
- Stats cell tooltip (cost cell): styled DOM bubble because native `title` can't hold the multi-row price breakdown; a '?' signals the affordance and hovering anywhere on the cell reveals the bubble below (the cell is the tip's position frame). Chrome rides the shared `.lc-tip`.
+ Stats cell tooltip (cost cell): styled DOM bubble because native `title` can't hold the multi-row price breakdown; a '?' signals the affordance and hovering anywhere on the cell reveals the bubble below (the cell is the tip's position frame). Chrome rides the shared `.lc-tip`; the reveal and the badge's brighten ride `group-hover/tip` variants (`group/tip` on the cell).
  */
 .lc-stat-tipped { position: relative; }
 .lc-stat-q { display: inline-block; margin-left: 4px; width: 11px; height: 11px; line-height: 11px; border-radius: 50%; text-align: center; font-size: 9px; font-weight: 700; font-style: normal; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l2); cursor: help; transition: color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out), border-color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
-.lc-stat-tipped:hover .lc-stat-q { color: var(--dsw-alias-label-primary); border-color: var(--dsw-alias-label-primary); }
 .lc-stat-tip { top: calc(100% + 6px); left: 0; max-width: 280px; line-height: 1.5; font-weight: 400; }
-.lc-stat-tipped:hover .lc-stat-tip { opacity: 1; }
 .lc-stat-tip-prices { display: block; margin-top: 5px; border-top: 1px dashed var(--dsw-alias-border-l1); padding-top: 5px; }
 .lc-stat-tip-head { display: block; font-weight: 600; }
 .lc-stat-tip-row { display: block; margin-top: 2px; }
@@ -38,27 +32,22 @@
  row, and the token card's cost line (the '.lc-tip' bubble pattern). ----
  */
 .lc-stat-head { font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary); margin: 12px 0 8px; }
-/* The ring hugs the left edge; the legend fills the rest of the card with its quantity and share columns right-aligned. The donut cards stretch the group over their full height, so the head row's extra space sits around the chart instead of pooling under it. */
-.lc-donut-row { display: flex; align-items: center; justify-content: flex-start; gap: 12px; min-width: 0; }
+/* The ring hugs the left edge; the legend fills the rest of the card with its quantity and share columns
+   right-aligned. The donut cards stretch the donut+legend row over their full height (`flex: 1` below), so
+   the head row's extra space sits around the chart instead of pooling under it; the row's own flex layout
+   and its 320px/240px folds ride utilities on the elements (statsTokens.tsx / statsTiming.tsx /
+   sliceList.tsx / donut.tsx). */
 .lc-col-donut { display: flex; flex-direction: column; }
 .lc-col-donut .lc-donut-row { flex: 1; }
-.lc-donut-row .lc-sl { flex: 1 1 auto; }
 .lc-donut { position: relative; flex: none; }
 .lc-donut svg { display: block; }
-.lc-donut-track { stroke: rgba(128,128,128,0.18); }
+.lc-donut-track { stroke: color-mix(in srgb, var(--color-neutral-500) 18%, transparent); }
 /* The legend row ↔ segment hover link: hovering either side dims the ring's
    other slices to 0.35 (the stacked bars' idiom) while the active one stays
    solid; the center figures stay at rest. */
 .lc-donut-seg { transition: opacity var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
-/*
- Entrance sweep: each slice grows its dasharc from 0 100 up to the attribute value (the 100% keyframe is
- omitted on purpose — CSS takes the element's own stroke-dasharray, so no per-slice value is duplicated
- here), staggered by the slice index so the ring builds clockwise from 12 o'clock; `backwards` keeps a
- slice hidden until its turn. Runs once on mount — hover-driven re-renders reuse the nodes and never
- restart it.
- */
-.lc-donut-seg { animation: lc-donut-in 0.45s cubic-bezier(0.4, 0, 0.2, 1) backwards; animation-delay: calc(var(--lc-i, 0) * 50ms); }
-@keyframes lc-donut-in { from { stroke-dasharray: 0 100; } }
+/* The entrance sweep rides the `animate-lc-donut-in` utility (theme token: 0.45s sweep, staggered by the
+   element's --lc-i slot, `motion-reduce:animate-none` for the reduced-motion guard). */
 .lc-donut-dim .lc-donut-seg { opacity: 0.35; }
 .lc-donut-dim .lc-donut-seg-on { opacity: 1; }
 .lc-donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; pointer-events: none; text-align: center; padding: 0 7px; box-sizing: border-box; }
@@ -92,9 +81,7 @@
 /* The settings-entry row is a button wearing the link-row chrome — reset the button chrome the shared row style doesn't cover. */
 .lc-pi-row-btn { appearance: none; border: 0; background: none; font: inherit; color: inherit; text-align: left; padding: 0; cursor: pointer; width: 100%; }
 .lc-pi-row { display: flex; flex-direction: row; justify-content: space-between; align-items: baseline; gap: 12px; min-width: 0; text-decoration: none; color: inherit; }
-.lc-pi-row:hover .lc-pi-value { text-decoration: underline; }
 .lc-pi-hint { text-decoration: none; }
-.lc-pi-hint:hover { text-decoration: underline; }
 .lc-pi-update { color: var(--dsw-alias-state-warn-primary); font-size: 11px; margin-left: 6px; white-space: nowrap; }
 .lc-pi-label { flex: none; color: var(--dsw-alias-label-secondary); font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /*
@@ -103,38 +90,6 @@
  */
 .lc-pi-value { min-width: 0; color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 .lc-pi-row-btn .lc-pi-value { font-weight: 400; }
-/*
- Wide head cards: on roomy panes the context card's six cells fit ONE line
- (~110px each at the 700px mark). Degrades silently on engines without
- container queries.
- */
-@container lc-card (min-width: 700px) {
-  .lc-stats { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-}
-/*
- Narrow head cards: the side-by-side ring + legend reads single-line only
- above ~320px of card content width. The two-tier rows already absorb the
- squeeze — the name gives ground before the fixed share column — so the
- compact block only tightens the ring gap. The context card's 6-cell grid
- folds to 2 columns instead: three ~65px cells would ellipsize the longer
- English labels (Tool Calls). Below 240px even the ring stops
- fitting, so the card stacks: the ring centers over the full-width legend
- rows. Cards resolve these queries against themselves (the shared `lc-card`
- container in base.css) at every split of the head band — two-across or
- stacked. Engines without container queries drop both blocks and keep
- the wide layout. The 240px block must stay AFTER the 320px one — at that
- width both match and the stack rules win by order.
- */
-@container lc-card (max-width: 320px) {
-  .lc-donut-row { gap: 8px; }
-  .lc-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@container lc-card (max-width: 240px) {
-  .lc-donut-row { flex-wrap: wrap; }
-  .lc-donut { margin: 0 auto; }
-  .lc-donut-row .lc-sl { flex-basis: 100%; }
-}
-/* Reduced motion (the harness's own idiom): the ring shows its final arcs immediately. */
-@media (prefers-reduced-motion: reduce) {
-  .lc-donut-seg { animation: none; }
-}
+/* The stats grid's cell count is intrinsic (`repeat(auto-fit, minmax(108px,1fr))` on the element, see
+   statsContext.tsx); the donut row's 320px gap fold and 240px stack still ride
+   `@max-[…]/lc-card` utilities — statsTokens.tsx / statsTiming.tsx / sliceList.tsx / donut.tsx. */
