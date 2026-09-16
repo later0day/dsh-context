@@ -1,6 +1,6 @@
 {
   "name": "dsh-context",
-  "version": "0.51.1",
+  "version": "0.53.0",
   "description": "A DeepSeek Harness plugin for context insight and management, with context dashboard and context command, for understanding how the context is made of, and how it evolves.",
   "author": "bowenliang123",
   "repository": {
@@ -45,7 +45,7 @@
     "coverage": "vitest run --coverage",
     "release": "bash scripts/publish.sh",
     "social-preview": "node docs/social-preview/generate.ts",
-    "prepare": "husky"
+    "prepare": "husky && tsdown"
   },
   "dsh": {
     "bundle": {

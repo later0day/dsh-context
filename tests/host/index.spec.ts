@@ -79,7 +79,7 @@ describe('dsh-context host plugin', () => {
     assert.deepEqual(inject, ['sessionProjections'])
   })
 
-  test('registers both units and serves the folded views over real appends', async () => {
+  test('registers all three units and serves the folded views over real appends', async () => {
     const { ctx } = await boot()
     const session = ctx.sessions.create()
     appendRealEnvelopes(session)
@@ -98,6 +98,13 @@ describe('dsh-context host plugin', () => {
     assert.equal(headers.headers.length, 1)
     assert.ok(!('system' in headers.headers[0]), 'system text stays in the log, not the projection')
     assert.ok((headers.headers[0].systemTokens ?? 0) > 0, 'the epoch carries its system token price')
+
+    const activity = snapshot.values.contextActivity
+    assert.ok(activity !== undefined, 'contextActivity served after real appends')
+    const entries = Object.values(activity.days)
+    assert.equal(entries.length, 1, 'the one settlement books its day')
+    assert.equal(entries[0].requests, 1)
+    assert.equal(entries[0].tokens, 15, 'the metered buckets sum into the day (10 input + 5 output)')
   })
 
   test('the change feed fires with the schema-validated view', async () => {
@@ -184,13 +191,13 @@ describe('dsh-context host plugin', () => {
     assert.equal(snapshot.values.contextHeaders, undefined)
   })
 
-  test('the split generation with the detail channel live: slim wire head + the endpoint serves the collections', async () => {
+  test('the split generation with the detail route live: slim wire head + the endpoint serves the collections', async () => {
     const ctx = new Context()
-    let handler: ((endpoint: string, payload: unknown) => Promise<unknown>) | undefined
+    let route: { path?: string; fetch?: (request: Request) => Promise<Response> } | undefined
     ctx.provide('connection', {
-      rpc: {
-        handle: (_channel: string, h: never) => {
-          handler = h
+      fetch: {
+        register: (r: never) => {
+          route = r
           return () => {}
         },
       },
@@ -214,8 +221,14 @@ describe('dsh-context host plugin', () => {
     assert.equal(timeline.nodes.length, 0, 'the collections stay off the wire value')
     assert.equal(timeline.requests.length, 0)
 
-    assert.ok(handler !== undefined, 'the detail channel registered')
-    const result = await handler('detail', { sessionId: session.header.id }) as {
+    assert.ok(route !== undefined && route.fetch !== undefined, 'the detail route registered')
+    assert.equal(route.path, '/api/dsh-context/detail')
+    const response = await route.fetch(new Request('http://dsh.test/api/dsh-context/detail', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: session.header.id }),
+    }))
+    const result = await response.json() as {
       ok: boolean
       value: { rev: number; nodes: unknown[]; requests: unknown[] } | null
     }

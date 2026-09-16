@@ -14,7 +14,7 @@ import { makeKit, mount, query, queryAll, hover, unhover } from '../helpers/kit'
 const kit = makeKit()
 const StatsTokens = makeStatsTokens(kit, makeDonut(kit))
 
-const CURRENT: Snapshot['current'] = { system: 200, tools: 100, user: 300, inject: 100, assistant: 200, tool: 100, total: 1000 }
+const CURRENT: Snapshot['current'] = { system: 200, tools: 100, user: 300, inject: 100, skill: 0, assistant: 200, tool: 100, total: 1000 }
 // Billed input 400 (300 uncached + 100 read), output 50 → the chat line's 450.
 const USAGE: TokenUsage = { uncachedInputTokens: 300, outputTokens: 50, cacheReadTokens: 100, cacheWriteTokens: 0 }
 
@@ -53,7 +53,7 @@ describe('StatsTokens', () => {
   })
 
   test('a delivered breakdown drives the prompt-side split ratios', async () => {
-    const current: Snapshot['current'] = { system: 0, tools: 0, user: 150, inject: 0, assistant: 150, tool: 0, total: 300 }
+    const current: Snapshot['current'] = { system: 0, tools: 0, user: 150, inject: 0, skill: 0, assistant: 150, tool: 0, total: 300 }
     const breakdown: ContextBreakdown = { systemTokens: 100, toolsTokens: 100, messageTokens: 200 }
     const usage: TokenUsage = { uncachedInputTokens: 800, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 0 }
     const m = await mount(h(StatsTokens, { usage, current, breakdown }))
@@ -69,7 +69,7 @@ describe('StatsTokens', () => {
   })
 
   test('zero categories stay hidden once any usage is reported', async () => {
-    const current: Snapshot['current'] = { system: 100, tools: 0, user: 300, inject: 0, assistant: 0, tool: 0, total: 400 }
+    const current: Snapshot['current'] = { system: 100, tools: 0, user: 300, inject: 0, skill: 0, assistant: 0, tool: 0, total: 400 }
     const m = await mount(h(StatsTokens, { usage: USAGE, current, breakdown: null }))
     assert.equal(queryAll(m.container, '.lc-sl-row').length, 3)
     assert.deepEqual(rowOf(m.container, 0), { pct: '22.2%', label: 'System Prompt', count: '≈100' })
@@ -95,12 +95,12 @@ describe('StatsTokens', () => {
     const m = await mount(h(StatsTokens, { usage: null, current: CURRENT, breakdown: null }))
     assert.equal(query(m.container, '.lc-donut-center b').textContent, '—')
     assert.equal(query(m.container, '.lc-donut-center span').textContent, 'Total')
-    assert.equal(queryAll(m.container, '.lc-sl-row').length, 7)
+    assert.equal(queryAll(m.container, '.lc-sl-row').length, 8)
     for (const row of queryAll(m.container, '.lc-sl-row')) {
       assert.equal(row.querySelector('.lc-sl-pct')?.textContent, '—')
     }
     const counts = queryAll(m.container, '.lc-sl-sub').map(n => n.textContent)
-    assert.deepEqual(counts, ['≈0', '≈0', '≈0', '≈0', '≈0', '≈0', '0 · incl. reasoning'])
+    assert.deepEqual(counts, ['≈0', '≈0', '≈0', '≈0', '≈0', '≈0', '≈0', '0 · incl. reasoning'])
     await m.unmount()
   })
 
@@ -108,7 +108,7 @@ describe('StatsTokens', () => {
     const zero: TokenUsage = { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
     const m = await mount(h(StatsTokens, { usage: zero, current: CURRENT, breakdown: null }))
     assert.equal(query(m.container, '.lc-donut-center b').textContent, '0')
-    assert.equal(queryAll(m.container, '.lc-sl-row').length, 7)
+    assert.equal(queryAll(m.container, '.lc-sl-row').length, 8)
     await m.unmount()
   })
 })

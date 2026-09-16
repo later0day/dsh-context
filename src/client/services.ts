@@ -17,7 +17,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ComponentType } from 'react'
 import { estimateSystemTokens } from '../shared/estimate'
-import type { ContextBreakdown, ContextHeaders, ContextPressure, ContextTimeline, CostModelUsage, HeaderEpochContent, SystemPromptNode, TimingTotals, TokenUsage, ToolTimingTotals } from '../shared/types'
+import type { ActivityDay, ContextActivity, ContextBreakdown, ContextHeaders, ContextPressure, ContextTimeline, CostModelUsage, HeaderEpochContent, SystemPromptNode, TimingTotals, TokenUsage, ToolTimingTotals } from '../shared/types'
 
 export interface LocaleService {
   register(ns: string, dicts: Record<string, Record<string, string>>): () => void
@@ -372,7 +372,7 @@ export function timelineOf(value: unknown): ContextTimeline | null {
   // every collection must be a real list. Anything else takes the slow path
   // and is rebuilt into the safe shape below.
   const numericBreakdown = current !== null && typeof current === 'object'
-    && ['system', 'tools', 'user', 'inject', 'assistant', 'tool', 'total']
+    && ['system', 'tools', 'user', 'inject', 'skill', 'assistant', 'tool', 'total']
       .every(k => typeof (current as Record<string, unknown>)[k] === 'number')
   if (numericBreakdown
     && recordsOnly(data.requests)
@@ -405,6 +405,7 @@ export function timelineOf(value: unknown): ContextTimeline | null {
       tools: numOf(safeCurrent.tools),
       user: numOf(safeCurrent.user),
       inject: numOf(safeCurrent.inject),
+      skill: numOf(safeCurrent.skill),
       assistant: numOf(safeCurrent.assistant),
       tool: numOf(safeCurrent.tool),
       total: numOf(safeCurrent.total),
@@ -416,6 +417,7 @@ export function timelineOf(value: unknown): ContextTimeline | null {
     ...(typeof data.images === 'number' ? { images: data.images } : {}),
     ...(typeof data.toolCalls === 'number' ? { toolCalls: data.toolCalls } : {}),
     ...(typeof data.humanInputs === 'number' ? { humanInputs: data.humanInputs } : {}),
+    ...(typeof data.lastUser === 'string' && data.lastUser !== '' ? { lastUser: data.lastUser.slice(0, 200) } : {}),
     archive: objectsOf(data.archive),
     ...(counts !== undefined ? { counts } : {}),
     ...(last !== undefined ? { last } : {}),
@@ -705,9 +707,49 @@ export function headersOf(value: unknown): ContextHeaders | null {
   } as unknown as ContextHeaders
 }
 
+/**
+ * Narrow a delivered `contextActivity` value (the per-day ledger the Context
+ * Overview's heatmap reads off each session-list row) to a render-safe shape.
+ * Absent or non-record stays null (an older host serves no such key — the
+ * heatmap renders its empty note). Per-day re-proved: a malformed key or a
+ * wrong-typed figure drops just that entry, a hostile day record can never
+ * produce a NaN cell, and a well-formed payload passes through untouched
+ * (reference-stable for the selector equality).
+ */
+export function activityOf(value: unknown): ContextActivity | null {
+  const data = asRecord(value)
+  if (data === null) return null
+  const rawDays = asRecord(data.days)
+  if (rawDays === null || Array.isArray(rawDays)) return null
+  const days: Record<string, ActivityDay> = {}
+  let dirty = false
+  for (const key of Object.keys(rawDays)) {
+    const entry = asRecord(rawDays[key])
+    const tokens = entry?.tokens
+    const requests = entry?.requests
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key)
+      || entry === null || Array.isArray(entry)
+      || typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens < 0
+      || typeof requests !== 'number' || !Number.isFinite(requests) || requests < 0) {
+      dirty = true
+      continue
+    }
+    days[key] = { tokens, requests }
+  }
+  // Fully well-formed: pass the delivered value through untouched (cheap, and
+  // reference-stable for the selector equality); otherwise the sanitized copy.
+  return dirty ? { days } : data as unknown as ContextActivity
+}
+
 export interface TriggerCandidate {
   name: string
+  /** Display title; the name itself when absent (a differing title renders the name as a trailing alias). */
+  label?: string
+  /** Visual heading of this candidate's group; its presence suppresses the menu's source-title row. */
+  section?: string
   description?: string
+  /** Row glyph, rendered at a 16px edge. */
+  icon?: ComponentType<{ size?: number }>
 }
 
 /** Pick-moment snapshot of the trigger token span (draftRev CAS). */
@@ -757,6 +799,18 @@ export interface SessionScopeFace {
 
 export interface SessionsFace {
   scope(id: string): SessionScopeFace | undefined
+  /**
+   * Select a listed session as current — the sidebar row click's own verb
+   * (the Context Dashboard's session cards ride it to jump). Re-proved at the
+   * call site; absent on a face that predates the verb.
+   */
+  open?(id: string): void
+  /**
+   * Re-pull the session-list baseline (the rows' projection column included).
+   * The overview rides it on open so host-side backfill rows (backfill.ts)
+   * reach a long-connected browser without a reload.
+   */
+  refresh?(): Promise<unknown>
 }
 
 /** One history page row: the raw event plus the optional host-computed view. */

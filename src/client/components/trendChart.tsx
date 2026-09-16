@@ -61,6 +61,20 @@ export function aggregateByTurn(requests: RequestRecord[]): RequestRecord[] {
 }
 
 /**
+ * The per-turn step tallies the step-granularity labels lean on ("第 s 步 (共 n 步)") — the same count a
+ * turn-mode bar's `stepCount` carries. Records without a turn stamp pool under 0, the key the labels'
+ * `turn ?? 0` fallback reads; the getter answers 1 for a turn outside the list so a caller can never miss.
+ */
+export function turnStepsOf(requests: RequestRecord[]): (turn: number | undefined) => number {
+  const counts = new Map<number, number>()
+  for (const req of requests) {
+    const turn = req.turn ?? 0
+    counts.set(turn, (counts.get(turn) ?? 0) + 1)
+  }
+  return turn => counts.get(turn ?? 0) ?? 1
+}
+
+/**
  * Attach each boundary event (compaction/prune) to the first request logged after it — one entry per index, for the ✂ marker and the detail
  * chip; shared with the detail panel so both show the SAME event.
  */
@@ -517,12 +531,14 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     // identity and the bar's total — the SAME value the bar height and axis are scaled against (the fold's
     // heuristic figure, matching every other card). Identity phrasing follows the granularity —
     // turn bars always speak TURN (the aggregate's step count, singular for a 1-step turn; a record missing
-    // stepCount degrades to that too), step bars carry the step index. Delta swaps the metric row for the net.
+    // stepCount degrades to that too), step bars carry the step index plus the turn's step total. Delta swaps
+    // the metric row for the net.
+    const stepsOf = useMemo(() => turnStepsOf(props.requests), [props.requests])
     const tipRowsOf = (req: RequestRecord): [string, string] => {
       const n = req.stepCount ?? 1
       const head = props.granularity === 'turn'
         ? (n > 1 ? t('tip.turn', { t: req.turn ?? 0, n }) : t('tip.turn1', { t: req.turn ?? 0 }))
-        : t('tip.step', { t: req.turn ?? 0, s: req.step ?? 0 })
+        : t('tip.step', { t: req.turn ?? 0, s: req.step ?? 0, n: stepsOf(req.turn) })
       if (delta) {
         /* v8 ignore next 1 -- delta mode only receives records from
            deltaOf, which always assigns net; the fallback is defensive. */

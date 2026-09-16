@@ -52,7 +52,7 @@ function timeline(): ContextTimeline {
     model: 'deepseek-v4-flash',
     provider: 'deepseek',
     contextWindow: 128000,
-    current: { system: 100, tools: 200, user: 300, inject: 50, assistant: 400, tool: 150, total: 1200 },
+    current: { system: 100, tools: 200, user: 300, inject: 50, skill: 0, assistant: 400, tool: 150, total: 1200 },
     requests: [],
     events: [],
     nodes: [

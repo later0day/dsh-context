@@ -20,6 +20,7 @@ import { activityOf, activityOfOps, locateStepOf, previewAddressOf } from '../fi
 import type { FileEntry, FileOp } from '../fileActivity'
 import type { ContextSettings } from '../settings'
 import type { ViewKit } from '../viewkit'
+import { makeAgentHeads } from '../agentHeads'
 import { makeContextBrowser } from './browser'
 import { makeAgentGraph } from './agentGraph'
 import { makeDonut } from './donut'
@@ -29,11 +30,11 @@ import { makeFileCard } from './fileCard'
 import { makePluginInfo } from './pluginInfo'
 import { makeUpgradeGate } from './upgradeGate'
 import { makeRequestDetail } from './requestDetail'
-import { countsOfRecords, makeStatsContext } from './statsContext'
+import { countsOfRecords, makeStatsContext, makeSubagentCost } from './statsContext'
 import { makeStatsTiming } from './statsTiming'
 import { makeStatsTokens } from './statsTokens'
 import { makeLegend, makeStackedBar } from './stackedBar'
-import { aggregateByTurn, attachMarkers, jumpTargetOf, makeTrendChart } from './trendChart'
+import { aggregateByTurn, attachMarkers, jumpTargetOf, makeTrendChart, turnStepsOf } from './trendChart'
 
 import { takeContextFocus } from '../viewFocus'
 import { makeErrorBoundary } from './errorBoundary'
@@ -59,14 +60,18 @@ export function makeContextView(
   const EventList = makeEventList(kit)
   const FileCard = makeFileCard(kit, settings)
   const Donut = makeDonut(kit)
-  const StatsContext = makeStatsContext(kit)
+  // One page-scope cold-head cache serves both subagent-data readers: the
+  // Agent network card's composition rings and the stats board's
+  // subagent-cost cell fetch each relative once.
+  const heads = makeAgentHeads(ctx)
+  const StatsContext = makeStatsContext(kit, makeSubagentCost(ctx, heads))
   const StatsTiming = makeStatsTiming(kit, Donut)
   const StatsTokens = makeStatsTokens(kit, Donut)
   const PluginInfo = makePluginInfo(kit)
   const UpgradeGate = makeUpgradeGate(kit)
   const DetailNote = makeDetailNote(kit)
   const ContextBrowser = makeContextBrowser(kit, StackedBar, settings)
-  const AgentGraph = makeAgentGraph(ctx, kit)
+  const AgentGraph = makeAgentGraph(ctx, kit, heads)
   const ErrorBoundary = makeErrorBoundary(t)
 
   // The body renders under the error boundary: a corrupt projection value (past the timelineOf shape guard) degrades to a styled error
@@ -210,6 +215,9 @@ export function makeContextView(
       () => (granularity === 'turn' ? aggregateByTurn(requests) : requests),
       [requests, granularity],
     )
+    // The step labels' per-turn totals ("第 s 步 (共 n 步)"), tallied over the RAW step records — turn-mode
+    // aggregates read their own stepCount instead.
+    const stepsOf = useMemo(() => turnStepsOf(requests), [requests])
     const markers = useMemo(() => attachMarkers(displayRequests, events), [displayRequests, events])
 
     // Chat → Context jump, leg 1: pick up the assistant-action relay's request for this session (once per mount).
@@ -360,7 +368,7 @@ export function makeContextView(
     if (activeReq !== null && filesBefore !== null) {
       fileScope = activeReq.stepCount !== undefined && activeReq.stepCount > 1
         ? t('detail.turn', { t: activeReq.turn ?? 0, n: activeReq.stepCount })
-        : t('detail.step', { t: activeReq.turn ?? 0, s: activeReq.step ?? 0 })
+        : t('detail.step', { t: activeReq.turn ?? 0, s: activeReq.step ?? 0, n: stepsOf(activeReq.turn) })
     }
 
     // Turn highlight is hover-only: the turn strip hover wins, then the hovered bar's turn — no fallback, so a pinned or default selection
@@ -476,6 +484,7 @@ export function makeContextView(
                 marker={activeReq !== null ? markerOf(activeReq) : undefined}
                 brief={brief}
                 convOf={convOf}
+                stepsOf={stepsOf}
                 onLocate={locateNode}
                 hoverKey={trendHoverCat}
               />
@@ -514,7 +523,7 @@ export function makeContextView(
         {inSidebar ? null : (
           <div className="lc-cols lc-head">
             <StatsContext counts={counts} humanInputs={data.humanInputs} toolCalls={data.toolCalls} usage={usage}
-              cost={data.cost} locale={activeLocale} />
+              cost={data.cost} locale={activeLocale} sessionId={typeof sessionId === 'string' ? sessionId : undefined} />
             <PluginInfo />
           </div>
         )}

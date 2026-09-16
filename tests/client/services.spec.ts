@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import {
+  activityOf,
   canOpenPathsOf,
   contextBreakdownOf,
   contextPressureOf,
@@ -89,7 +90,7 @@ describe('numOf', () => {
 })
 
 describe('timelineOf', () => {
-  const current = { system: 1, tools: 2, user: 3, inject: 4, assistant: 5, tool: 6, total: 7 }
+  const current = { system: 1, tools: 2, user: 3, inject: 4, skill: 0, assistant: 5, tool: 6, total: 7 }
 
   test('non-records stay null', () => {
     assert.equal(timelineOf(null), null)
@@ -118,7 +119,7 @@ describe('timelineOf', () => {
     for (const bad of [{}, { current: null }, { current: 7 }]) {
       assert.deepEqual(timelineOf(bad), {
         ok: true,
-        current: { system: 0, tools: 0, user: 0, inject: 0, assistant: 0, tool: 0, total: 0 },
+        current: { system: 0, tools: 0, user: 0, inject: 0, skill: 0, assistant: 0, tool: 0, total: 0 },
         requests: [],
         events: [],
         nodes: [],
@@ -131,7 +132,7 @@ describe('timelineOf', () => {
   test('current with some non-number fields is numOf-coerced', () => {
     const out = timelineOf({ current: { system: 12, tools: 'x', user: undefined } })
     assert.ok(out !== null)
-    assert.deepEqual(out.current, { system: 12, tools: 0, user: 0, inject: 0, assistant: 0, tool: 0, total: 0 })
+    assert.deepEqual(out.current, { system: 12, tools: 0, user: 0, inject: 0, skill: 0, assistant: 0, tool: 0, total: 0 })
   })
 
   test('non-array collections become empty lists', () => {
@@ -199,6 +200,20 @@ describe('timelineOf', () => {
     assert.ok(!('archiveFloor' in dropped))
   })
 
+  test('lastUser is kept only as a non-empty bounded string', () => {
+    const kept = timelineOf({ current: 1, lastUser: 'fix the flaky spec' })
+    assert.ok(kept !== null)
+    assert.equal(kept.lastUser, 'fix the flaky spec')
+    const bounded = timelineOf({ current: 1, lastUser: 'y'.repeat(500) })
+    assert.ok(bounded !== null)
+    assert.equal(bounded.lastUser?.length, 200)
+    for (const junk of ['', 7, null, {}]) {
+      const dropped = timelineOf({ current: 1, lastUser: junk })
+      assert.ok(dropped !== null)
+      assert.ok(!('lastUser' in dropped))
+    }
+  })
+
   test('cost is rebuilt per provider/model/period; garbage drops or zeroes', () => {
     const cost = {
       'deepseek-official': {
@@ -239,7 +254,7 @@ describe('timelineOf', () => {
   test('a well-formed payload with a proven cost takes the fast path; a garbage cost diverts to the sanitizer', () => {
     const cost = { 'deepseek-official': { 'deepseek-v4-flash': { peak: { uncached: 1, cacheRead: 2, cacheWrite: 3, output: 4 } } } }
     const good = timelineOf({
-      current: { system: 1, tools: 1, user: 1, inject: 1, assistant: 1, tool: 1, total: 7 },
+      current: { system: 1, tools: 1, user: 1, inject: 1, skill: 1, assistant: 1, tool: 1, total: 8 },
       requests: [], events: [], nodes: [], archive: [],
       cost,
     })
@@ -247,7 +262,7 @@ describe('timelineOf', () => {
     assert.equal(good.cost, cost, 'the fast path passes a structurally proven cost through untouched')
     for (const bad of [[], 'junk']) {
       const diverted = timelineOf({
-        current: { system: 1, tools: 1, user: 1, inject: 1, assistant: 1, tool: 1, total: 7 },
+        current: { system: 1, tools: 1, user: 1, inject: 1, skill: 1, assistant: 1, tool: 1, total: 8 },
         requests: [], events: [], nodes: [], archive: [],
         cost: bad,
       })
@@ -504,7 +519,7 @@ describe('timingOf', () => {
 })
 
 describe('timelineOf — the live system-prompt nodes', () => {
-  const current = { system: 1, tools: 2, user: 3, inject: 4, assistant: 5, tool: 6, total: 7 }
+  const current = { system: 1, tools: 2, user: 3, inject: 4, skill: 0, assistant: 5, tool: 6, total: 7 }
   const base = { ok: true, current, requests: [], events: [], nodes: [], archive: [], droppedNodes: 0 }
 
   test('a well-formed systems list passes through by reference (fast path)', () => {
@@ -559,7 +574,7 @@ describe('timelineOf — the live system-prompt nodes', () => {
 })
 
 describe('timelineOf — timing integration', () => {
-  const current = { system: 1, tools: 2, user: 3, inject: 4, assistant: 5, tool: 6, total: 7 }
+  const current = { system: 1, tools: 2, user: 3, inject: 4, skill: 0, assistant: 5, tool: 6, total: 7 }
   const base = { ok: true, current, requests: [], events: [], nodes: [], archive: [], droppedNodes: 0 }
   const timing: TimingTotals = { wallMs: 60_000, ttftMs: 8_000, genMs: 12_000, calls: 4, toolsMs: 30_000, toolCalls: 9, tools: { bash: { calls: 5, ms: 20_000 } } }
 
@@ -809,5 +824,41 @@ describe('openResourceVia', () => {
     // The plugin unloaded (HMR): the written face is gone.
     services.sidebarRight = undefined
     assert.equal(open('dsh-resource://file/session/s1/a.ts'), false)
+  })
+})
+
+describe('activityOf', () => {
+  test('absent or non-record values stay null (an older host serves no such key)', () => {
+    assert.equal(activityOf(null), null)
+    assert.equal(activityOf(undefined), null)
+    assert.equal(activityOf(7), null)
+    assert.equal(activityOf('x'), null)
+    assert.equal(activityOf({}), null, 'a record without a days map')
+    assert.equal(activityOf({ days: 7 }), null)
+    assert.equal(activityOf({ days: [] }), null, 'an array is not a ledger')
+  })
+
+  test('a well-formed payload passes through untouched (reference-stable)', () => {
+    const wire = { days: { '2026-09-16': { tokens: 15, requests: 1 }, '2026-09-15': { tokens: 0, requests: 3 } } }
+    assert.ok(activityOf(wire) === (wire as never))
+    assert.deepEqual(activityOf({ days: {} }), { days: {} })
+  })
+
+  test('malformed entries drop individually; the readable days survive', () => {
+    const out = activityOf({
+      days: {
+        '2026-09-16': { tokens: 15, requests: 1 },
+        '09-16': { tokens: 1, requests: 1 },
+        '2026-09-17': null,
+        '2026-09-18': [1, 2],
+        '2026-09-19': { tokens: 'x', requests: 1 },
+        '2026-09-20': { tokens: Number.NaN, requests: 1 },
+        '2026-09-21': { tokens: -3, requests: 1 },
+        '2026-09-22': { tokens: 1, requests: 'x' },
+        '2026-09-23': { tokens: 1, requests: Number.POSITIVE_INFINITY },
+        '2026-09-24': { tokens: 1, requests: -1 },
+      },
+    })
+    assert.deepEqual(out, { days: { '2026-09-16': { tokens: 15, requests: 1 } } })
   })
 })

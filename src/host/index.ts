@@ -21,10 +21,12 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { createContextActivityDefinition } from './activity'
 import { createToolAttribution } from './attribution'
+import { watchActivityBackfill } from './backfill'
 import { Config, resolveBounds } from './config'
 import { watchDetailChannel } from './detail'
-import { createFallbackHeadersDefinition, createFallbackTimelineDefinition } from './fallback'
+import { createFallbackActivityDefinition, createFallbackHeadersDefinition, createFallbackTimelineDefinition } from './fallback'
 import { createContextHeadersDefinition } from './headers'
 import { installSettings } from './settings'
 import { watchStepIdentity } from './stepIdentity'
@@ -56,6 +58,7 @@ export function apply(ctx: Context, config: Config): void {
     // deliberately neither (nothing is folded) — cast through.
     ctx.sessionProjections.register(createFallbackTimelineDefinition(harnessVersion) as never)
     ctx.sessionProjections.register(createFallbackHeadersDefinition() as never)
+    ctx.sessionProjections.register(createFallbackActivityDefinition() as never)
     return
   }
   // Tool-to-plugin attribution (see attribution.ts): the static chain from
@@ -68,18 +71,23 @@ export function apply(ctx: Context, config: Config): void {
   // load path refuses such events wholesale, permanently bricking the session.
   watchStepIdentity(ctx)
   // The split wire generation (detail.ts): the detail channel arms whenever
-  // the connection/sessions services compose (load order never assumed), and
-  // the unit's view reads the gate per serve — slim while the channel is
-  // live, inline otherwise.
+  // the connection/sessions/webServer services compose (load order never
+  // assumed), and the unit's view reads the gate per serve — slim while the
+  // channel is live, inline otherwise.
   const gate = watchDetailChannel(ctx, resolveBounds(config))
   ctx.sessionProjections.register(createContextTimelineDefinition(config, () => gate.live))
   ctx.sessionProjections.register(createContextHeadersDefinition(name => attribution.ownerOf(name)))
+  ctx.sessionProjections.register(createContextActivityDefinition())
+  // The overview's cold-history warm-up (backfill.ts): sessions folded before
+  // a unit existed get their rows from one background cold read each.
+  watchActivityBackfill(ctx)
   installSettings(ctx)
 }
 
 // ---- public type surface (stable for downstream consumers) -------------------
 
 export type { Category, ContextEventRecord, RequestRecord, Snapshot, ContextTimeline, SurfaceNode } from '../shared/types'
-export type { ContextHeaders, HeaderRecord, HeaderTool, ContextTimelineDetail, TimelineCounts, TimelineLast } from '../shared/types'
+export type { ActivityDay, ContextActivity, ContextHeaders, HeaderRecord, HeaderTool, ContextTimelineDetail, TimelineCounts, TimelineLast } from '../shared/types'
+export type { ActivityState } from './activity'
 export type { TimelineState } from './fold'
 export type { HeadersState } from './headers'

@@ -84,7 +84,8 @@
  Category hover-link (overview/browser → trend card): the chart container carries the hovered
  category key (`data-catdim`), so CSS alone lights that key's segment in EVERY bar and recedes
  the rest — the memoized bars never re-render on a cross-card hover. Same idiom as the stacked
- bars' dim+brightness pairing.
+ bars' dim+brightness pairing. The re-light list below must track the Category vocabulary —
+ a bucket missing here dims EVERY bar with nothing lit (the #66 skill regression).
  */
 .lc-cat-seg { transition: filter var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out), opacity var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
 .lc-chart[data-catdim] .lc-cat-seg { opacity: 0.35; }
@@ -92,6 +93,7 @@
 .lc-chart[data-catdim='tools'] .lc-cat-seg[data-cat='tools'],
 .lc-chart[data-catdim='user'] .lc-cat-seg[data-cat='user'],
 .lc-chart[data-catdim='inject'] .lc-cat-seg[data-cat='inject'],
+.lc-chart[data-catdim='skill'] .lc-cat-seg[data-cat='skill'],
 .lc-chart[data-catdim='assistant'] .lc-cat-seg[data-cat='assistant'],
 .lc-chart[data-catdim='tool'] .lc-cat-seg[data-cat='tool'] { opacity: 1; filter: brightness(1.18); }
 .lc-bar-marker { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--dsw-alias-state-warn-primary); }

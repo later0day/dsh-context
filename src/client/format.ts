@@ -21,7 +21,7 @@ export function fmtBytes(n: number | null | undefined): string {
  * Cache-hit share of billed prompt-side input (`reads` over `billed`),
  * TRUNCATED to `decimals` places (cut, not round) — same formula as the
  * harness chat stats line's '缓存命中' figure and the stats board's cell
- * (which shows one decimal). Null when nothing was billed. The 1e-9 epsilon
+ * (which shows two decimals). Null when nothing was billed. The 1e-9 epsilon
  * absorbs only float noise (integer token counts never sit that close to a
  * boundary).
  */

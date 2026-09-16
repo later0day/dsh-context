@@ -5,6 +5,7 @@
   * from here ever reaches the runtime bundles.
  */
 
+import type { ActivityState } from '../host/activity'
 import type { HeadersState } from '../host/headers'
 import type { TimelineState } from '../host/fold'
 // The registry package ROOT carries the `@deepseek-ai/cordis` Context
@@ -39,14 +40,31 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
      * content of a picked step (key absence = older host: tokens only).
      */
     contextHeaders: ContextHeaders
+    /**
+     * The per-day activity ledger (billed tokens + completed requests keyed
+     * by local day) behind the Context Dashboard's heatmap — the timeline's
+     * "current snapshot" cannot draw a per-day chart, so the overview reads
+     * this off every session-list row's projection column. Tiny (one small
+     * record per day, retention-capped), so riding every list row costs
+     * nothing next to the timeline head. Key absence = older host: the
+     * heatmap degrades to its empty note.
+     */
+    contextActivity: ContextActivity
   }
   interface SessionProjectionStateMap {
     contextTimeline: TimelineState
     contextHeaders: HeadersState
+    contextActivity: ActivityState
   }
 }
 
-export type Category = 'user' | 'inject' | 'assistant' | 'tool'
+/**
+ * The priced surface buckets. `skill` carries every skill-machinery content
+ * the harness injects (issue #66): the `<available_skills>` catalog digest,
+ * a user-explicit `/name` invocation's instructions message, and the content
+ * a `skill`-tool load returns (modeled as a tool result by the harness).
+ */
+export type Category = 'user' | 'inject' | 'skill' | 'assistant' | 'tool'
 
 /**
  * One live system-prompt node (Snapshot.systems) — the harness models the
@@ -89,6 +107,28 @@ export interface TimelineLast {
   prompt?: number
 }
 
+/** One day's ledger entry in the `contextActivity` projection. */
+export interface ActivityDay {
+  /**
+   * Billed tokens folded from provider-reported usage that day (prompt-side
+   * input + cache read/write + output). Requests without a usage settlement
+   * count only toward `requests` — a fabricated 0 never understates the day.
+   */
+  tokens: number
+  /** Completed model calls (assistant settlements) that day. */
+  requests: number
+}
+
+/**
+ * The per-session daily activity ledger (`contextActivity` wire value):
+ * day key (`YYYY-MM-DD`, host-local — see shared/days.ts) → that day's
+ * billed volume, retention-capped by the fold. The Context Dashboard merges
+ * every listed session's ledger into its activity heatmap.
+ */
+export interface ContextActivity {
+  days: Record<string, ActivityDay>
+}
+
 /**
  * The per-user display-preference vocabulary of the `dsh-context` settings
  * namespace — the ONE declaration both halves share: the Host registers the
@@ -109,12 +149,16 @@ export type DefaultToolSort = 'size' | 'count' | 'name'
 /** Where the Context view is offered: the conversation tab, the right Sidebar, or both. */
 export type DefaultPlacement = 'all' | 'tab' | 'sidebar'
 
+/** Whether the Context Insights panel's sidebar entry is offered at all. */
+export type InsightsEntry = 'show' | 'hide'
+
 export interface PluginSettings {
   defaultPlacement: DefaultPlacement
   defaultGranularity: DefaultGranularity
   defaultTrendMode: DefaultTrendMode
   defaultToolSort: DefaultToolSort
   defaultFileSort: DefaultFileSort
+  insightsEntry: InsightsEntry
 }
 
 /** The section fields the settings card edits, as the Host schema names them. */
@@ -141,6 +185,7 @@ export interface Snapshot {
     tools: number
     user: number
     inject: number
+    skill: number
     assistant: number
     tool: number
     total: number
@@ -167,6 +212,13 @@ export interface Snapshot {
    * from older hosts; clients treat absence as zero.
    */
   humanInputs?: number
+  /**
+   * The user's newest own message as a one-line bounded preview (first text
+   * block, whitespace collapsed, ~80 chars): the session cards' footer line.
+   * Additive-optional — absent from rows folded before the field existed
+   * (older hosts, idle sessions' cached rows); clients hide the line then.
+   */
+  lastUser?: string
   /**
    * Split-generation head fields — present exactly when the host serves the
    * SLIM head (the heavy collections moved to the on-demand detail channel,
@@ -252,6 +304,17 @@ export interface Snapshot {
  */
 export interface ContextTimelineDetail {
   rev: number
+  /**
+   * The slim wire head at the SAME fold cut as the collections: the
+   * composition scalars (`current`), the window/model envelope, and the
+   * precomputed counts. Sessions listed cold (never attached since the
+   * requesting unit last changed) carry no `contextTimeline` projection row
+   * for the browser's list reads, so the Agent network card fetches this
+   * head per node to render their composition rings. The host always serves
+   * it; optional so a payload missing it still serves the collections (the
+   * detail cards) and only the ring composition degrades.
+   */
+  head?: ContextTimeline
   requests: RequestRecord[]
   events: ContextEventRecord[]
   nodes: SurfaceNode[]
@@ -482,6 +545,14 @@ export interface SurfaceNode {
    */
   gone?: number
   form?: string
+  /**
+   * The producer identity the matching inject event names (host pricing.ts
+   * `injectionSourceName`: the plugin id, the reconciled instruction files,
+   * or the durable kind). Stamped on injection nodes alongside the event, so
+   * the browser rows label them the way the events card does; absent when the
+   * source carries no readable identity or the node predates the stamp.
+   */
+  name?: string
   text?: string
   tool?: string
   err?: boolean
@@ -503,6 +574,13 @@ export interface RequestRecord {
   tool: number
   total: number
   prompt?: number
+  /**
+   * Skill-machinery tokens of this request (the `skill` composition
+   * category — catalog digests, invocation instructions, `skill`-tool
+   * loads). Always written by the current fold; absent on rows folded
+   * before the category existed (read as 0).
+   */
+  skill?: number
   /**
    * Billed cache-read (served) prompt tokens of this request — the
    * hit-rate numerator against `prompt` (input + cacheRead + cacheWrite).

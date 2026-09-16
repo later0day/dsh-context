@@ -22,7 +22,7 @@ const settings = createContextSettings()
 function timeline(over: Record<string, unknown> = {}): ContextTimeline {
   return {
     ok: true,
-    current: { system: 1, tools: 2, user: 3, inject: 4, assistant: 5, tool: 6, total: 21 },
+    current: { system: 1, tools: 2, user: 3, inject: 4, skill: 0, assistant: 5, tool: 6, total: 21 },
     requests: [],
     events: [],
     nodes: [],
@@ -43,6 +43,7 @@ const OPEN = (): boolean => true
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('ContextModal', () => {
@@ -419,27 +420,23 @@ describe('ContextModal — the split generation', () => {
     assert.fail(message)
   }
 
-  test('the modal shares the detail channel: the browser lands the collections on open', async () => {
-    const ctx = new TestClientCtx({
-      services: {
-        sessions: new TestSessions(),
-        connection: {
-          rpc: {
-            call: async () => ({
-              ok: true,
-              value: {
-                rev: 1,
-                requests: [{ seq: 1, turn: 1, step: 1, time: 1, system: 1, tools: 2, user: 3, inject: 4, assistant: 5, tool: 6, total: 21 }],
-                events: [],
-                nodes: [{ seq: 1, cat: 'assistant', tokens: 5, text: 'modal reply' }],
-                droppedNodes: 0,
-                archive: [],
-              },
-            }),
-          },
+  test('the modal shares the detail route: the browser lands the collections on open', async () => {
+    vi.stubGlobal('fetch', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        value: {
+          rev: 1,
+          requests: [{ seq: 1, turn: 1, step: 1, time: 1, system: 1, tools: 2, user: 3, inject: 4, assistant: 5, tool: 6, total: 21 }],
+          events: [],
+          nodes: [{ seq: 1, cat: 'assistant', tokens: 5, text: 'modal reply' }],
+          droppedNodes: 0,
+          archive: [],
         },
-      },
-    })
+      }),
+    }))
+    const ctx = new TestClientCtx({ services: { sessions: new TestSessions() } })
     const ContextModal = makeContextModal(asClientCtx(ctx), kit, settings)
     const head = timeline({
       counts: { turns: 1, steps: 1, injects: 0, compactions: 0, prunes: 0 },

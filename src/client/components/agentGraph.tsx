@@ -6,16 +6,24 @@
  *
  * Data rides the harness's existing planes end to end — the session-list
  * snapshot (`ctx.sessions.list`: lineage rows + per-session projection
- * values) and the tab's own projections for the current node — so the card
- * adds no RPC of its own beyond one direct-child catalog refresh per
- * session. A harness without the outward sessions service hides the card.
+ * values) and the tab's own projections for the current node. The list block
+ * serves projection values only from the host's projection cache, so a
+ * relative that never attached since the timeline unit last changed lists
+ * pressure-only (occupancy without composition); those nodes fetch their slim
+ * head from the plugin's `/api` detail route (agentHeads.ts — the same
+ * page-scope cache the stats board's subagent-cost cell reads) and
+ * re-render composed. A harness without the outward sessions service hides
+ * the card.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from 'react'
 import { CATS } from '../categories'
+import type { AgentHeads } from '../agentHeads'
+import { makeAgentHeads, useSessionsSnapshot } from '../agentHeads'
 import { containHorizontalOverscroll } from '../overscroll'
 import type { ClientCtx } from '../services'
 import type { ViewKit } from '../viewkit'
+import type { ContextTimeline } from '../../shared/types'
 import type { AgentNode, AgentSelfStats } from '../agentTree'
 import {
   AGENT_NODE_R,
@@ -48,6 +56,8 @@ export function ringColorOf(pct: number | null): string {
 export function makeAgentGraph(
   ctx: ClientCtx,
   kit: ViewKit,
+  /** The shared page-scope cold-head cache — the stats board's subagent-cost cell reads the same fetches. */
+  heads: AgentHeads = makeAgentHeads(ctx),
 ): (props: AgentGraphProps) => ReactElement | null {
   const { t, fmt, catLabel } = kit
 
@@ -56,19 +66,7 @@ export function makeAgentGraph(
     // belongs to the client runtime's composition, and a deployment without
     // it simply keeps the card hidden.
     const face = useMemo(() => sessionsFaceOf(ctx), [])
-    const subscribe = useCallback((fn: () => void) => {
-      if (face === null) return () => {}
-      /* v8 ignore next 2 -- sessionsFaceOf returns a face only after proving list.subscribe. */
-      if (face.list === undefined) return () => {}
-      return face.list.subscribe(fn)
-    }, [face])
-    const getSnapshot = useCallback(() => {
-      if (face === null) return null
-      /* v8 ignore next 2 -- sessionsFaceOf proves list before returning the face. */
-      if (face.list === undefined) return null
-      return face.list.getSnapshot()
-    }, [face])
-    const snapshot = useSyncExternalStore(subscribe, getSnapshot)
+    const snapshot = useSessionsSnapshot(face)
     const sessionId = props.sessionId
     const [hoverId, setHoverId] = useState<string | null>(null)
 
@@ -105,10 +103,38 @@ export function makeAgentGraph(
       face.refreshSubagents(sessionId).catch(() => {})
     }, [face, sessionId])
 
+    // Composition heads fetched for cold relatives (see the effect below):
+    // landed values re-fold the forest with the row's missing `contextTimeline`
+    // injected.
+    const [landed, setLanded] = useState<ReadonlyMap<string, ContextTimeline>>(new Map())
+
     const built = useMemo(() => {
-      const forest = agentForestOf(snapshot, sessionId, props.self)
+      const forest = agentForestOf(snapshot, sessionId, props.self, landed)
       return forest !== null ? { forest, layout: layoutForest(forest, stageWidth) } : null
-    }, [snapshot, sessionId, props.self, stageWidth])
+    }, [snapshot, sessionId, props.self, stageWidth, landed])
+
+    // Nodes with no composition (occupancy-only, or nothing listed at all —
+    // the projection cache holds no timeline row for either) fetch their slim
+    // head off the detail route (the shared page-scope cache) and re-render
+    // composed. The current node is excluded: the tab's own projections
+    // already feed it live. A remount (tab switch) resets this state but not
+    // the cache, so a cached read REPLAYS into the fresh instance —
+    // otherwise a fetched relative would fall back to green on every
+    // remount, forever.
+    useEffect(() => {
+      if (built === null) return
+      const attach = (pending: Promise<ContextTimeline | null>, id: string): void => {
+        void pending.then((head) => {
+          // Same value → same state: the identity bail-out keeps a settled
+          // replay on every snapshot tick from looping.
+          if (head !== null) setLanded(prev => prev.get(id) === head ? prev : new Map(prev).set(id, head))
+        }).catch(() => {})
+      }
+      for (const n of built.forest.nodes) {
+        if (n.isCurrent || (n.head !== null && n.head.parts.length > 0)) continue
+        attach(heads.headOf(n.id), n.id)
+      }
+    }, [built, heads])
 
     if (built === null) return null
     const { forest, layout } = built

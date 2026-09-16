@@ -23,6 +23,9 @@
  */
 .lc-br-cat-on { background: var(--dsw-alias-interactive-bg-hover); }
 .lc-br-cat-on i { box-shadow: 0 0 0 1px var(--dsw-alias-brand-primary); }
+/* Expanded category: the open header holds the hover tint, so the header keeps
+   reading as the raised face over its body — every category card alike. */
+.lc-br-cat-open { background: var(--dsw-alias-interactive-bg-hover); }
 .lc-br-cat-row i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; flex: none; transition: box-shadow var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
 .lc-br-cat-label { font-weight: 600; }
 .lc-br-cat-count { color: var(--dsw-alias-label-secondary); font-size: 12px; white-space: nowrap; }

@@ -100,6 +100,8 @@ describe('buildTimelineHead', () => {
     // The whole-session tally rides the head too: the canonical log's one
     // user message (injections excluded).
     assert.equal(head.humanInputs, 1)
+    // The card preview rides the head: the canonical log's own user message.
+    assert.equal(head.lastUser, 'hello there')
     // The headline anchor is the newest retained request's billing summary.
     const lastReq = state.requests.at(-1)!
     assert.deepEqual(head.last, { seq: lastReq.seq, total: lastReq.total, prompt: 20 })
@@ -127,6 +129,8 @@ describe('buildTimelineHead', () => {
     const head = buildTimelineHead(timelineDef().init())
     assert.deepEqual(head.counts, { turns: 0, steps: 0, injects: 0, compactions: 0, prunes: 0 })
     assert.equal(head.humanInputs, 0, 'the tally defaults to zero on the wire')
+    assert.equal(head.lastUser, undefined, 'no user message yet — the preview stays absent')
+    assert.ok(!('lastUser' in head), 'no own key on the wire')
     assert.equal(head.last, undefined, 'no request yet — the anchor stays absent')
     assert.equal(head.detailRev, 0)
     assert.equal(head.current.total, 0)
@@ -144,7 +148,7 @@ describe('buildTimelineHead', () => {
 })
 
 describe('buildTimelineDetail', () => {
-  test('serves the same collections the inline view serves, plus the revision', () => {
+  test('serves the same collections the inline view serves, plus the revision and the head', () => {
     const { state, view } = driveTimeline(canonicalLog())
     const detail = buildTimelineDetail(state, resolveBounds({}))
     assert.equal(detail.rev, 6)
@@ -155,6 +159,11 @@ describe('buildTimelineDetail', () => {
     assert.deepEqual(detail.archive, view.archive)
     assert.equal(detail.surfaceFloor, view.surfaceFloor)
     assert.equal(detail.archiveFloor, view.archiveFloor)
+    // The slim head rides at the SAME cut: the composition the Agent
+    // network's cold-node ring fetch renders from.
+    assert.ok(detail.head !== undefined)
+    assert.deepEqual(detail.head.current, view.current)
+    assert.deepEqual(detail.head.counts, buildTimelineHead(state).counts)
     assertPlainJson(detail)
     // The detail never aliases the persisted state.
     assert.notEqual(detail.requests[0], state.requests[0])
@@ -206,7 +215,7 @@ describe('the split wire generation (definition slim flag)', () => {
     const detail = buildTimelineDetail(state, resolveBounds({}))
     const inline = timelineDef({}, false).wire.view(state)
     const { counts: _counts, last: _last, detailRev: _rev, ...headScalars } = head
-    const { rev: _detailRev, ...collections } = detail
+    const { rev: _detailRev, head: _detailHead, ...collections } = detail
     assert.deepEqual(inline, { ...headScalars, ...collections })
   })
 })

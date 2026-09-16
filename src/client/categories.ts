@@ -1,6 +1,6 @@
 /**
- * Category presentation config: the six priced buckets (system, tool
- * schemas, and the four surface categories) with their chart colors, plus
+ * Category presentation config: the seven priced buckets (system, tool
+ * schemas, and the five surface categories) with their chart colors, plus
  * the part builders behind the composition card.
  *
  * Two figures ride on every part, mirroring the official chat context
@@ -31,6 +31,7 @@ export const CATS: { key: Category | 'system' | 'tools'; color: string }[] = [
   { key: 'tools', color: 'var(--color-amber-500)' },
   { key: 'user', color: 'var(--color-green-500)' },
   { key: 'inject', color: 'var(--color-purple-500)' },
+  { key: 'skill', color: 'var(--color-orange-500)' },
   { key: 'assistant', color: 'var(--color-blue-500)' },
   { key: 'tool', color: 'var(--color-teal-500)' },
 ]
@@ -38,7 +39,7 @@ export const CATS: { key: Category | 'system' | 'tools'; color: string }[] = [
 /** Category key → bar color, for per-item bands (the browser's DNA mode) that bypass the CATS-order part builders. */
 export const CAT_COLOR = Object.fromEntries(CATS.map(c => [c.key, c.color])) as Record<Category | 'system' | 'tools', string>
 
-const MESSAGE_CATS: readonly (Category | 'system' | 'tools')[] = ['user', 'inject', 'assistant', 'tool']
+const MESSAGE_CATS: readonly (Category | 'system' | 'tools')[] = ['user', 'inject', 'skill', 'assistant', 'tool']
 
 export function partsOf(breakdown: Snapshot['current'] | RequestRecord): PartsPart[] {
   return CATS.map((c) => {
@@ -59,7 +60,7 @@ export function officialParts(
   current: Snapshot['current'],
   breakdown: ContextBreakdown | null,
 ): PartsPart[] {
-  const foldSurface = current.user + current.inject + current.assistant + current.tool
+  const foldSurface = current.user + current.inject + current.skill + current.assistant + current.tool
   const system = breakdown?.systemTokens ?? current.system
   const tools = breakdown?.toolsTokens ?? current.tools
   const messages = breakdown?.messageTokens ?? foldSurface

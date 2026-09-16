@@ -21,17 +21,19 @@ import {
   layoutForest,
   openAgentSession,
   sessionsFaceOf,
+  subagentCostFoldOf,
   type AgentForest,
   type SessionsFaceLike,
 } from '../../src/client/agentTree'
-import type { ContextTimeline } from '../../src/shared/types'
+import { mergeCostUsage } from '../../src/client/cost'
+import type { ContextTimeline, SessionCostUsage } from '../../src/shared/types'
 
 function timeline(total: number, requests = 0): ContextTimeline {
   return {
     ok: true,
     contextWindow: 1000,
     current: {
-      system: 0, tools: 0, user: total, inject: 0, assistant: 0, tool: 0, total,
+      system: 0, tools: 0, user: total, inject: 0, skill: 0, assistant: 0, tool: 0, total,
     },
     requests: Array.from({ length: requests }, (_, i) => ({
       seq: i + 1, time: 0, system: 0, tools: 0, user: 0, inject: 0, assistant: 0, tool: 0, total: 1,
@@ -208,6 +210,70 @@ describe('agentForestOf', () => {
     assert.ok(withRow.nodes[0].head !== null)
   })
 
+  test('injects fetched cold heads into rows whose own timeline is absent', () => {
+    // A multi-category composition (the detail channel's slim head).
+    const composed: ContextTimeline = {
+      ok: true,
+      contextWindow: 1000,
+      current: { system: 100, tools: 50, user: 200, inject: 50, skill: 0, assistant: 150, tool: 50, total: 600 },
+      requests: [],
+      events: [],
+      nodes: [],
+      droppedNodes: 0,
+      archive: [],
+    }
+    const forest = agentForestOf(snap({
+      root: row({ displayTitle: 'Root' }),
+      cold: row({
+        parentId: 'root', origin: 'subagent', updatedAt: 2,
+        projectionValues: { contextPressure: { projectedTokens: 500, contextWindow: 1000 } },
+      }),
+      warm: row({ parentId: 'root', projectionValues: { contextTimeline: timeline(100, 1) } }),
+    }), 'root', undefined, new Map<string, unknown>([
+      ['cold', composed],
+      ['warm', composed],
+      ['ghost', timeline(5)],
+    ]))
+    assert.ok(forest !== null)
+    // Pressure anchors the occupancy; the fetched head supplies the composition arcs.
+    const cold = forest.nodes.find(n => n.id === 'cold')
+    assert.ok(cold !== undefined && cold.head !== null)
+    assert.equal(cold.head.tokens, 500)
+    assert.equal(cold.head.pct, 50)
+    assert.ok(cold.head.parts.filter(p => p.value > 0).length >= 5, 'composed, not the single occupancy arc')
+    // A row's own timeline outranks the injection; unrelated ids never inject.
+    const warm = forest.nodes.find(n => n.id === 'warm')
+    assert.equal(warm?.head?.tokens, 100)
+    assert.ok(forest.nodes[0].head === null)
+    // A row without projections folds from the fetched head alone.
+    const solo = agentForestOf(snap({
+      s1: row({}),
+    }), 's1', undefined, new Map([['s1', composed]]))
+    assert.ok(solo !== null)
+    const soloHead = solo.nodes[0].head
+    assert.ok(soloHead !== null)
+    assert.equal(soloHead.tokens, 600, 'no pressure anchor: the fold total carries')
+    assert.equal(soloHead.pct, 60)
+  })
+
+  test('a hostile fetched head degrades back to the pressure-only ring', () => {
+    const byId = {
+      root: row({ displayTitle: 'Root' }),
+      cold: row({
+        parentId: 'root', origin: 'subagent', updatedAt: 2,
+        projectionValues: { contextPressure: { projectedTokens: 500, contextWindow: 1000 } },
+      }),
+    }
+    for (const junk of ['garbage', null, 42]) {
+      const forest = agentForestOf(snap(byId), 'root', undefined, new Map([['cold', junk]]))
+      assert.ok(forest !== null)
+      const cold = forest.nodes.find(n => n.id === 'cold')
+      assert.ok(cold !== undefined && cold.head !== null)
+      assert.equal(cold.head.tokens, 500, 'pressure still anchors the ring')
+      assert.equal(cold.head.parts.length, 0, 'no composition invented from junk')
+    }
+  })
+
   test('walks the lineage up to the topmost ancestor and DFSes the subtree', () => {
     const forest = agentForestOf(snap({
       root: row({ displayTitle: 'Root', running: true, updatedAt: 5 }),
@@ -285,6 +351,107 @@ describe('agentForestOf', () => {
     assert.equal(forest.nodes.length, AGENT_TREE_LIMIT)
     // root + LIMIT+5 kids = LIMIT+6 members; the cap shows LIMIT.
     assert.equal(forest.overflow, 6)
+  })
+})
+
+describe('subagentCostFoldOf', () => {
+  const COST_A: SessionCostUsage = { 'deepseek-official': { 'deepseek-v4-flash': { peak: { uncached: 1, cacheRead: 2, cacheWrite: 0, output: 3 } } } }
+  const COST_B: SessionCostUsage = { 'zai-coding-cn': { 'glm-5.3-flash': { peak: { uncached: 10, cacheRead: 0, cacheWrite: 20, output: 0 } } } }
+
+  /** A row whose timeline carries the given cost (a priced row when cost is given). */
+  function costRow(parentId: string | undefined, cost?: SessionCostUsage): Record<string, unknown> {
+    return row({
+      ...(parentId !== undefined ? { parentId } : {}),
+      projectionValues: { contextTimeline: { ...timeline(100), ...(cost !== undefined ? { cost } : {}) } },
+    })
+  }
+
+  test('absent snapshot or anchor folds nothing', () => {
+    assert.deepEqual(subagentCostFoldOf(undefined, 's1'), { usage: null, cold: [] })
+    assert.deepEqual(subagentCostFoldOf(snap({}), 's1'), { usage: null, cold: [] })
+    assert.deepEqual(subagentCostFoldOf(snap({ s1: row({}) }), undefined), { usage: null, cold: [] })
+    assert.deepEqual(subagentCostFoldOf(snap({ s1: row({}) }), ''), { usage: null, cold: [] })
+  })
+
+  test('merges the whole descendant subtree, never the current session itself', () => {
+    const byId = {
+      root: costRow(undefined, COST_A),
+      kid: costRow('root', COST_B),
+      grand: costRow('kid', COST_A),
+      kid2: costRow('root'),
+      stranger: costRow(undefined, COST_B),
+      orphan: costRow('missing', COST_B),
+    }
+    const fold = subagentCostFoldOf(snap(byId), 'root')
+    // root's own usage stays out; a timeline row without cost contributes nothing.
+    assert.deepEqual(fold.usage, mergeCostUsage(COST_B, COST_A))
+    assert.deepEqual(fold.cold, [])
+  })
+
+  test('a descendant without a timeline row is a cold fetch target until its head lands', () => {
+    const byId = {
+      root: costRow(undefined, COST_A),
+      cold: row({ parentId: 'root', projectionValues: { contextPressure: { projectedTokens: 1 } } }),
+      bare: row({ parentId: 'root' }),
+    }
+    const fold = subagentCostFoldOf(snap(byId), 'root')
+    assert.equal(fold.usage, null, 'nothing warm or landed yet')
+    assert.deepEqual(fold.cold, ['cold', 'bare'])
+    // The landed head injects the cold relative's usage and empties the fetch list.
+    const landed = new Map<string, ContextTimeline>([['cold', { ...timeline(50), cost: COST_B }]])
+    assert.deepEqual(subagentCostFoldOf(snap(byId), 'root', landed).usage, COST_B)
+    assert.deepEqual(subagentCostFoldOf(snap(byId), 'root', landed).cold, ['bare'])
+  })
+
+  test('a landed head whose cost is absent leaves the id warm but contributes nothing', () => {
+    const byId = { root: costRow(undefined, COST_A), cold: row({ parentId: 'root' }) }
+    const landed = new Map<string, ContextTimeline>([['cold', timeline(50)]])
+    const fold = subagentCostFoldOf(snap(byId), 'root', landed)
+    // The head landed (no more fetch targets) but carried no cost — and the
+    // current session's own usage never counts in the subtree fold.
+    assert.deepEqual(fold.usage, null)
+    assert.deepEqual(fold.cold, [])
+  })
+
+  test('blank placeholders are not agents and a lineage cycle cannot loop the walk', () => {
+    const byId: Record<string, unknown> = {
+      root: costRow(undefined, COST_A),
+      blank: row({ parentId: 'root', blank: true, projectionValues: { contextTimeline: { ...timeline(1), cost: COST_B } } }),
+      a: row({ parentId: 'b' }),
+      b: row({ parentId: 'a' }),
+    }
+    const fold = subagentCostFoldOf(snap(byId), 'root')
+    assert.deepEqual(fold.usage, null, 'the blank usage and the detached cycle stay out (root\'s own cost never counts)')
+    assert.deepEqual(fold.cold, [])
+  })
+
+  test('a cycle reachable from the current session is cut at the revisited id', () => {
+    // The current session's row points at p, and p points back — the walk
+    // must not re-enter the current session as its own "descendant".
+    const byId: Record<string, unknown> = {
+      root: row({ parentId: 'p', projectionValues: { contextTimeline: { ...timeline(1), cost: COST_A } } }),
+      p: row({ parentId: 'root', projectionValues: { contextTimeline: { ...timeline(1), cost: COST_B } } }),
+    }
+    const fold = subagentCostFoldOf(snap(byId), 'root')
+    assert.deepEqual(fold.usage, COST_B, 'p counts once; the current session never counts as its own child')
+    assert.deepEqual(fold.cold, [])
+  })
+
+  test('hostile rows and timeline values degrade to fewer contributions', () => {
+    const byId = {
+      root: costRow(undefined, COST_A),
+      junkRow: 5,
+      hostileTimeline: row({ parentId: 'root', projectionValues: { contextTimeline: 'garbage' } }),
+      hostileCost: row({
+        parentId: 'root',
+        projectionValues: { contextTimeline: { ...timeline(1), cost: { junk: 5, p: { m: { peak: { uncached: 'x', cacheRead: 7 } } } } } },
+      }),
+    }
+    const fold = subagentCostFoldOf(snap(byId), 'root')
+    // The hostile timeline sanitizes to a cost-less head (no contribution, no
+    // throw); the hostile cost loses its junk branch and coerces its fields.
+    assert.deepEqual(fold.usage, { p: { m: { peak: { uncached: 0, cacheRead: 7, cacheWrite: 0, output: 0 } } } })
+    assert.deepEqual(fold.cold, [])
   })
 })
 

@@ -29,13 +29,14 @@ const kit = makeKit()
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 
 function timeline(over: Record<string, unknown> = {}): ContextTimeline {
   return {
     ok: true,
-    current: { system: 100, tools: 200, user: 300, inject: 50, assistant: 400, tool: 150, total: 1200 },
+    current: { system: 100, tools: 200, user: 300, inject: 50, skill: 0, assistant: 400, tool: 150, total: 1200 },
     requests: [],
     events: [],
     nodes: [],
@@ -177,11 +178,11 @@ describe('ContextView — projection guards', () => {
     assert.ok(text(m.container).includes(DICT_EN['overview.used']))
     // The Token card's center is the chat stats line's whole-session billed
     // total off the official tokenUsage projection (100 + 200 + 0 + 50), and
-    // the Context card's cache-hit cell shows the line's own rate one decimal
+    // the Context card's cache-hit cell shows the line's own rate two decimals
     // deep (200 / 300, truncated).
     const tokensCard = queryAll(m.container, '.lc-head > .lc-col-donut')[0]
     assert.equal(query(tokensCard, '.lc-donut-center b').textContent, '350')
-    assert.ok(text(m.container).includes('66.6%'))
+    assert.ok(text(m.container).includes('66.66%'))
     assert.ok(text(m.container).includes('m-only'))
     await m.unmount()
   })
@@ -429,9 +430,10 @@ describe('ContextView — interactions', () => {
     // Five segments on the bar: richTimeline carries no injects, so inject renders none.
     assert.equal(queryAll(m.container, '.lc-bar[data-seq="4"] .lc-bar-stack > .lc-cat-seg').length, 5)
 
-    // Expanding the browser's assistant category focuses every bar on it — one segment per bar, the axis
+    // Expanding the browser's assistant category (row 5 — row 4 is the empty
+    // skill bucket) focuses every bar on it — one segment per bar, the axis
     // rescaled to the category's own max (20/60/80; the first rides its provider-prompt anchor to 21).
-    await click(queryAll(m.container, '.lc-br-cat-row')[4])
+    await click(queryAll(m.container, '.lc-br-cat-row')[5])
     assert.equal(text(query(m.container, '.lc-axis-top')), '80')
     const segs = queryAll(m.container, '.lc-bar .lc-bar-stack > .lc-cat-seg')
     assert.equal(segs.length, 3)
@@ -440,7 +442,7 @@ describe('ContextView — interactions', () => {
       'the card subtitle names the focused category')
 
     // Collapsing the category restores the whole composition and drops the subtitle.
-    await click(queryAll(m.container, '.lc-br-cat-row')[4])
+    await click(queryAll(m.container, '.lc-br-cat-row')[5])
     assert.equal(text(query(m.container, '.lc-axis-top')), '420')
     assert.equal(queryAll(m.container, '.lc-bar[data-seq="4"] .lc-bar-stack > .lc-cat-seg').length, 5)
     const trendCard = queryAll(m.container, '.lc-card').find(c => text(c).includes(DICT_EN['trend.title']))
@@ -1237,13 +1239,10 @@ describe('ContextView — the split generation (slim head + detail channel)', ()
     }
   }
 
-  /** A ctx whose connection.rpc.call serves (or fails) the detail endpoint. */
+  /** Stub the global fetch to serve (or fail) the plugin's detail route. */
   function slimCtx(serve: () => Promise<unknown>): TestClientCtx {
-    return new TestClientCtx({
-      services: {
-        connection: { rpc: { call: (_channel: string, _endpoint: string, _payload: unknown) => serve() } },
-      },
-    })
+    vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => await serve() }))
+    return new TestClientCtx()
   }
 
   async function until(fn: () => boolean, message: string): Promise<void> {
@@ -1315,31 +1314,28 @@ describe('ContextView — the split generation (slim head + detail channel)', ()
 
 describe('ContextView — the op-log generation (fileOps on the detail payload)', () => {
   test('the File Activity card renders the fold-derived ops, no conversation join needed', async () => {
-    const ctx = new TestClientCtx({
-      services: {
-        connection: {
-          rpc: {
-            call: async () => ({
-              ok: true,
-              value: {
-                rev: 1,
-                requests: [{ seq: 2, turn: 1, step: 1, time: T0, system: 1, tools: 2, user: 3, inject: 0, assistant: 4, tool: 5, total: 15 }],
-                events: [],
-                nodes: [],
-                droppedNodes: 0,
-                archive: [],
-                // The op log covers the full session — the conversation window
-                // join plays no role in this card on this generation.
-                fileOps: [
-                  { seq: 1, path: '/ws/README.md', kind: 'read', tool: 'read', err: false, added: 0, removed: 0, read: { start: 1, count: 12 } },
-                  { seq: 2, path: '/ws/src/a.ts', kind: 'write', tool: 'edit', err: false, added: 3, removed: 1 },
-                ],
-              },
-            }),
-          },
+    vi.stubGlobal('fetch', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        value: {
+          rev: 1,
+          requests: [{ seq: 2, turn: 1, step: 1, time: T0, system: 1, tools: 2, user: 3, inject: 0, assistant: 4, tool: 5, total: 15 }],
+          events: [],
+          nodes: [],
+          droppedNodes: 0,
+          archive: [],
+          // The op log covers the full session — the conversation window
+          // join plays no role in this card on this generation.
+          fileOps: [
+            { seq: 1, path: '/ws/README.md', kind: 'read', tool: 'read', err: false, added: 0, removed: 0, read: { start: 1, count: 12 } },
+            { seq: 2, path: '/ws/src/a.ts', kind: 'write', tool: 'edit', err: false, added: 3, removed: 1 },
+          ],
         },
-      },
-    })
+      }),
+    }))
+    const ctx = new TestClientCtx()
     const View = makeView(ctx)
     const m = await mount(h(View, {
       sessionId: 'sv-opslog',

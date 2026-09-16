@@ -114,6 +114,44 @@ describe('buildTimelineView counters', () => {
   })
 })
 
+describe('buildTimelineView lastUser preview', () => {
+  test('the newest own message rides the view, whitespace collapsed; injections and text-less inputs leave it alone', () => {
+    const { view } = driveTimeline([
+      userMessage(1, [{ type: 'text', text: '  hello   world  ' }]),
+      userMessage(2, [{ type: 'text', text: 'AGENTS.md' }], { kind: 'plugin', form: 'context', plugin: 'dsh-test' }),
+      userMessage(3, [{ type: 'text', text: '/skill' }], { kind: 'skill-invocation', name: 's' }),
+      userMessage(4, [{ type: 'image', attachment: { width: 8, height: 8 } }]),
+    ])
+    assert.equal(view.lastUser, 'hello world')
+  })
+
+  test('a newer textual message replaces the preview, on the state and the view', () => {
+    const { state, view } = driveTimeline([
+      userMessage(1, [{ type: 'text', text: 'first' }]),
+      userMessage(2, [{ type: 'text', text: 'second' }]),
+    ])
+    assert.equal(state.lastUser, 'second')
+    assert.equal(view.lastUser, 'second')
+    assertPlainJson(state)
+  })
+
+  test('stays ABSENT before any textual user message — never undefined-valued', () => {
+    const { state, view } = driveTimeline([
+      toolCall(1, { callId: 'b1', name: 'bash' }),
+      userMessage(2, [{ type: 'image', attachment: { width: 8, height: 8 } }]),
+    ])
+    assert.equal(view.lastUser, undefined)
+    assert.ok(!('lastUser' in view), 'no own key on the view')
+    assert.ok(!('lastUser' in state), 'no own key on the persisted state')
+    assertPlainJson(view)
+  })
+
+  test('a long message truncates to the bounded preview line', () => {
+    const { view } = driveTimeline([userMessage(1, [{ type: 'text', text: 'x'.repeat(500) }])])
+    assert.equal(view.lastUser?.length, 80)
+  })
+})
+
 describe('buildTimelineView copies', () => {
   test('requests, events, and archive entries are copies, never state aliases', () => {
     const { state, view } = driveTimeline([
@@ -226,6 +264,22 @@ describe('buildTimelineView serving window', () => {
     assert.deepEqual((view.nodes as SurfaceNode[]).map(n => n.seq), [1, 2], 'every inject is pinned')
     assert.equal(view.droppedNodes, 0)
     assert.equal('surfaceFloor' in view, false)
+  })
+
+  test('skill nodes pin like injects when the window overflows (issue #66)', () => {
+    const { view } = driveTimeline([
+      userMessage(1, [{ type: 'text', text: '<available_skills>' }], { kind: 'skill-catalog', form: 'catalog' }),
+      userMessage(2, [{ type: 'text', text: 'x1' }]),
+      userMessage(3, [{ type: 'text', text: 'x2' }]),
+      toolCall(4, { callId: 'c1', name: 'skill' }),
+      toolResult(5, { callId: 'c1', content: [{ type: 'text', text: '<skill_content name="pdf">body</skill_content>' }] }),
+    ], { maxNodes: 2 })
+    // Surface nodes are 1 (catalog), 2, 3 (plain user) and 5 (the skill load —
+    // the tool/call at seq 4 carries no surface node). The catalog pins ahead
+    // of the tail; the single dropped plain message sets the floor.
+    assert.deepEqual((view.nodes as SurfaceNode[]).map(n => n.seq), [1, 3, 5])
+    assert.equal(view.droppedNodes, 1)
+    assert.equal(view.surfaceFloor, 2, 'the floor is the newest unserved non-skill seq')
   })
 
   test('archiveFloor rides through when the state carries one', () => {
