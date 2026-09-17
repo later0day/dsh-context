@@ -3,7 +3,7 @@
 // session-open verb — every guard branch with hostile fixtures.
 
 import assert from 'node:assert/strict'
-import { describe, test } from 'vitest'
+import { describe, test, vi } from 'vitest'
 import {
   aggregateDays,
   billedOf,
@@ -18,8 +18,8 @@ import {
   rangeStartOf,
   refreshSessions,
   relativeTime,
+  requestActivityBackfill,
   rowsOfSnapshot,
-  runningCountOf,
   sessionGroupsOf,
   sessionsSnapshotOf,
   sortRows,
@@ -86,20 +86,6 @@ describe('sessionsSnapshotOf', () => {
   test('the raw snapshot passes through', () => {
     const snap = { ids: [] }
     assert.equal(sessionsSnapshotOf({ useSessions: (sel: (s: unknown) => unknown) => sel(snap) }), snap)
-  })
-})
-
-describe('runningCountOf', () => {
-  test('unusable snapshots tally zero', () => {
-    assert.equal(runningCountOf(null), 0)
-    assert.equal(runningCountOf(7), 0)
-    assert.equal(runningCountOf({ byId: 7 }), 0)
-  })
-
-  test('running rows tally; a hostile row stops the count at what was seen', () => {
-    const hostile = new Proxy({}, { get: () => { throw new Error('boom') } })
-    assert.equal(runningCountOf({ byId: { a: { running: true }, b: { running: false }, c: { running: true } } }), 2)
-    assert.equal(runningCountOf({ byId: { a: { running: true }, x: hostile } }), 1)
   })
 })
 
@@ -348,10 +334,29 @@ describe('kpisOf', () => {
     assert.equal(kpi.turns, 5)
     assert.ok(kpi.cost !== null && Math.abs(kpi.cost - 195e-6) < 1e-12, '50×0.1 + 100×1 + 10×1 + 40×2 per 1M')
     assert.equal(kpi.cacheHit, '31.25', '50 reads of 160 billed input, truncated')
+    assert.equal(kpi.costSessions, 1, 'only the priced session counts toward the cost cell')
+    assert.equal(kpi.usageSessions, 1, 'only the billed session feeds the cache-hit rate')
     assert.equal(kpi.toolCalls, 7, 'tool calls sum across rows')
     assert.equal(kpi.toolsMs, 20_000)
     assert.equal(kpi.calls, 6)
     assert.equal(kpi.wallMs, 120_000)
+  })
+
+  test('a session with usage the book cannot price feeds the cache-hit rate but prices to nothing', () => {
+    const rows = [
+      rowOf({ timeline: { cost: COST, requests: [] } as unknown as ContextTimeline }),
+      rowOf({
+        timeline: {
+          cost: { openai: { 'gpt-5': { peak: { uncached: 10, cacheRead: 5, cacheWrite: 1, output: 2 } } } },
+          requests: [],
+        } as unknown as ContextTimeline,
+      }),
+      rowOf(),
+    ]
+    const kpi = kpisOf(rows, 3, prices, 'usd')
+    assert.equal(kpi.costSessions, 1, 'only the priced session counts toward the cost cell')
+    assert.equal(kpi.usageSessions, 2, 'both billed sessions feed the cache-hit rate')
+    assert.ok(kpi.cost !== null && Math.abs(kpi.cost - 195e-6) < 1e-12, 'the unpriced session adds nothing to the estimate')
   })
 
   test('an unbilled set zeroes and dashes', () => {
@@ -360,6 +365,8 @@ describe('kpisOf', () => {
     assert.equal(kpi.turns, 0)
     assert.equal(kpi.cost, null)
     assert.equal(kpi.cacheHit, null)
+    assert.equal(kpi.costSessions, 0)
+    assert.equal(kpi.usageSessions, 0)
     assert.equal(kpi.toolCalls, 0, 'no timing folds to zeroed tools and time')
     assert.equal(kpi.toolsMs, 0)
     assert.equal(kpi.calls, 0)
@@ -506,6 +513,24 @@ describe('refreshSessions', () => {
     refreshSessions(ctxWith({}))
     refreshSessions(ctxWith({ sessions: { refresh: () => { throw new Error('boom') } } }))
     refreshSessions({ get: () => { throw new Error('boom') } } as unknown as ClientCtx)
+    await new Promise(resolve => setTimeout(resolve, 5))
+  })
+})
+
+describe('requestActivityBackfill', () => {
+  test('POSTs the warm-up trigger route once per call; rejections and hostility swallow', async () => {
+    const calls: [string, RequestInit | undefined][] = []
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      calls.push([String(url), init])
+      return { ok: true }
+    })
+    requestActivityBackfill()
+    assert.deepEqual(calls, [['/api/dsh-context/backfill', { method: 'POST' }]])
+    vi.stubGlobal('fetch', async () => Promise.reject(new Error('route absent')))
+    requestActivityBackfill()
+    vi.stubGlobal('fetch', () => { throw new Error('hostile transport') })
+    requestActivityBackfill()
+    vi.unstubAllGlobals()
     await new Promise(resolve => setTimeout(resolve, 5))
   })
 })

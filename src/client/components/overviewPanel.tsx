@@ -20,7 +20,8 @@ import { fmt } from '../format'
 import { useModelPrices } from '../modelPrices'
 import {
   aggregateDays, filterRows, groupCountsOf, inGroup, kpisOf, openSession,
-  pageOf, refreshSessions, rowsOfSnapshot, sessionGroupsOf, sessionsSnapshotOf, sortRows,
+  pageOf, refreshSessions, requestActivityBackfill, rowsOfSnapshot,
+  sessionGroupsOf, sessionsSnapshotOf, sortRows,
   UNGROUPED_KEY, workspacesSnapshotOf,
   type OverviewRange, type OverviewRow, type OverviewSort,
 } from '../overview'
@@ -74,10 +75,14 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
     const rows = useMemo(() => rowsOfSnapshot(snapshot, wsSnapshot), [snapshot, wsSnapshot])
     const groups = useMemo(() => sessionGroupsOf(wsSnapshot), [wsSnapshot])
 
-    // On open, re-pull the list once: host-side backfill rows (a session
-    // folded before a projection unit existed) reach a long-connected page.
+    // On open, summon the host's projection warm-up (this panel is the
+    // rows' only reader — one pass per host process) and re-pull the list
+    // once, so backfilled rows reach a long-connected page.
     useEffect(() => {
-      if (open) refreshSessions(ctx)
+      if (open) {
+        requestActivityBackfill()
+        refreshSessions(ctx)
+      }
     }, [open])
 
     // Any filter change re-anchors the pager at the first page.
@@ -150,12 +155,12 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
                   <div className="lc-stat lc-ov-kpi">
                     <span className="lc-stat-label">{t('stats.cost')}</span>
                     <span className="lc-stat-value">{kpi.cost === null ? '—' : formatCost(kpi.cost, currency)}</span>
-                    <span className="lc-stat-sub">{t('ov.kpi.costSub')}</span>
+                    <span className="lc-stat-sub">{t('ov.kpi.sessionsSub', { n: kpi.costSessions })}</span>
                   </div>
                   <div className="lc-stat lc-ov-kpi">
                     <span className="lc-stat-label">{t('stats.cacheHit')}</span>
                     <span className="lc-stat-value">{kpi.cacheHit === null ? '—' : kpi.cacheHit + '%'}</span>
-                    <span className="lc-stat-sub">{t('ov.kpi.cacheSub')}</span>
+                    <span className="lc-stat-sub">{t('ov.kpi.sessionsSub', { n: kpi.usageSessions })}</span>
                   </div>
                   <div className="lc-stat lc-ov-kpi">
                     <span className="lc-stat-label">{t('stats.toolCalls')}</span>

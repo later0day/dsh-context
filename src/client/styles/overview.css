@@ -15,14 +15,12 @@
 /* Geometry mirrors the harness's own Settings trigger (ui-settings-general's
    .trigger): the 42px row, 12px radius, 14px/22px label, and its shared hover
    fill, so the plugin entry reads as a native foot control, not a visitor. */
-.lc-ov-entry { position: relative; display: flex; align-items: center; gap: 8px; width: calc(100% + 4px); height: 42px; box-sizing: border-box; margin: 0 -2px; border: 0; padding: 0 10px 0 8px; overflow: hidden; background: transparent; border-radius: 12px; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 14px; line-height: 22px; cursor: pointer; }
+.lc-ov-entry { display: flex; align-items: center; gap: 8px; width: calc(100% + 4px); height: 42px; box-sizing: border-box; margin: 0 -2px; border: 0; padding: 0 10px 0 8px; overflow: hidden; background: transparent; border-radius: 12px; color: var(--dsw-alias-label-primary); font-family: inherit; font-size: 14px; line-height: 22px; cursor: pointer; }
 .lc-ov-entry:hover { background: var(--dsw-alias-interactive-bg-hover); }
 /* The collapsed rail takes the native foot controls' 36x36 circle, icon only. */
 .lc-ov-entry-rail { flex: none; justify-content: center; gap: 0; width: 36px; height: 36px; margin: 0; padding: 0; border-radius: 50%; }
 .lc-ov-entry-icon { flex: none; }
 .lc-ov-entry-label { flex: 1 1 auto; min-width: 0; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* The running-sessions badge: the footer's one live fact, pinned to the icon's corner in both column widths. */
-.lc-ov-badge { position: absolute; top: 1px; right: 4px; min-width: 15px; height: 15px; box-sizing: border-box; border-radius: 999px; background: var(--color-green-500); color: #fff; font-size: 9px; font-weight: 700; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0 4px; pointer-events: none; }
 
 /* ---- the overlay chrome ---- */
 /* The backdrop carries the `lc-ov` container: it spans the viewport exactly,
@@ -71,13 +69,23 @@
  * The activity heatmap: fixed-size square cells (8 week columns ≈ a 200px
  * block) centered in the card, so the card's height follows the 7 cell rows
  * instead of the cells stretching to the card's width — the compact
- * GitHub-widget read. Monday-first, four depth steps.
+ * GitHub-widget read. Monday-first, four depth steps, a month label over
+ * the column where each month begins.
  */
 .lc-heat { display: flex; gap: 4px; flex: 1; align-items: center; justify-content: center; }
+/* Each column and the weekday gutter reserve the same 13px line above their
+   cells — the month labels' line — so the centered cell rows stay aligned. */
+.lc-heat-wds, .lc-heat-col { padding-top: 13px; }
 .lc-heat-wds { display: flex; flex-direction: column; gap: 3px; }
 .lc-heat-wd { flex: none; width: 10px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 9px; color: var(--dsw-alias-label-secondary); text-align: center; }
 .lc-heat-cols { display: flex; gap: 3px; }
-.lc-heat-col { display: flex; flex-direction: column; gap: 3px; }
+/* relative anchors the label; absolute keeps its width off the 20px column
+   (a wider in-flow label would widen just the labeled columns and skew the
+   grid). top:0 rides the column's own 13px padding band, clear of the cells.
+   Labels only sit at month opens, ≥4 columns apart, so the nowrap overflow
+   past a 20px column never meets the next label. */
+.lc-heat-col { position: relative; display: flex; flex-direction: column; gap: 3px; }
+.lc-heat-mon { position: absolute; top: 0; left: 0; font-size: 9px; line-height: 13px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
 .lc-heat-cell { width: 20px; height: 20px; box-sizing: border-box; border: 0; border-radius: 20%; padding: 0; background: var(--dsw-alias-bg-layer-2); cursor: default; }
 button.lc-heat-cell { cursor: pointer; }
 button.lc-heat-cell:hover { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-blue-500) 70%, transparent); }

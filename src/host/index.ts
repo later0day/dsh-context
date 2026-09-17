@@ -79,7 +79,9 @@ export function apply(ctx: Context, config: Config): void {
   ctx.sessionProjections.register(createContextHeadersDefinition(name => attribution.ownerOf(name)))
   ctx.sessionProjections.register(createContextActivityDefinition())
   // The overview's cold-history warm-up (backfill.ts): sessions folded before
-  // a unit existed get their rows from one background cold read each.
+  // a unit existed get their rows from one background cold read each, run on
+  // demand — the dashboard (the rows' only reader) summons the pass through
+  // the plugin's fetch route the first time it opens.
   watchActivityBackfill(ctx)
   installSettings(ctx)
 }

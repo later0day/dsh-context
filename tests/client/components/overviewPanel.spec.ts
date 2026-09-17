@@ -5,7 +5,7 @@
 
 import { act, createElement as h } from 'react'
 import assert from 'node:assert/strict'
-import { afterEach, beforeEach, describe, test } from 'vitest'
+import { afterEach, beforeEach, describe, test, vi } from 'vitest'
 import { makeOverviewPanel } from '../../../src/client/components/overviewPanel'
 import { resetModelPrices, setModelPricesLoader } from '../../../src/client/modelPrices'
 import { overviewStore } from '../../../src/client/overviewStore'
@@ -108,23 +108,33 @@ async function openPanel(
   return { m, Panel }
 }
 
+/** The fetch calls the panel fired (the warm-up trigger POST), per test. */
+const backfillPosts: string[] = []
+
 beforeEach(() => {
   resetModelPrices()
   setModelPricesLoader(() => Promise.resolve(PROVIDERS))
+  backfillPosts.length = 0
+  vi.stubGlobal('fetch', async (url: string | URL) => {
+    backfillPosts.push(String(url))
+    return { ok: true, json: async () => ({}) }
+  })
 })
 
 afterEach(async () => {
   overviewStore.set(false)
   resetModelPrices()
+  vi.unstubAllGlobals()
   await new Promise(resolve => setTimeout(resolve, 1))
 })
 
 describe('OverviewPanel', () => {
-  test('renders the KPI band, heatmap, and session cards; refreshes the list on open', async () => {
+  test('renders the KPI band, heatmap, and session cards; summons the warm-up and refreshes the list on open', async () => {
     let pulls = 0
     const ctx = makeCtx({ refresh: () => { pulls++; return Promise.resolve() } })
     const { m } = await openPanel(ctx)
     assert.equal(pulls, 1, 'the baseline re-pull fires on open')
+    assert.deepEqual(backfillPosts, ['/api/dsh-context/backfill'], 'the warm-up trigger POST fires on open')
     assert.ok(text(m.container).includes('Context Insights'))
     // KPI band: 2 sessions in the 30d range, 1750 tokens billed, priced cost, cache hit.
     const labels = queryAll(m.container, '.lc-stat-label').map(el => el.textContent)
@@ -139,6 +149,10 @@ describe('OverviewPanel', () => {
     assert.equal(values[5], '3m0s')
     assert.ok(text(m.container).includes('tool runs 40.0s'), 'the tool calls cell qualifies with the summed run time')
     assert.ok(text(m.container).includes('8 model calls'), 'the active-time cell qualifies with the model-call count')
+    // Cost and cache hit qualify with the session count each figure covers
+    // (only session a carries usage; b folds no cost at all).
+    const subs = queryAll(m.container, '.lc-stat-sub').map(el => el.textContent)
+    assert.deepEqual(subs.slice(2, 4), ['across 1 sessions', 'across 1 sessions'])
     // Heatmap drew cells for the two ledger days.
     assert.ok(queryAll(m.container, 'button.lc-heat-cell').length >= 2)
     // Cards: a (current, running, grouped), b, and c is outside the 30d range.

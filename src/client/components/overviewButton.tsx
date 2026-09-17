@@ -3,9 +3,8 @@
  * above Settings (the harness's own foot layout: footer actions, then the
  * settings row), mirroring the Settings trigger's geometry in both column
  * widths. The button carries the plugin emblem and, on the wide
- * column, its label; a badge counts the sessions currently running (the one
- * glanceable live fact a footer can carry). Clicking opens the overview
- * overlay through the shared module store (overviewStore.ts).
+ * column, its label. Clicking opens the overview overlay through the shared
+ * module store (overviewStore.ts).
  *
  * The per-user `insightsEntry` preference takes the entry down (renders
  * null) without unregistering the seat. The subscription fails open: an
@@ -15,7 +14,6 @@
 
 import { useSyncExternalStore, type ReactElement } from 'react'
 import { ContextIcon } from '../icon'
-import { runningCountOf, sessionsSnapshotOf } from '../overview'
 import { overviewStore } from '../overviewStore'
 import type { ContextSettings, InsightsEntry } from '../settings'
 import type { ViewKit } from '../viewkit'
@@ -23,8 +21,6 @@ import type { ViewKit } from '../viewkit'
 export interface OverviewButtonProps {
   /** The footer-action owner share: false on the collapsed 56px rail (icon only). */
   wide?: boolean
-  /** The root standard kit's sessions seat (absent on a harness without it). */
-  useSessions?: unknown
 }
 
 /** Stable subscription faces for the settings-less degrade (no re-subscribes). */
@@ -40,8 +36,6 @@ export function makeOverviewButton(kit: ViewKit, settings?: ContextSettings): (p
     : (listener: () => void): (() => void) => settings.store.subscribe(listener)
   const getEntry = settings === undefined ? entryShown : (): InsightsEntry => settings.insightsEntry()
   return function OverviewButton(props: OverviewButtonProps): ReactElement | null {
-    // The hook-level read (unconditional, guarded inside); the badge hides at 0.
-    const running = runningCountOf(sessionsSnapshotOf(props))
     // The entry toggle: subscribed, so a preference flip takes effect live.
     const entry = useSyncExternalStore(subscribeEntry, getEntry)
     if (entry === 'hide') return null
@@ -55,7 +49,6 @@ export function makeOverviewButton(kit: ViewKit, settings?: ContextSettings): (p
       >
         <ContextIcon size={props.wide === true ? 16 : 18} className="lc-ov-entry-icon" />
         {props.wide === true && <span className="lc-ov-entry-label">{t('ov.entry')}</span>}
-        {running > 0 && <span className="lc-ov-badge" aria-hidden="true">{running}</span>}
       </button>
     )
   }

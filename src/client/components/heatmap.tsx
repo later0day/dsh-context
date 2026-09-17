@@ -1,6 +1,7 @@
 /**
  * The Context Dashboard's activity heatmap: a GitHub-style contribution grid
- * (weeks as columns, Monday-first weekdays as rows) over the merged daily
+ * (weeks as columns, Monday-first weekdays as rows, a month label over the
+ * column where each month begins) over the merged daily
  * ledger (overview.ts). Cell depth is the day's billed-token share of the
  * window's maximum, in four steps; a day with data is a button whose click
  * pins the session list to that day (click again to release). Cells tip
@@ -107,34 +108,42 @@ export function makeHeatmap(kit: ViewKit): (props: HeatmapProps) => ReactElement
           ))}
         </div>
         <div className="lc-heat-cols">
-          {columns.map((column, wi) => (
-            <div key={wi} className="lc-heat-col">
-              {column.map((cell) => {
-                if (cell.future) return <span key={cell.key} className="lc-heat-cell lc-heat-future" aria-hidden="true" />
-                const level = cell.entry === undefined ? 0 : levelOf(cell.entry.tokens, max)
-                if (cell.entry === undefined) {
+          {columns.map((column, wi) => {
+            // A column is labeled when a month BEGINS inside it: the month
+            // changes between its Monday and Sunday, or its Monday IS the
+            // 1st. The label names the Sunday's month — the new month in
+            // both cases. Months that began before the window stay unlabeled.
+            const opens = column[0].key.slice(0, 7) !== column[6].key.slice(0, 7) || column[0].key.slice(8, 10) === '01'
+            return (
+              <div key={wi} className="lc-heat-col">
+                {opens && <span className="lc-heat-mon" aria-hidden="true">{t('ov.heat.mon.' + column[6].key.slice(5, 7))}</span>}
+                {column.map((cell) => {
+                  if (cell.future) return <span key={cell.key} className="lc-heat-cell lc-heat-future" aria-hidden="true" />
+                  const level = cell.entry === undefined ? 0 : levelOf(cell.entry.tokens, max)
+                  if (cell.entry === undefined) {
+                    return (
+                      <Tooltip key={cell.key} label={cell.key} side="top">
+                        <span className="lc-heat-cell lc-heat-0" />
+                      </Tooltip>
+                    )
+                  }
+                  const picked = props.selected === cell.key
+                  const label = `${cell.key}\n${t('ov.heat.sessions', { n: cell.entry.sessions })}`
                   return (
-                    <Tooltip key={cell.key} label={cell.key} side="top">
-                      <span className="lc-heat-cell lc-heat-0" />
+                    <Tooltip key={cell.key} label={label} side="top">
+                      <button
+                        type="button"
+                        className={`lc-heat-cell lc-heat-${String(level)}${picked ? ' lc-heat-on' : ''}`}
+                        aria-label={label}
+                        aria-pressed={picked}
+                        onClick={() => { if (props.onSelect !== undefined) props.onSelect(picked ? null : cell.key) }}
+                      />
                     </Tooltip>
                   )
-                }
-                const picked = props.selected === cell.key
-                const label = `${cell.key}\n${t('ov.heat.sessions', { n: cell.entry.sessions })}`
-                return (
-                  <Tooltip key={cell.key} label={label} side="top">
-                    <button
-                      type="button"
-                      className={`lc-heat-cell lc-heat-${String(level)}${picked ? ' lc-heat-on' : ''}`}
-                      aria-label={label}
-                      aria-pressed={picked}
-                      onClick={() => { if (props.onSelect !== undefined) props.onSelect(picked ? null : cell.key) }}
-                    />
-                  </Tooltip>
-                )
-              })}
-            </div>
-          ))}
+                })}
+              </div>
+            )
+          })}
         </div>
       </div>
     )

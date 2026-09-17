@@ -56,24 +56,6 @@ export function sessionsSnapshotOf(props: { useSessions?: unknown }): unknown {
   }
 }
 
-/** The running-session tally for the footer entry's badge (0 on any shape failure). */
-export function runningCountOf(snapshot: unknown): number {
-  const state = asRecord(snapshot)
-  if (state === null) return 0
-  const byId = asRecord(state.byId)
-  if (byId === null) return 0
-  let count = 0
-  try {
-    for (const id of Object.keys(byId)) {
-      const row = asRecord(byId[id])
-      if (row !== null && row.running === true) count++
-    }
-  } catch {
-    // A hostile row throwing on access stops the tally at what was counted.
-  }
-  return count
-}
-
 /**
  * The `useWorkspaces` standard prop read — same guarded-hook contract as
  * {@link sessionsSnapshotOf}. The overview joins its session → workspace
@@ -392,8 +374,12 @@ export interface OverviewKpis {
   turns: number
   /** Estimated spend in the display currency (null: nothing priced). */
   cost: number | null
+  /** Sessions whose spend the book could price (the cost cell's sub-line). */
+  costSessions: number
   /** Cache-hit share of billed input, truncated (null: nothing billed). */
   cacheHit: string | null
+  /** Sessions whose usage feeds the cache-hit rate (the cache-hit cell's sub-line). */
+  usageSessions: number
   /** Their completed tool calls. */
   toolCalls: number
   /** Their summed tool-run time (the tool-calls cell's sub-line). */
@@ -417,7 +403,15 @@ export function kpisOf(
   let toolsMs = 0
   let calls = 0
   let wallMs = 0
+  let costSessions = 0
+  let usageSessions = 0
   for (const row of rows) {
+    const cost = row.timeline?.cost
+    // Each qualifying sub-line counts the sessions its own figure covers: a
+    // session with usage but no book rates feeds the cache-hit rate while
+    // pricing to nothing.
+    if (estimateSessionCost(cost, prices, currency) !== null) costSessions++
+    if (usageTotalsOf(cost) !== null) usageSessions++
     turns += turnsOf(row.timeline)
     const timing = row.timeline?.timing
     toolCalls += timing?.toolCalls ?? 0
@@ -431,7 +425,9 @@ export function kpisOf(
     tokens: totals?.total ?? 0,
     turns,
     cost: estimateSessionCost(usage, prices, currency),
+    costSessions,
     cacheHit: totals === null ? null : cacheHitPercent(totals.cacheRead, totals.input + totals.cacheRead + totals.cacheWrite),
+    usageSessions,
     toolCalls,
     toolsMs,
     calls,
@@ -502,6 +498,25 @@ export function refreshSessions(ctx: ClientCtx): void {
     // Promise.resolve absorbs a non-promise return; rejections swallow.
     void Promise.resolve(sessions.refresh()).catch(() => { /* a failed re-pull keeps the stale rows */ })
   } catch { /* hostile service — no refresh */ }
+}
+
+// The plugin's warm-up trigger route (host/backfill.ts) — re-declared here:
+// the client bundle inlines every import, and the host module must never
+// reach it. Same-origin POST under the harness's authenticated `/api` fence.
+const BACKFILL_ROUTE = '/api/dsh-context/backfill'
+
+/**
+ * Summon the host's projection warm-up (host/backfill.ts): the dashboard is
+ * the rows' only reader, so the host defers the corpus-wide cold reads until
+ * this surface first opens (one pass per host process — later opens no-op
+ * server-side, and the host answers at once). Fire-and-forget: an older host
+ * without the route, or a transport hiccup, just leaves the panel on the
+ * rows it already has.
+ */
+export function requestActivityBackfill(): void {
+  try {
+    void fetch(BACKFILL_ROUTE, { method: 'POST' }).catch(() => { /* the rows arrive on a later open */ })
+  } catch { /* hostile transport — the panel keeps its rows */ }
 }
 
 /**

@@ -1,6 +1,6 @@
 // The Context Dashboard's sidebar-foot entry (src/client/components/
-// overviewButton.tsx): wide/rail rendering, the running badge, the store
-// flip on click, and the per-user insights-entry toggle.
+// overviewButton.tsx): wide/rail rendering, the store flip on click, and the
+// per-user insights-entry toggle.
 
 import { createElement as h, act } from 'react'
 import assert from 'node:assert/strict'
@@ -16,9 +16,6 @@ const Button = makeOverviewButton(kit)
 afterEach(() => {
   overviewStore.set(false)
 })
-
-/** A useSessions stand-in over a static snapshot. */
-const useSessionsOf = (snapshot: unknown) => (<T>(sel: (s: unknown) => T): T => sel(snapshot))
 
 describe('OverviewButton', () => {
   test('the wide column renders icon and label; the rail renders the icon alone', async () => {
@@ -39,23 +36,6 @@ describe('OverviewButton', () => {
     assert.equal(queryAll(bare.container, '.lc-ov-entry-label').length, 0)
     assert.ok(query(bare.container, 'button.lc-ov-entry-rail'))
     await bare.unmount()
-  })
-
-  test('the badge counts running sessions and hides at zero', async () => {
-    const running = useSessionsOf({ byId: { a: { running: true }, b: { running: false }, c: { running: true } } })
-    const m = await mount(h(Button, { wide: true, useSessions: running }))
-    assert.equal(query(m.container, '.lc-ov-badge').textContent, '2')
-    await m.unmount()
-
-    const idle = useSessionsOf({ byId: { a: { running: false } } })
-    const calm = await mount(h(Button, { wide: true, useSessions: idle }))
-    assert.equal(queryAll(calm.container, '.lc-ov-badge').length, 0)
-    await calm.unmount()
-
-    // No sessions seat at all: no badge, no throw.
-    const seatless = await mount(h(Button, { wide: true }))
-    assert.equal(queryAll(seatless.container, '.lc-ov-badge').length, 0)
-    await seatless.unmount()
   })
 
   test('clicking opens the overview through the shared store', async () => {

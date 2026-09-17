@@ -84,6 +84,24 @@ describe('Heatmap', () => {
     await m.unmount()
   })
 
+  test('month labels mark the columns where a month begins', async () => {
+    const days = { '2026-09-16': { tokens: 10, requests: 1, sessions: 1 } }
+    // The default 8-week window runs Monday 2026-07-27 → 2026-09-14: July
+    // began outside it, August begins in the Jul 27 column (Sat Aug 1) and
+    // September in the Aug 31 column (Tue Sep 1).
+    const m = await mount(h(Heatmap, { days, today: TODAY }))
+    assert.deepEqual(queryAll(m.container, '.lc-heat-mon').map(s => s.textContent), ['Aug', 'Sep'])
+    await m.unmount()
+    // A window without any month's first day draws no labels at all.
+    const m2 = await mount(h(Heatmap, { days, today: TODAY, weeks: 2 }))
+    assert.deepEqual(queryAll(m2.container, '.lc-heat-mon').map(s => s.textContent), [])
+    await m2.unmount()
+    // A column that opens on the 1st carries the label itself.
+    const m3 = await mount(h(Heatmap, { days: { '2026-06-03': { tokens: 1, requests: 1, sessions: 1 } }, today: '2026-06-03', weeks: 1 }))
+    assert.deepEqual(queryAll(m3.container, '.lc-heat-mon').map(s => s.textContent), ['Jun'])
+    await m3.unmount()
+  })
+
   test('cells tip through the harness Tooltip: the bubble mounts on hover and drops on leave', async () => {
     const m = await mount(h(Heatmap, {
       days: { '2026-09-16': { tokens: 10, requests: 1, sessions: 3 } },
