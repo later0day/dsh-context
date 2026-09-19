@@ -116,7 +116,7 @@ describe('client entry: assistant-actions seat', () => {
 
     const el = component({ messageId: 'm1' }) as ReactElement
     const m = await mount(el)
-    assert.equal(query(m.container, 'button.lc-jump').getAttribute('aria-label'), 'View this turn in the Context tab')
+    assert.equal(query(m.container, 'button.lc-jump').getAttribute('aria-label'), 'View this turn in the Context view')
     await m.unmount()
 
     // Interruption-frozen partials address no durable message: nothing renders.

@@ -332,7 +332,7 @@ describe('kpisOf', () => {
     assert.equal(kpi.listed, 5)
     assert.equal(kpi.tokens, 200)
     assert.equal(kpi.turns, 5)
-    assert.ok(kpi.cost !== null && Math.abs(kpi.cost - 195e-6) < 1e-12, '50×0.1 + 100×1 + 10×1 + 40×2 per 1M')
+    assert.ok(kpi.cost !== null && Math.abs(kpi.cost - 390e-6) < 1e-12, 'the DeepSeek peak bucket doubles: 2 × (50×0.1 + 100×1 + 10×1 + 40×2) per 1M')
     assert.equal(kpi.cacheHit, '31.25', '50 reads of 160 billed input, truncated')
     assert.equal(kpi.costSessions, 1, 'only the priced session counts toward the cost cell')
     assert.equal(kpi.usageSessions, 1, 'only the billed session feeds the cache-hit rate')
@@ -356,7 +356,7 @@ describe('kpisOf', () => {
     const kpi = kpisOf(rows, 3, prices, 'usd')
     assert.equal(kpi.costSessions, 1, 'only the priced session counts toward the cost cell')
     assert.equal(kpi.usageSessions, 2, 'both billed sessions feed the cache-hit rate')
-    assert.ok(kpi.cost !== null && Math.abs(kpi.cost - 195e-6) < 1e-12, 'the unpriced session adds nothing to the estimate')
+    assert.ok(kpi.cost !== null && Math.abs(kpi.cost - 390e-6) < 1e-12, 'the unpriced session adds nothing to the estimate')
   })
 
   test('an unbilled set zeroes and dashes', () => {

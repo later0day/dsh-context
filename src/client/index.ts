@@ -103,9 +103,10 @@ function apply(ctx: ClientCtx): void {
   }), 'dsh-context: placement')
 
   // Chat → Context jump: an icon in each finalized reply's action row that
-  // opens this tab pinned to that reply's turn (see contextJump.tsx; the
-  // relay and tab activation live in viewFocus.ts).
-  const ContextJump = makeContextJumpButton(kit)
+  // opens the Context tab on the right Sidebar pinned to that reply's turn —
+  // falling back to the conversation tab wherever the sidebar serves no tab
+  // (see contextJump.tsx; the relay and view activation live in viewFocus.ts).
+  const ContextJump = makeContextJumpButton(ctx, kit)
   ctx.slots.inject('conversation.chat.assistant-actions', () => {
     return ctx.slots.register(
       // After the shipped feedback entry (10), still inside the icon row.
