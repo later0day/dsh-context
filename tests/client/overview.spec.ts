@@ -190,6 +190,7 @@ describe('billedOf / turnsOf', () => {
 describe('rangeStartOf', () => {
   test('each window’s start instant; all is unbounded', () => {
     const now = 31 * 86_400_000
+    assert.equal(rangeStartOf('24h', now), now - 86_400_000)
     assert.equal(rangeStartOf('7d', now), now - 7 * 86_400_000)
     assert.equal(rangeStartOf('30d', now), now - 30 * 86_400_000)
     assert.equal(rangeStartOf('all', now), null)
@@ -210,8 +211,15 @@ describe('filterRows', () => {
   const now = 11 * 86_400_000
 
   test('the range window filters by last activity', () => {
+    assert.deepEqual(filterRows(rows, { range: '24h', day: null, query: '' }, now).map(r => r.id), ['new', 'active'])
     assert.deepEqual(filterRows(rows, { range: '7d', day: null, query: '' }, now).map(r => r.id), ['new', 'active'])
     assert.deepEqual(filterRows(rows, { range: 'all', day: null, query: '' }, now).map(r => r.id), ['old', 'new', 'active'])
+    // The 24h window's own boundary: inside by minutes, outside by an hour.
+    const hRows = [
+      rowOf({ id: 'fresh', title: 'just now', updatedAt: now - 2 * 3_600_000 }),
+      rowOf({ id: 'yesterday', title: 'a day ago', updatedAt: now - 25 * 3_600_000 }),
+    ]
+    assert.deepEqual(filterRows(hRows, { range: '24h', day: null, query: '' }, now).map(r => r.id), ['fresh'])
   })
 
   test('the day pin keeps only sessions contributing to that day', () => {
