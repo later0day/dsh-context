@@ -96,7 +96,6 @@
  an ellipsis; without it a narrow card pushes the value over the label.
  */
 .lc-pi-value { min-width: 0; color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
-.lc-pi-row-btn .lc-pi-value { font-weight: 400; }
 /* The stats grid's cell count is intrinsic (`repeat(auto-fit, minmax(108px,1fr))` on the element, see
    statsContext.tsx); the donut row's 320px gap fold and 240px stack still ride
    `@max-[…]/lc-card` utilities — statsTokens.tsx / statsTiming.tsx / sliceList.tsx / donut.tsx. */
