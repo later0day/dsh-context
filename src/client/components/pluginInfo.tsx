@@ -33,8 +33,10 @@ export function makePluginInfo(kit: ViewKit): () => ReactElement {
     const nameText = PLUGIN_NAME + ' (v' + PLUGIN_VERSION + ')'
     const nameValue: ReactNode[] = [nameText]
     if (update) nameValue.push(<span key="update" className="lc-pi-update">{'↑ v' + update}</span>)
+    // The quarter-share card of the head row (the stats card takes 3 parts): its rows
+    // ellipsize and recover values on hover, so a 240px floor suffices.
     return (
-      <div className="lc-card flex-1 min-w-[min(360px,100%)]">
+      <div className="lc-card flex-1 min-w-[min(240px,100%)]">
         <div className="lc-card-title">
           <span className="lc-card-title-text">{t('plugin.title')}</span>
           {/* The tagline doubles as the repo link: hover underlines it, a click opens GitHub. */}
