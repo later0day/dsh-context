@@ -154,6 +154,9 @@ const timingTotalsSchema = z.object({
   reasoningMs: z.number().nonnegative().optional(),
   textMs: z.number().nonnegative().optional(),
   toolArgMs: z.number().nonnegative().optional(),
+  // The throughput seat, additive-optional for the same reason.
+  speedTokens: z.number().nonnegative().optional(),
+  speedMs: z.number().nonnegative().optional(),
   calls: z.number().int().nonnegative(),
   toolsMs: z.number().nonnegative(),
   toolCalls: z.number().int().nonnegative(),

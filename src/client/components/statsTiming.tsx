@@ -46,6 +46,15 @@ const COLOR = {
   other: 'var(--color-slate-400)',
 } as const
 
+/**
+ * The decode-throughput figure, formatted exactly as the harness's own
+ * session-stats seat formats it: whole tokens from ten up, one decimal below.
+ */
+function formatTokensPerSecond(tps: number): string {
+  const clamped = Math.max(0, tps)
+  return clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10)
+}
+
 export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => ReactElement): (props: {
   timing: TimingTotals | null
 }) => ReactElement {
@@ -56,6 +65,15 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
     const [hoverKey, setHoverKey] = useState<string | null>(null)
     const timing = props.timing
     const wall = timing !== null && Number.isFinite(timing.wallMs) && timing.wallMs > 0 ? timing.wallMs : 0
+    // The throughput chip: the host paired provider output tokens with decode
+    // windows exactly as the harness session-stats fold does, so the two
+    // figures can never disagree. An unreadable or absent pairing (an older
+    // cached row) renders no chip.
+    const tps = timing !== null
+      && typeof timing.speedMs === 'number' && Number.isFinite(timing.speedMs) && timing.speedMs > 0
+      && typeof timing.speedTokens === 'number' && Number.isFinite(timing.speedTokens) && timing.speedTokens >= 0
+      ? formatTokensPerSecond(timing.speedTokens / (timing.speedMs / 1_000))
+      : null
     let segments: DonutSegment[] = []
     let rows: SliceRow[] = []
     if (timing !== null && (wall > 0 || timing.calls > 0 || timing.toolCalls > 0)) {
@@ -151,6 +169,9 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
       <div className="lc-card lc-col-stats lc-col-donut flex-1 min-w-[min(360px,100%)]">
         <div className="lc-card-title">
           <span className="lc-card-title-text">{t('timing.title')}</span>
+          {tps !== null && (
+            <span className="lc-timing-tps" title={t('timing.tpsTip')}>{t('timing.tps', { tps })}</span>
+          )}
         </div>
         {rows.length === 0
           ? <div className="lc-empty">{t('timing.empty')}</div>

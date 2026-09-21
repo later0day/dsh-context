@@ -1172,6 +1172,11 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         // materialize an `undefined` property (plain-JSON precondition, the trap that broke the projection cache here).
         if (data && typeof data.turn === 'number') record.turn = data.turn
         if (data && typeof data.step === 'number') record.step = data.step
+        // The provider-reported output tokens, hoisted for the timing seat
+        // below: the throughput pairing needs this exact figure, and `null`
+        // must mean "the message carried no readable output bucket" — the
+        // harness's usageOutputTokens null, not a fabricated 0.
+        let output: number | null = null
         if (usage !== null && typeof usage === 'object') {
         // Official TokenUsage semantics (dsh-llm): the buckets are disjoint —
         // inputTokens is uncached input only, cache read/write are separate,
@@ -1183,7 +1188,7 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
           const input = tokenCountOf(usage.inputTokens)
           const cacheRead = tokenCountOf(usage.cacheReadTokens)
           const cacheWrite = tokenCountOf(usage.cacheWriteTokens)
-          const output = tokenCountOf(usage.outputTokens)
+          output = tokenCountOf(usage.outputTokens)
           // Any readable bucket is a billing sample (the official meter folds
           // every reported usage object; an output-only sample bills prompt 0
           // there too). A fully unreadable object is treated as absent, so a
@@ -1219,6 +1224,16 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
           if (firstToken !== undefined) {
             timing.ttftMs += durOf(stepStart.time, firstToken)
             timing.genMs += durOf(firstToken, event.time)
+            // The throughput seat, paired exactly as the harness's session-stats
+            // fold pairs them: a call counts ONLY when both its decode window
+            // (this branch) and its provider-reported output tokens (the usage
+            // above) are known — a token-stamped call without usage prices the
+            // genMs slice but not this, and usage without a decode window
+            // (never stamped) counts nowhere.
+            if (output !== null) {
+              timing.speedMs = (timing.speedMs ?? 0) + durOf(firstToken, event.time)
+              timing.speedTokens = (timing.speedTokens ?? 0) + output
+            }
             // Generation split: a V0 log's chunk stream accumulated the block
             // spans in the slot (its last block closes HERE, at the message);
             // a V2+ log has no chunk events, so the spans come off the embedded

@@ -445,3 +445,43 @@ describe('timing — served wire view', () => {
     for (const state of drive.states) c.stateSchema.parse(structuredClone(state)) // throws on drift
   })
 })
+
+describe('timing — the throughput seat', () => {
+  test('a call with usage pairs its decode window and output tokens; a usage-less call stays out', () => {
+    const { state } = driveTimeline([
+      ...step(1, 10_000, 2_000, { tokenMs: 600, usage: { outputTokens: 500 } }),
+      ...step(4, 20_000, 3_000, { tokenMs: 1_500 }),
+    ])
+    assert.equal(state.timing?.speedMs, 1_400, 'only the usage-carrying call pairs')
+    assert.equal(state.timing?.speedTokens, 500)
+    assert.equal(state.timing?.genMs, 2_900, 'genMs still counts every stamped call')
+  })
+
+  test('multiple paired calls sum both sides', () => {
+    const { state } = driveTimeline([
+      ...step(1, 10_000, 2_000, { tokenMs: 600, usage: { outputTokens: 500 } }),
+      ...step(4, 20_000, 3_000, { tokenMs: 1_500, usage: { outputTokens: 700 } }),
+    ])
+    assert.equal(state.timing?.speedMs, 2_900)
+    assert.equal(state.timing?.speedTokens, 1_200)
+  })
+
+  test('usage without a token stamp prices nothing (the harness pairing)', () => {
+    const { state } = driveTimeline([
+      { type: 'step/start', seq: 1, time: 0 },
+      assistantMessage(2, { time: 1_000, usage: { outputTokens: 500 } }),
+      { type: 'step/end', seq: 3, time: 2_000 },
+    ])
+    assert.equal(state.timing?.speedMs, undefined)
+    assert.equal(state.timing?.speedTokens, undefined)
+  })
+
+  test('usage without a readable output bucket pairs nothing', () => {
+    const { state } = driveTimeline([
+      ...step(1, 10_000, 2_000, { tokenMs: 600, usage: { inputTokens: 5 } }),
+    ])
+    assert.equal(state.timing?.speedMs, undefined)
+    assert.equal(state.timing?.speedTokens, undefined)
+    assert.equal(state.timing?.genMs, 1_400)
+  })
+})

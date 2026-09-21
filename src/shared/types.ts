@@ -496,6 +496,17 @@ export interface TimingTotals {
   textMs?: number
   /** Tool-call-argument decode slice of `genMs`. */
   toolArgMs?: number
+  /**
+   * The decode-throughput seat, paired exactly as the harness's own
+   * session-stats fold pairs them: `speedTokens` sums provider-reported
+   * output tokens and `speedMs` the first-token → assistant-message
+   * windows, over the calls that carried BOTH a first-token stamp and a
+   * usage report — a subset of `genMs`, which counts every token-stamped
+   * call regardless of usage. Additive-optional: cached rows written before
+   * the seat existed lack them, and the card falls back to no chip.
+   */
+  speedTokens?: number
+  speedMs?: number
   /** Completed model calls (assistant messages folded). */
   calls: number
   /** Summed per-call durations of completed tool calls. */

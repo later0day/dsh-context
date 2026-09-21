@@ -189,3 +189,42 @@ describe('StatsTiming — the generation split', () => {
     await m.unmount()
   })
 })
+
+describe('StatsTiming — the throughput chip', () => {
+  const paired: TimingTotals = { ...TIMING, speedTokens: 12_345, speedMs: 42_720 }
+
+  test('the paired seat renders the harness-formatted figure in the title row', async () => {
+    const m = await mount(h(StatsTiming, { timing: paired }))
+    const chip = query(m.container, '.lc-timing-tps')
+    assert.equal(chip?.textContent, '289 tok/s', '12345 tokens over 42.72s')
+    assert.ok(chip?.getAttribute('title')?.includes('Output speed (TPS)'))
+    await m.unmount()
+  })
+
+  test('the chip localizes its tooltip and stays in the title row', async () => {
+    const m = await mount(h(StatsTimingZh, { timing: paired }))
+    const chip = query(m.container, '.lc-timing-tps')
+    assert.equal(chip?.textContent, '289 tok/s')
+    assert.ok(chip?.getAttribute('title')?.includes('输出速度（TPS）'))
+    await m.unmount()
+  })
+
+  test('a sub-10 figure keeps one decimal', async () => {
+    const m = await mount(h(StatsTiming, { timing: { ...TIMING, speedTokens: 26, speedMs: 10_000 } }))
+    assert.equal(query(m.container, '.lc-timing-tps')?.textContent, '2.6 tok/s')
+    await m.unmount()
+  })
+
+  test('an unpaired, zero-window, or hostile seat renders no chip', async () => {
+    for (const timing of [
+      TIMING,
+      { ...TIMING, speedTokens: 500, speedMs: 0 },
+      { ...TIMING, speedTokens: Number.NaN, speedMs: 1_000 },
+      { ...TIMING, speedTokens: -5, speedMs: 1_000 },
+    ] as TimingTotals[]) {
+      const m = await mount(h(StatsTiming, { timing }))
+      assert.equal(queryAll(m.container, '.lc-timing-tps').length, 0, JSON.stringify(timing.speedTokens))
+      await m.unmount()
+    }
+  })
+})

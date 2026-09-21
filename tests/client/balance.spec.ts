@@ -212,7 +212,7 @@ describe('readPlatformBalance', () => {
     assert.deepEqual(readPlatformBalance(() => {}), fresh, 'memory now outranks storage')
   })
 
-  test('an open while a read is in flight joins that read instead of starting one', async () => {
+  test('an open while a read is in flight joins that read and lands with it (issue #82)', async () => {
     const { release, calls } = gatedRoute()
     const a = collector()
     const b = collector()
@@ -222,9 +222,24 @@ describe('readPlatformBalance', () => {
     release()
     await drain()
     assert.deepEqual(a.seen, [WIRE_BALANCE], 'the open that started the read reports its figure')
-    assert.deepEqual(b.seen, [], 'the joining open takes the landing through memory rather than a callback of its own')
+    assert.deepEqual(b.seen, [WIRE_BALANCE], 'the joining open takes the landing for its own too')
     assert.equal(calls(), 1, 'one read serves both opens')
     assert.deepEqual(readPlatformBalance(() => {}), WIRE_BALANCE, 'and the joined read is the memory figure afterwards')
+  })
+
+  test('a joiner after one read landed starts a fresh read of its own', async () => {
+    stubRoute({ ok: true, value: WIRE_BALANCE })
+    const first = collector()
+    readPlatformBalance(first.onRefresh)
+    await drain()
+    const gated = gatedRoute()
+    const second = collector()
+    assert.deepEqual(readPlatformBalance(second.onRefresh), WIRE_BALANCE, 'the memory figure paints at once')
+    await Promise.resolve()
+    gated.release()
+    await drain()
+    assert.deepEqual(second.seen, [WIRE_BALANCE], 'its own read revalidates and reports')
+    assert.equal(gated.calls(), 1, 'the fresh read went through the new gate')
   })
 
   test('every absent answer notifies nobody and keeps the remembered figure', async () => {

@@ -96,6 +96,14 @@ export function balanceEntryOf(
 let cached: PlatformBalance | null = null
 /** The route read in flight, so a second open joins it instead of starting one. */
 let refreshing: Promise<void> | null = null
+/**
+ * The landing callbacks of every open riding the in-flight read — all
+ * notified when it lands, so an open that JOINS mid-flight (a fast
+ * close-reopen, a second capsule) settles on the live figure too, exactly
+ * as this function's contract promises (issue #82). Cleared when the read
+ * settles: the next open starts a fresh read and a fresh set.
+ */
+const landingCallbacks = new Set<(value: PlatformBalance) => void>()
 
 /** The storage this module reads and writes; swapped in tests. */
 let storage: StorageFace | null | undefined
@@ -155,20 +163,25 @@ async function readRoute(): Promise<PlatformBalance | null> {
  * capsule paints the remembered total immediately and settles on the live
  * one. `refreshing` is assigned before anything awaits, so an open arriving
  * while a read is still in flight joins it rather than starting a second one;
- * it paints the remembered figure and takes the in-flight read's landing for
- * its own. A failed or absent read notifies nobody and keeps serving the
- * remembered figure, so an offline open never trades a number for a blank
- * pill; `null` (whether pending, absent, or failed) means nothing to show yet.
+ * its callback joins the landing set, so the read's landing reports to EVERY
+ * open riding it — the joiner included (issue #82). A failed or absent read
+ * notifies nobody and keeps serving the remembered figure, so an offline open
+ * never trades a number for a blank pill; `null` (whether pending, absent, or
+ * failed) means nothing to show yet.
  */
 export function readPlatformBalance(onRefresh: (value: PlatformBalance) => void): PlatformBalance | null {
+  landingCallbacks.add(onRefresh)
   if (refreshing === null) {
     refreshing = (async () => {
       const value = await readRoute()
       if (value === null) return
       cached = value
       rememberBalance(value)
-      onRefresh(value)
-    })().finally(() => { refreshing = null })
+      for (const waiter of landingCallbacks) waiter(value)
+    })().finally(() => {
+      refreshing = null
+      landingCallbacks.clear()
+    })
   }
   return cached ?? storedBalance()
 }
@@ -177,6 +190,7 @@ export function readPlatformBalance(onRefresh: (value: PlatformBalance) => void)
 export function resetPlatformBalance(): void {
   cached = null
   refreshing = null
+  landingCallbacks.clear()
   try {
     storageFn()?.removeItem(STORAGE_KEY)
   } catch {

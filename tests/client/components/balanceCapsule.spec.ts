@@ -180,3 +180,28 @@ describe('BalanceCapsule', () => {
     await m.unmount()
   })
 })
+
+describe('BalanceCapsule — the fast close-reopen window (issue #82)', () => {
+  test('a reopen inside the read window joins it and settles on the landing figure', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    vi.stubGlobal('fetch', async () => {
+      await gate
+      return { ok: true, json: async () => ({ ok: true, value: WIRE_BALANCE }) }
+    })
+    // The first open: its read goes in flight, then the dashboard closes.
+    const Capsule = makeBalanceCapsule(asClientCtx(new TestClientCtx({ locale: 'en' })), kit)
+    const first = await mount(h(Capsule, {}))
+    assert.equal(text(first.container), '', 'nothing remembered yet')
+    await first.unmount()
+    // The reopen lands inside the first read's window: it joins the read —
+    // and settles on the landing figure exactly like the first open would.
+    const Reopened = makeBalanceCapsule(asClientCtx(new TestClientCtx({ locale: 'en' })), kit)
+    const second = await mount(h(Reopened, {}))
+    assert.equal(text(second.container), '', 'the joined read has not landed yet')
+    release()
+    await flush()
+    assert.equal(query(second.container, '.lc-ov-balance-value')?.textContent, '$12.50', 'the landing reaches the reopen')
+    await second.unmount()
+  })
+})

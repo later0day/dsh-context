@@ -528,10 +528,10 @@ export function makeContextView(
       <div className="lc-root" ref={rootRef}>
 
         {/* The head band splits into two rows: the session's shape beside the
-            plugin card, then the two donut cards together. The sidebar panel
-            drops the first row (context stats / plugin info pay off only on
-            the full-width tab); the rows' own flex-wrap stacks the pair in a
-            narrow pane at the shared 360px card floor. */}
+            plugin card at a 3:1 split, then the two donut cards together. The
+            sidebar panel drops the first row (context stats / plugin info pay
+            off only on the full-width tab); the rows' own flex-wrap stacks the
+            pair in a narrow pane at the cards' min-width floors. */}
         {inSidebar ? null : (
           <div className="lc-cols lc-head">
             <StatsContext counts={counts} humanInputs={data.humanInputs} toolCalls={data.toolCalls} usage={usage}

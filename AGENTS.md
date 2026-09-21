@@ -31,7 +31,7 @@ A DeepSeek Harness plugin for context insight, actions, and management.
 - Update or remove the outdated or unhelpful code comments when modifying the code.
 - Before any commit, MUST ALWAYS do ALL the following checks:
   - Check the to-do list, and ensure all the items are properly completed or closed.
-  - Carefully independently review and simplify all the diffs and all code changes, to ensure they are necessary, correct and not over-engineered. 
+  - Use sub-agent to carefully independently review and simplify all the diffs and all code changes, to ensure they are necessary, correct, proper for the purpose, fact-based and not over-engineered. 
   - Cleanup the generated temporary files. Cleanup temporary or unhelpful comments.
   - MUST Run `pnpm run lint:fix && pnpm run test && pnpm run build` in single command and capture FULL output, to ensure:
     - passing all the linting and test
