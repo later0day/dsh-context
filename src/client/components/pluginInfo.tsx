@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
-import { IconSettingsOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconSettings } from '../primitives'
 import { siDeepseek, siGithub, type SimpleIcon } from 'simple-icons'
 import { fetchLatestVersion, isNewerVersion } from '../latestVersion'
 import { PLUGIN_NAME, PLUGIN_REPO, PLUGIN_REPO_SHORT, PLUGIN_VERSION } from '../meta'
@@ -63,7 +63,7 @@ export function makePluginInfo(kit: ViewKit): () => ReactElement {
           {row(<SiteMark icon={siGithub} />, t('plugin.github'), PLUGIN_REPO_SHORT, PLUGIN_REPO, PLUGIN_REPO_SHORT)}
 {/* Best-effort jump to this plugin's settings page — openPluginSettings silently no-ops when the host's chrome doesn't match. */}
           <button type="button" className="lc-pi-row lc-pi-row-btn group/pi" onClick={() => { openPluginSettings() }}>
-            <div className="lc-pi-label"><IconSettingsOutline14 size={12} className="lc-pi-labelicon" />{t('plugin.settings')}</div>
+            <div className="lc-pi-label"><IconSettings size={12} className="lc-pi-labelicon" />{t('plugin.settings')}</div>
             <div className="lc-pi-value group-hover/pi:underline" title={t('plugin.settingsOpen')}>{t('plugin.settingsOpen')}</div>
           </button>
         </div>
