@@ -7,10 +7,10 @@
  * lands in the residue. When the host folded the generation split (see
  * TimingTotals), the generation slice expands into what was being decoded:
  * thinking, answer text, and tool-call arguments. The slice rows lead with
- * the true duration and qualify it with the call count on the secondary line —
- * except the decode slices, which count BLOCKS (zero to many per call, so a
- * call count would be a false tally) and therefore carry no qualifier. A slice
- * that never happened (zero time) is omitted entirely — the ring already skips
+ * the true duration and qualify it with a tally on the secondary line — the
+ * model calls (TTFT), the tool runs, and the decode slices' own BLOCK counts
+ * (zero to many per call, so a call count would be a false tally there). A
+ * slice that never happened (zero time) is omitted entirely — the ring already skips
  * its arc, and a zero row would otherwise borrow the session's call count and
  * read as "no time, many calls". The donut and the rows sit side by side so
  * the head row stays half-height. Parallel tool calls each count, so the tools
@@ -33,7 +33,7 @@ interface Slice {
   label: string
   /** The TRUE duration (the row prints this; the ring clamps it into its window). */
   ms: number
-  /** The secondary-line qualifier (a call count), absent when there is none. */
+  /** The secondary-line qualifier (a call/run/block tally), absent when there is none. */
   times?: string
 }
 
@@ -90,19 +90,25 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
       // (all-zero buckets) keeps the un-split shape instead of three dead rows.
       // An absent bucket reads as 0 (the host omits a zero span).
       //
-      // These slices carry NO call-count qualifier: they count DECODE BLOCKS,
-      // and one model call emits zero to many of them (a single call routinely
-      // requests several tools, and most calls emit no reasoning at all), so
-      // the call count would read as a per-slice tally that is simply untrue.
-      // TTFT and tools keep theirs — those happen exactly once per call/run.
-      const buckets: [key: string, color: string, label: string, ms: number][] = [
-        ['reasoning', COLOR.reasoning, t('timing.reasoning'), timing.reasoningMs ?? 0],
-        ['text', COLOR.text, t('timing.text'), timing.textMs ?? 0],
-        ['toolarg', COLOR.toolarg, t('timing.toolArgs'), timing.toolArgMs ?? 0],
+      // These slices qualify with their own BLOCK tally, never the call
+      // count: one model call emits zero to many decode blocks (a single call
+      // routinely requests several tools, and most calls emit no reasoning at
+      // all), so the call count would read as a per-slice tally that is simply
+      // untrue. TTFT and tools keep theirs — those happen exactly once per
+      // call/run. A host that folded no counts (an older cached row) serves
+      // the duration alone.
+      const blockTimes = (blocks?: number): string | undefined =>
+        blocks !== undefined && blocks > 0 ? t('timing.blockTimes', { n: fmt(blocks) }) : undefined
+      const buckets: [key: string, color: string, label: string, ms: number, times?: string][] = [
+        ['reasoning', COLOR.reasoning, t('timing.reasoning'), timing.reasoningMs ?? 0, blockTimes(timing.reasoningBlocks)],
+        ['text', COLOR.text, t('timing.text'), timing.textMs ?? 0, blockTimes(timing.textBlocks)],
+        ['toolarg', COLOR.toolarg, t('timing.toolArgs'), timing.toolArgMs ?? 0, blockTimes(timing.toolArgBlocks)],
       ]
       const split = buckets.some(([, , , ms]) => ms > 0)
       if (split) {
-        for (const [key, color, label, ms] of buckets) modelSlices.push({ key, color, label, ms })
+        for (const [key, color, label, ms, times] of buckets) {
+          modelSlices.push({ key, color, label, ms, ...(times !== undefined ? { times } : {}) })
+        }
       } else {
         modelSlices.push({ key: 'gen', color: COLOR.reasoning, label: t('timing.gen'), ms: timing.genMs })
       }

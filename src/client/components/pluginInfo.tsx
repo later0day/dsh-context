@@ -61,7 +61,7 @@ export function makePluginInfo(kit: ViewKit): () => ReactElement {
         <div className="lc-pi-grid">
           {row(<SiteMark icon={siDeepseek} />, t('plugin.name'), nameValue, PLUGIN_REPO, update !== null ? nameText + ' ↑ v' + update : nameText)}
           {row(<SiteMark icon={siGithub} />, t('plugin.github'), PLUGIN_REPO_SHORT, PLUGIN_REPO, PLUGIN_REPO_SHORT)}
-          {/* Best-effort jump to this plugin's settings page — openPluginSettings silently no-ops when the host's chrome doesn't match. */}
+{/* Best-effort jump to this plugin's settings page — openPluginSettings silently no-ops when the host's chrome doesn't match. */}
           <button type="button" className="lc-pi-row lc-pi-row-btn group/pi" onClick={() => { openPluginSettings() }}>
             <div className="lc-pi-label"><IconSettingsOutline14 size={12} className="lc-pi-labelicon" />{t('plugin.settings')}</div>
             <div className="lc-pi-value group-hover/pi:underline" title={t('plugin.settingsOpen')}>{t('plugin.settingsOpen')}</div>

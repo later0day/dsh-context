@@ -155,6 +155,26 @@ describe('StatsTiming — the generation split', () => {
     await m.unmount()
   })
 
+  test('the decode rows qualify with their OWN block tallies when the host folded them', async () => {
+    const timing: TimingTotals = { ...SPLIT, reasoningBlocks: 14, textBlocks: 5, toolArgBlocks: 26 }
+    const m = await mount(h(StatsTiming, { timing }))
+    assert.deepEqual(rowOf(m.container, 1), { pct: '15.0%', label: 'Thinking', count: '1m30s · 14 blocks', dim: false })
+    assert.deepEqual(rowOf(m.container, 2), { pct: '5.0%', label: 'Answer', count: '30.0s · 5 blocks', dim: false })
+    assert.deepEqual(rowOf(m.container, 3), { pct: '3.3%', label: 'Tool args', count: '20.0s · 26 blocks', dim: false })
+    await m.unmount()
+  })
+
+  test('a zero or absent block tally renders the duration alone; the count localizes', async () => {
+    const zh = await mount(h(StatsTimingZh, { timing: { ...SPLIT, reasoningBlocks: 3 } }))
+    assert.equal(rowOf(zh.container, 1).count, '1m30s · 3次')
+    await zh.unmount()
+    for (const counts of [{ reasoningBlocks: 0 }, {}]) {
+      const m = await mount(h(StatsTiming, { timing: { ...SPLIT, ...counts } }))
+      assert.equal(rowOf(m.container, 1).count, '1m30s', JSON.stringify(counts))
+      await m.unmount()
+    }
+  })
+
   test('the split labels localize', async () => {
     const m = await mount(h(StatsTimingZh, { timing: SPLIT }))
     assert.equal(rowOf(m.container, 1).label, '模型思考')

@@ -492,10 +492,22 @@ export interface TimingTotals {
   genMs: number
   /** Reasoning-decode slice of `genMs` (the model's thinking). */
   reasoningMs?: number
+  /** Counted reasoning-decode blocks (the Thinking slice's tally). */
+  reasoningBlocks?: number
   /** Answer-text decode slice of `genMs`. */
   textMs?: number
+  /** Counted answer-text decode blocks (the Answer slice's tally). */
+  textBlocks?: number
   /** Tool-call-argument decode slice of `genMs`. */
   toolArgMs?: number
+  /**
+   * Counted tool-call-argument decode blocks — one per tool call whose
+   * arguments the stream decoded (the Tool args slice's tally). The counts are
+   * ADDITIVE-OPTIONAL like their spans: a row cached before they existed (or a
+   * call whose stream framed no blocks) carries none, and the card qualifies
+   * only what was actually counted.
+   */
+  toolArgBlocks?: number
   /**
    * The decode-throughput seat, paired exactly as the harness's own
    * session-stats fold pairs them: `speedTokens` sums provider-reported
