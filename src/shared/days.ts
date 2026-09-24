@@ -46,14 +46,14 @@ export function shiftDayKey(key: string, delta: number): string | null {
   return dayKeyOf(date.getTime())
 }
 
-/** The Monday (local) of the week containing `key` — the heatmap's column anchor. */
-export function mondayOfWeek(key: string): string | null {
+/** The Sunday (local) of the week containing `key` — the heatmap's column anchor. */
+export function sundayOfWeek(key: string): string | null {
   if (!DAY_KEY_RE.test(key)) return null
   const y = Number(key.slice(0, 4))
   const m = Number(key.slice(5, 7))
   const d = Number(key.slice(8, 10))
   const date = new Date(y, m - 1, d)
   if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) return null
-  // getDay: 0=Sunday..6=Saturday → days since Monday.
-  return shiftDayKey(key, -((date.getDay() + 6) % 7))
+  // getDay: 0=Sunday..6=Saturday → days since Sunday.
+  return shiftDayKey(key, -date.getDay())
 }

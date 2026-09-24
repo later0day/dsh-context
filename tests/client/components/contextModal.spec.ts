@@ -485,7 +485,7 @@ describe('ContextModal — the split generation', () => {
             return Promise.resolve({
               ok: true,
               value: {
-                records: [{ type: 'event', event: { type: 'request/header', seq: 1, time: 1, data: { header: { system: 'HEALED SYSTEM PROMPT', tools: [] } } } }],
+                records: [{ type: 'event', event: { type: 'system/message', seq: 1, time: 1, data: { message: { content: [{ type: 'text', text: 'HEALED SYSTEM PROMPT' }] } } } }],
               },
             })
           },

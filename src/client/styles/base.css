@@ -66,8 +66,10 @@
 .lc-card-title-text { flex: none; white-space: nowrap; }
 .lc-gran, .lc-kinds { margin-left: auto; display: flex; gap: 2px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 1px; }
 /* A title carrying TWO toggle groups wraps them so the auto-margin push happens once — two bare .lc-gran siblings would split the free space and drift apart. */
-.lc-trend-ctl { margin-left: auto; display: flex; gap: 6px; align-items: center; }
-.lc-trend-ctl .lc-gran { margin-left: 0; }
+.lc-trend-ctl, .lc-heat-ctl { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.lc-trend-ctl .lc-gran, .lc-heat-ctl .lc-gran { margin-left: 0; }
+/* The heat title's hint text loses its own auto margin inside the wrapper. */
+.lc-heat-ctl .lc-card-sub { margin-left: 0; }
 /* The trend card's adaptive switch rides the title text's right — a single-button group whose auto margin is
    neutralized so it stays adjacent (the browser card's DNA toggle idiom). */
 .lc-trend-adaptive { margin-left: 0; flex: none; }

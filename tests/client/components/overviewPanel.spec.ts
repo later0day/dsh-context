@@ -11,7 +11,7 @@ import { resetModelPrices, setModelPricesLoader } from '../../../src/client/mode
 import { overviewStore } from '../../../src/client/overviewStore'
 import { dayKeyOf } from '../../../src/shared/days'
 import { TestClientCtx, asClientCtx } from '../helpers/harness'
-import { click, flush, keydown, makeKit, mount, query, queryAll, text, type Mounted } from '../helpers/kit'
+import { click, flush, keydown, makeKit, mount, query, queryAll, text, until, type Mounted } from '../helpers/kit'
 
 const PROVIDERS = {
   deepseek: { models: { 'deepseek-v4-flash': { cost: { input: 1, output: 2, cache_read: 0.1 } } } },
@@ -218,6 +218,26 @@ describe('OverviewPanel', () => {
     await m.unmount()
   })
 
+  test('the metric toggle re-prices the heatmap between steps and sessions', async () => {
+    const ctx = makeCtx()
+    const { m } = await openPanel(ctx)
+    const todayCellClass = (): string | undefined =>
+      queryAll<HTMLButtonElement>(m.container, 'button.lc-heat-cell')
+        .find(c => c.getAttribute('aria-label')?.startsWith(TODAY))?.className
+    // Steps (the default): today's pair of steps IS the window's steps peak.
+    assert.ok(todayCellClass()?.includes('lc-heat-4'), 'steps mode (default): today holds the steps peak')
+    const metricButtons = queryAll<HTMLButtonElement>(m.container, '.lc-heat-ctl .lc-gran-btn')
+    assert.deepEqual(metricButtons.map(b => b.textContent), ['Sessions', 'Steps'])
+    assert.ok(metricButtons[1].className.includes('lc-gran-on'), 'steps starts selected')
+    await click(metricButtons[0])
+    const after = queryAll<HTMLButtonElement>(m.container, '.lc-heat-ctl .lc-gran-btn')
+    assert.ok(after[0].className.includes('lc-gran-on'), 'the click selects sessions')
+    assert.ok(!after[1].className.includes('lc-gran-on'))
+    // Sessions: today had one of the window's two active sessions.
+    assert.ok(todayCellClass()?.includes('lc-heat-2'), 'sessions mode re-prices today down its own scale')
+    await m.unmount()
+  })
+
   test('search and sort steer the grid', async () => {
     const ctx = makeCtx()
     const { m } = await openPanel(ctx, {
@@ -305,6 +325,39 @@ describe('OverviewPanel', () => {
     await m.unmount()
   })
 
+  test('the settings row under the activity card runs the preferences jump and closes the panel', async () => {
+    // The harness chrome the jump drives (settingsJump.ts): the Plugins panel
+    // entry first, then the bundle card's open control (the one non-switch
+    // button inside the card), both click-tracked.
+    const clicks: string[] = []
+    const chrome = document.createElement('div')
+    chrome.innerHTML = `
+      <button aria-label="Plugins"></button>
+      <div data-plugin-package="dsh-context">
+        <button role="switch"></button>
+        <button>Context</button>
+      </div>`
+    for (const b of [...chrome.querySelectorAll('button')]) {
+      b.addEventListener('click', () => { clicks.push(b.getAttribute('aria-label') ?? (b.textContent ?? '')) })
+    }
+    document.body.appendChild(chrome)
+    try {
+      const ctx = makeCtx()
+      const { m } = await openPanel(ctx)
+      const row = query<HTMLButtonElement>(m.container, '.lc-ov-settings')
+      assert.equal(row.textContent, 'SettingsOpen plugin settings')
+      await click(row)
+      assert.equal(overviewStore.getSnapshot(), false, 'the panel closed so the jump lands visible')
+      assert.equal(m.container.textContent, '', 'the panel unmounted')
+      assert.deepEqual(clicks, ['Plugins'], 'the jump clicked the Plugins panel entry synchronously')
+      await until(() => clicks.length > 1, 'the jump never reached the bundle card open control')
+      assert.equal(clicks[1], 'Context')
+      await m.unmount()
+    } finally {
+      chrome.remove()
+    }
+  })
+
   test('Escape and the backdrop close; the card body swallows clicks', async () => {
     const ctx = makeCtx()
     const { m } = await openPanel(ctx)
@@ -372,6 +425,7 @@ describe('OverviewPanel', () => {
     await flush()
     assert.ok(text(m.container).includes('上下文洞察'))
     assert.ok(text(m.container).includes('活跃会话'))
+    assert.ok(text(m.container).includes('打开插件设置'), 'the settings row rides the zh dictionary too')
     await flush() // the price book lands
     const values = queryAll(m.container, '.lc-stat-value').map(el => el.textContent)
     assert.ok(values[2].startsWith('¥'), 'CNY under the zh locale')

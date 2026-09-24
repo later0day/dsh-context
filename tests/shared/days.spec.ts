@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
-import { DAY_KEY_RE, dayKeyOf, mondayOfWeek, shiftDayKey } from '../../src/shared/days'
+import { DAY_KEY_RE, dayKeyOf, shiftDayKey, sundayOfWeek } from '../../src/shared/days'
 
 describe('dayKeyOf', () => {
   test('keys a local instant as YYYY-MM-DD with zero padding', () => {
@@ -44,17 +44,17 @@ describe('shiftDayKey', () => {
   })
 })
 
-describe('mondayOfWeek', () => {
-  test('every weekday maps to its week’s Monday (2026-09-14 was one)', () => {
-    assert.equal(mondayOfWeek('2026-09-14'), '2026-09-14', 'Monday itself')
-    assert.equal(mondayOfWeek('2026-09-16'), '2026-09-14', 'Wednesday')
-    assert.equal(mondayOfWeek('2026-09-20'), '2026-09-14', 'Sunday belongs to the same Monday-first week')
-    assert.equal(mondayOfWeek('2026-09-21'), '2026-09-21', 'the next week starts Monday')
+describe('sundayOfWeek', () => {
+  test('every weekday maps to its week’s Sunday (2026-09-13 was one)', () => {
+    assert.equal(sundayOfWeek('2026-09-13'), '2026-09-13', 'Sunday itself')
+    assert.equal(sundayOfWeek('2026-09-16'), '2026-09-13', 'Wednesday')
+    assert.equal(sundayOfWeek('2026-09-19'), '2026-09-13', 'Saturday belongs to the same Sunday-first week')
+    assert.equal(sundayOfWeek('2026-09-20'), '2026-09-20', 'the next week starts Sunday')
   })
 
   test('malformed keys yield null', () => {
-    assert.equal(mondayOfWeek('junk'), null)
-    assert.equal(mondayOfWeek('2026-02-30'), null)
+    assert.equal(sundayOfWeek('junk'), null)
+    assert.equal(sundayOfWeek('2026-02-30'), null)
   })
 })
 

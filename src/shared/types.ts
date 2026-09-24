@@ -69,8 +69,7 @@ export type Category = 'user' | 'inject' | 'skill' | 'assistant' | 'tool'
 /**
  * One live system-prompt node (Snapshot.systems) — the harness models the
  * system prompt as a surface node, so its TEXT is fetched on demand from the
- * event at `seq`: a V3 `system/message` event, or the V0/V2 `request/header`
- * whose envelope carried `header.system`. `tokens` is the node's heuristic
+ * `system/message` event at `seq`. `tokens` is the node's heuristic
  * price (0 for a dormant empty node, which the harness reads as "no system
  * prompt"); the effective figure is the LAST node with `tokens > 0`.
  */
@@ -252,9 +251,9 @@ export interface Snapshot {
   timing?: TimingTotals
   /**
    * The live system-prompt nodes, oldest first — the browser's per-step source
-   * for the System section. Absent when the log carried no system prompt, and
-   * on older plugin builds (the client then falls back to the header epoch's
-   * own `systemTokens`, the pre-V3 shape).
+   * for the System section. Absent on rows folded before this field existed
+   * (older plugin builds; the client then falls back to the header epoch's
+   * own `systemTokens`, the legacy wire shape those builds served).
    */
   systems?: SystemPromptNode[]
   /**
@@ -338,7 +337,7 @@ export interface ContextTimelineDetail {
  * One executed file operation (a settled file-tool call with a resolved
  * target), folded host-side from the durable tool lifecycle: the call's
  * name+arguments (`tool/call`), the result's presentation meta and error
- * (`tool/result`), or a nested Code-Mode settle (`tool/code-dispatch`,
+ * (`tool/result`), or a nested Code-Mode settle (`tool/ptc-dispatch`,
  * located on its parent run_code result via `parent` + `program`).
  *
  * `gone` is NOT host-stamped: the client joins it from the detail's archive
@@ -460,10 +459,9 @@ export interface ToolTimingTotals {
  * Whole-session timing totals, host-folded from the durable `step/start` /
  * `step/end` / `tool/call` / `tool/result` lifecycle plus the model call's
  * first token (running totals over the COMPLETE session log — the same
- * never-trimmed framing as `cost`). The first token comes from a V0
- * `assistant/chunk` delta or from the call's own embedded stream
- * (`assistant/message.data.stream` / `assistant/attempt.data.stream`, the
- * V2+ settlement) — whichever the log carries, matching the harness's own
+ * never-trimmed framing as `cost`). The first token comes from the call's
+ * own embedded stream (`assistant/message.data.stream` /
+ * `assistant/attempt.data.stream`), matching the harness's own
  * session-stats fold. Durations are wall-clock milliseconds: `wallMs` sums
  * whole steps, `ttftMs` the step-start → first-token slice (the model wait)
  * and `genMs` the first-token → assistant-message slice (the generation) —

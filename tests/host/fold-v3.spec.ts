@@ -1,10 +1,8 @@
-// The V3 log generation (dsh 0.1.5-alpha.x+): `system/message` surface nodes,
-// the embedded assistant stream that replaced `assistant/chunk`, the
+// The supported log dialect (dsh 0.1.5-rc.1+, session formats V3/V4):
+// `system/message` surface nodes, the embedded assistant stream, the
 // `startSeq`/`endSeq` replacement endpoints, `tool/ptc-dispatch`, and
-// `assistant/attempt`. Each case is the generation seam the fold must read
-// alongside the V0 shapes (tests/host/fold-surface.spec.ts and
-// fold-timing.spec.ts pin those), plus the hostile shapes the durable log may
-// carry. No mocks: the real fold runs.
+// `assistant/attempt` — each case the seam the fold must read, plus the
+// hostile shapes the durable log may carry. No mocks: the real fold runs.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -28,7 +26,7 @@ const text = (t: string) => [{ type: 'text', text: t }]
 /** One raw stream record carrying a token delta at `time`. */
 const token = (time: number, t = 'x') => ({ type: 'chunk', time, chunk: { type: 'text-delta', text: t } })
 
-describe('V3 system/message — the system prompt as a surface node', () => {
+describe('system/message — the system prompt as a surface node', () => {
   test('an appended system prompt prices into systemTokens and the request total', () => {
     const prompt = 'You are an agent. '.repeat(20)
     const { state, view } = driveTimeline([
@@ -67,7 +65,7 @@ describe('V3 system/message — the system prompt as a surface node', () => {
     assert.equal(state.systems?.[1].tokens, 0)
   })
 
-  test('a replacement over the head swaps the node and reprices (V3 startSeq/endSeq)', () => {
+  test('a replacement over the head swaps the node and reprices (startSeq/endSeq)', () => {
     const first = 'first '.repeat(10)
     const second = 'second prompt text '.repeat(10)
     const { state, view } = driveTimeline([
@@ -148,32 +146,7 @@ describe('V3 system/message — the system prompt as a surface node', () => {
   })
 })
 
-describe('V0/V2 envelope system prompt (regression: the header path stays intact)', () => {
-  test('a header carrying a prompt seeds the list; a later system-less header clears it', () => {
-    const { state, states } = driveTimeline([
-      header(1, { system: 'You are an agent.', tools: [] }),
-      header(2, { tools: [] }),
-    ])
-    assert.equal(states[1].systems?.length, 1, 'the envelope seeded the list')
-    assert.deepEqual(state.systems, [], 'the system-less header cleared it (the V0 envelope meaning)')
-    assert.equal(state.systemTokens, 0)
-  })
-
-  test('a system-less header before any prompt leaves the state untouched', () => {
-    const { state } = driveTimeline([header(1, { tools: [] })])
-    assert.equal(state.systems, undefined)
-    assert.equal(state.systemTokens, 0)
-  })
-
-  test('the envelope prompt keeps its price and rides the wire', () => {
-    const { state, view } = driveTimeline([header(1, { system: 'You are an agent.', tools: [] })])
-    const price = estimateSystemContent(text('You are an agent.'))
-    assert.equal(state.systemTokens, price)
-    assert.deepEqual(view.systems, [{ seq: 1, time: state.systems?.[0].time, tokens: price }])
-  })
-})
-
-describe('V2+ embedded assistant stream — the first-token source that replaced assistant/chunk', () => {
+describe('embedded assistant stream — the first-token source', () => {
   test('a raw chunk record prices TTFT and generation', () => {
     const { state } = driveTimeline([
       stepStart(1, { time: 1000 }),
@@ -227,19 +200,18 @@ describe('V2+ embedded assistant stream — the first-token source that replaced
     // Slot armed but the stream carries no token.
     const armed = def.apply(def.init(), stepStart(1, { time: 1000 }))
     assertStable(armed, assistantAttempt(2, { turn: 1, step: 1, stream: [{ type: 'chunk', time: 1, chunk: { type: 'finish' } }] }), def)
-    // Slot already stamped (a V0 chunk got there first).
-    const stamped = def.apply(armed, { type: 'assistant/chunk', seq: 2, time: 1200, data: { chunk: { type: 'text-delta', text: 'x' } } })
+    // Slot already stamped (the step's earlier attempt got there first).
+    const stamped = def.apply(armed, assistantAttempt(2, { turn: 1, step: 1, stream: [token(1200)] }))
     assertStable(stamped, assistantAttempt(3, { turn: 1, step: 1, stream: [token(1100)] }), def)
   })
 })
 
-describe('V3 vocabulary seams', () => {
-  test('tool/ptc-dispatch books nested file ops exactly like tool/code-dispatch', () => {
+describe('PTC vocabulary seam', () => {
+  test('tool/ptc-dispatch books nested file ops exactly like a top-level call', () => {
     const nested = codeDispatch(1, {
       rootCallId: 'c1',
       name: 'read',
       arguments: JSON.stringify({ path: 'src/a.ts' }),
-      type: 'tool/ptc-dispatch',
     })
     const { state } = driveTimeline([
       toolCall(0, { callId: 'c1', name: 'run_code', arguments: JSON.stringify({ description: 'inspect' }) }),
@@ -250,7 +222,7 @@ describe('V3 vocabulary seams', () => {
     assert.equal(state.fileOps[0].program, 'inspect')
   })
 
-  test('a V3 range replacement (startSeq/endSeq) splices in place', () => {
+  test('a range replacement (startSeq/endSeq) splices in place', () => {
     const { state } = driveTimeline([
       userMessage(1, text('a'), { kind: 'user' }),
       userMessage(2, text('bbbb'), { kind: 'user' }),

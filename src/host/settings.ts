@@ -21,7 +21,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
-import type { PluginSettings } from '../shared/types'
 
 /** The namespace is the join key between the Host registration and the browser card. */
 export const SETTINGS_NAMESPACE = 'dsh-context'
@@ -31,7 +30,7 @@ export const SETTINGS_NAMESPACE = 'dsh-context'
 export type { DefaultFileSort, DefaultGranularity, DefaultPlacement, DefaultToolSort, DefaultTrendMode, InsightsEntry, PluginSettings } from '../shared/types'
 
 /** Section schema: also the wire envelope the browser scope validates against. */
-export const SettingsSchema: z<PluginSettings> = z.object({
+export const SettingsSchema = z.object({
   // Loose: a stale persisted value degrades to the default instead of breaking the section.
   defaultPlacement: z.union(['all', 'tab', 'sidebar']).default('all').loose(),
   defaultGranularity: z.union(['step', 'turn']).default('step'),

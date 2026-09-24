@@ -212,6 +212,17 @@ describe('user/message injection records', () => {
     assert.ok(!('detail' in state.events[0]))
   })
 
+  test('a hostile form (truthy non-string) degrades to the default inject form', () => {
+    // The harness validates a source's `kind` but not its `form`: a durable
+    // number must not ride the record into the strict wire/state schemas
+    // (the permanent per-session freeze class).
+    const { state } = driveTimeline([
+      userMessage(1, text('note'), { kind: 'plugin', plugin: 'dsh-x', form: 123 } as never),
+    ])
+    assert.equal(state.events[0].name, 'dsh-x')
+    assert.equal(state.events[0].form, 'context')
+  })
+
   test('a non-notice form records no detail', () => {
     const { state } = driveTimeline([
       userMessage(1, text('catalog'), { kind: 'skill-catalog', form: 'catalog' }),

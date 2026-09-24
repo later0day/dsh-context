@@ -33,7 +33,7 @@ describe('buildTimelineView unknown-model shape', () => {
 
   test('known scalars ride their own keys once a request names them', () => {
     const { view } = driveTimeline([
-      header(1, { system: 'sys', config: { model: 'deepseek-v4-flash', provider: 'deepseek' } }),
+      header(1, { config: { model: 'deepseek-v4-flash', provider: 'deepseek' } }),
       requestContext(2, { provider: 'deepseek', model: 'deepseek-v4-flash', contextWindow: 128000 }),
       userMessage(3, [{ type: 'text', text: 'hi' }]),
     ])
@@ -174,7 +174,7 @@ describe('buildTimelineView copies', () => {
   test('archive entries are copies too', () => {
     const { state, view } = driveTimeline([
       userMessage(1, [{ type: 'text', text: 'aaaa' }]),
-      userMessage(2, [{ type: 'text', text: 'b' }], undefined, { surfaceOp: { op: 'replace', start: 1, end: 1 } }),
+      userMessage(2, [{ type: 'text', text: 'b' }], undefined, { surfaceOp: { op: 'replace', startSeq: 1, endSeq: 1 } }),
     ])
     assert.equal(view.archive.length, 1)
     assert.notEqual(view.archive[0], state.archived[0])

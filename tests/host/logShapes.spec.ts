@@ -1,9 +1,9 @@
-// The shape-driven readers (src/host/logShapes.ts): every supported log
-// generation's spelling of the three seams the fold reconciles — the embedded
-// assistant stream's first token, the replacement op's endpoints, and the raw
-// chunk token test. Hostile shapes are pinned beside the happy paths: a
-// malformed record must read as "nothing here", never throw (the projection
-// registry drives the fold with no error boundary of its own).
+// The shape-driven readers (src/host/logShapes.ts): the log spellings the
+// fold reconciles — the embedded assistant stream's first token, the
+// replacement op's endpoints, and the raw chunk token test. Hostile shapes
+// are pinned beside the happy paths: a malformed record must read as
+// "nothing here", never throw (the projection registry drives the fold with
+// no error boundary of its own).
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -169,11 +169,8 @@ describe('firstTokenTimeOfStream', () => {
 })
 
 describe('replaceRangeOf', () => {
-  test('reads both endpoint spellings', () => {
+  test('reads the startSeq/endSeq endpoints', () => {
     assert.deepEqual(replaceRangeOf({ op: 'replace', startSeq: 3, endSeq: 7 }), { start: 3, end: 7 })
-    assert.deepEqual(replaceRangeOf({ op: 'replace', start: 3, end: 7 }), { start: 3, end: 7 })
-    assert.deepEqual(replaceRangeOf({ op: 'replace', startSeq: 3, end: 7 }), { start: 3, end: 7 }, 'a mixed op prefers the V3 spelling')
-    assert.deepEqual(replaceRangeOf({ op: 'replace', start: 3, endSeq: 7 }), { start: 3, end: 7 }, 'a mixed op falls back per endpoint')
   })
 
   test('append, unknown, and malformed ops read as no replacement', () => {
@@ -181,6 +178,9 @@ describe('replaceRangeOf', () => {
     assert.equal(replaceRangeOf(null), null)
     assert.equal(replaceRangeOf(undefined), null)
     assert.equal(replaceRangeOf({ op: 'insert', startSeq: 1, endSeq: 2 }), null)
+    // A pre-V3 spelling (`start`/`end`) is not an endpoint this dialect
+    // carries: an op offering only those reads as malformed → append.
+    assert.equal(replaceRangeOf({ op: 'replace', start: 3, end: 7 }), null)
     assert.equal(replaceRangeOf({ op: 'replace', startSeq: 1 }), null)
     assert.equal(replaceRangeOf({ op: 'replace', startSeq: Number.NaN, endSeq: 2 }), null)
     assert.equal(replaceRangeOf({ op: 'replace', startSeq: '1', endSeq: 2 }), null)

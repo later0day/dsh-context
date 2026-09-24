@@ -74,18 +74,18 @@ export const DEFAULT_BOUNDS: FoldBounds = {
  * the field on the Plugins page); a plain field on the older lines whose
  * schemastery predates the modifier.
  */
-export function volatileField<T>(field: z<T>): z<T> {
-  const volatile = (field as unknown as { volatile?: () => z<T> }).volatile
+export function volatileField<S extends z>(field: S): S {
+  const volatile = (field as unknown as { volatile?: () => S }).volatile
   return typeof volatile === 'function' ? volatile.call(field) : field
 }
 
 /** One bounded positive-integer count. */
-function count(defaultValue: number): z<number> {
+function count(defaultValue: number) {
   return z.number().min(1).step(1).default(defaultValue)
 }
 
 /** The cordis `Config` validator and the Config-form generation's served schema. */
-export const Config: z<Config> = z.object({
+export const Config = z.object({
   maxRequestSteps: count(DEFAULT_BOUNDS.maxRequestSteps),
   maxKeptTurns: count(DEFAULT_BOUNDS.maxKeptTurns),
   maxEvents: count(DEFAULT_BOUNDS.maxEvents),

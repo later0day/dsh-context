@@ -51,8 +51,9 @@ export function headerAt(headers: ContextHeaders | null, seq: number | null): He
  * node at or before it carrying tokens, which is exactly the host fold's
  * "last nonempty surviving system" rule and therefore agrees with the
  * per-step `system` figure the fold recorded. Rows folded before `systems`
- * existed carry none; the header epoch's envelope figure stands in for them
- * (the pre-V3 wire shape).
+ * existed carry none; the header epoch's own figure stands in for them (the
+ * legacy wire shape older plugin builds served — current epochs fold
+ * metadata-only, so the fallback only ever fires on those cached rows).
  */
 export function systemAt(
   data: ContextTimeline,

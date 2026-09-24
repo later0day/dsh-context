@@ -2,7 +2,7 @@
  * Session-projection unit contract compatibility layer.
  *
  * Supported harness baseline (see docs/compatibility.md): dsh
- * 0.1.2-rc.1+. On it, the session-projection registry drives the unit
+ * 0.1.5-rc.1+. On it, the session-projection registry drives the unit
  * contract (introduced in dsh 0.1.1-rc.1, replacing the pre-0.1.1
  * `{ schema, view }` shape): the real projection units emit only the modern
  * shape, while the below-baseline fallback units (fallback.ts) still carry
@@ -23,8 +23,8 @@
  * inheritedEventCount: SessionLogOffset)`. A zero-argument `init` satisfies
  * that contract as-is (both arguments go unobserved).
  *
- * The installed devDependency types pin the newest published surface
- * (0.1.2-rc.1), whose `wire?` is optional; this plugin's units are always
+ * The installed devDependency types pin the oldest supported surface
+ * (0.1.5-rc.1), whose `wire?` is optional; this plugin's units are always
  * client-visible, and the registry's wired-register overload demands `wire`
  * PRESENT — which the dts's optional `wire?` fails. The contract is
  * therefore mirrored here as {@link ProjectionDefinition} to keep both
@@ -35,7 +35,7 @@ import type { z } from 'zod'
 import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
-/** The session-projection unit contract served by dsh 0.1.2-rc.1+ (local mirror). */
+/** The session-projection unit contract served by dsh 0.1.5-rc.1+ (local mirror). */
 export interface ProjectionDefinition<K extends keyof SessionProjectionMap, S> {
   key: K
   stateSchema: z.ZodType<S>

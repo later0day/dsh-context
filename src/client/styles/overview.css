@@ -2,7 +2,8 @@
  * The Context Insights panel: the sidebar-foot entry button (stacked above
  * Settings by the harness's own foot layout) and the frame-wide overlay
  * panel it opens — a 3:7 body of insight column (KPI 2×3 block over the
- * activity heatmap) beside the session column (search, chips, card grid).
+ * activity heatmap, then the preferences entry row) beside the session
+ * column (search, chips, card grid).
  * The backdrop is the `lc-ov` query container (it spans the viewport, and
  * the card sizes off the viewport too), so the column fold keys off the
  * viewport width; on the folded width the card itself scrolls in normal
@@ -27,11 +28,14 @@
    so queries against it track the card's own sizing basis (the card is
    min(1120px, 100vw - 32px)) without making the card unable to query itself. */
 .lc-ov-backdrop { position: fixed; inset: 0; z-index: 200; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.45)); display: flex; align-items: center; justify-content: center; container: lc-ov / inline-size; }
-/* The card is a flex column capped at its max-height: the body fills the
-   rest and each column scrolls its own overflow, so browsing sessions never
-   scrolls the insight column out of view. On the folded width the card
-   scrolls whole (see the container query at the body). */
-.lc-ov-card { display: flex; flex-direction: column; width: min(1120px, calc(100vw - 32px)); max-height: min(86vh, 900px); overflow: hidden; box-sizing: border-box; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.4)); padding: 16px 18px 18px; color: var(--dsw-alias-label-primary); font-size: 13px; }
+/* The card is a flex column at a FIXED height: the viewport minus a 40px
+   band top and bottom (the width keeps its 16px side frame), so the panel's
+   footprint never wobbles with the content. The backdrop is a definite-
+   height flex box, so the percentage resolves without viewport units. The
+   body fills the rest and each column scrolls its own overflow, so browsing
+   sessions never scrolls the insight column out of view. On the folded
+   width the card scrolls whole (see the container query at the body). */
+.lc-ov-card { display: flex; flex-direction: column; width: min(1120px, calc(100vw - 32px)); height: calc(100% - 80px); overflow: hidden; box-sizing: border-box; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.4)); padding: 16px 18px 18px; color: var(--dsw-alias-label-primary); font-size: 13px; }
 .lc-ov-head { flex: none; display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .lc-ov-head-icon { flex: none; }
 .lc-ov-title { font-weight: 600; font-size: 15px; white-space: nowrap; }
@@ -72,28 +76,39 @@
 /* The heat card absorbs the insight column's leftover height (the grid
    centers inside it) but never shrinks below its own grid. */
 .lc-ov-heat-card { flex: 1 0 auto; display: flex; flex-direction: column; }
+/* The preferences entry: one row under the activity card, framed like the
+   column's other cards (the session-card hover: border darkens, layer-2
+   fill); the hint pulls to the right edge and ellipsizes under width
+   pressure so the label always reads. */
+.lc-ov-settings { flex: none; display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1); border-radius: 10px; padding: 9px 12px; font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary); cursor: pointer; transition: border-color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out), background-color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out), color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
+.lc-ov-settings:hover { border-color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
+.lc-ov-settings-label { flex: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.lc-ov-settings-hint { flex: 1 1 auto; min-width: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /*
  * The activity heatmap: fixed-size square cells (8 week columns ≈ a 200px
  * block) centered in the card, so the card's height follows the 7 cell rows
- * instead of the cells stretching to the card's width — the compact
- * GitHub-widget read. Monday-first, four depth steps, a month label over
- * the column where each month begins.
+ * plus the legend line instead of the cells stretching to the card's width —
+ * the compact GitHub-widget read. Sunday-first, four depth steps, a month
+ * label over the column where each month begins.
  */
-.lc-heat { display: flex; gap: 4px; flex: 1; align-items: center; justify-content: center; }
-/* Each column and the weekday gutter reserve the same 13px line above their
+.lc-heat-wrap { display: flex; flex-direction: column; flex: 1; }
+.lc-heat { display: flex; gap: 8px; flex: 1; align-items: center; justify-content: center; }
+/* Each column and the weekday gutter reserve the same 18px line above their
    cells — the month labels' line — so the centered cell rows stay aligned. */
-.lc-heat-wds, .lc-heat-col { padding-top: 13px; }
+.lc-heat-wds, .lc-heat-col { padding-top: 18px; }
 .lc-heat-wds { display: flex; flex-direction: column; gap: 3px; }
-.lc-heat-wd { flex: none; width: 10px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 9px; color: var(--dsw-alias-label-secondary); text-align: center; }
+/* The gutter self-sizes to its widest label (星期一 vs Mon differ), the spans
+   stretch to share it; nowrap keeps a full name on one line. */
+.lc-heat-wd { flex: none; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 9px; color: var(--dsw-alias-label-secondary); text-align: center; white-space: nowrap; }
 .lc-heat-cols { display: flex; gap: 3px; }
 /* relative anchors the label; absolute keeps its width off the 20px column
    (a wider in-flow label would widen just the labeled columns and skew the
-   grid). top:0 rides the column's own 13px padding band, clear of the cells.
+   grid). top:0 rides the column's own 18px padding band, clear of the cells.
    Labels only sit at month opens, ≥4 columns apart, so the nowrap overflow
    past a 20px column never meets the next label. */
 .lc-heat-col { position: relative; display: flex; flex-direction: column; gap: 3px; }
-.lc-heat-mon { position: absolute; top: 0; left: 0; font-size: 9px; line-height: 13px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.lc-heat-mon { position: absolute; top: 0; left: 0; font-size: 9px; line-height: 18px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
 .lc-heat-cell { width: 20px; height: 20px; box-sizing: border-box; border: 0; border-radius: 20%; padding: 0; background: var(--dsw-alias-bg-layer-2); cursor: default; }
 button.lc-heat-cell { cursor: pointer; }
 button.lc-heat-cell:hover { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-blue-500) 70%, transparent); }
@@ -106,6 +121,11 @@ button.lc-heat-cell:hover { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--col
 .lc-heat-4 { background: color-mix(in srgb, var(--color-blue-500) 92%, transparent); }
 /* The pinned day (the grid filter's source) keeps a solid ring in both themes. */
 .lc-heat-on { box-shadow: 0 0 0 1.5px var(--color-blue-500); }
+/* GitHub's Less→More key: right-aligned under the grid; the swatches reuse
+   the grid's own depth classes, so the key can never drift from the cells it
+   explains. Labels share the month label's secondary type. */
+.lc-heat-legend { display: flex; align-items: center; justify-content: flex-end; gap: 3px; padding-top: 6px; }
+.lc-heat-key { font-size: 9px; color: var(--dsw-alias-label-secondary); }
 
 /* ---- the session list head: title, count, day chip, search, sort ---- */
 .lc-ov-list-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }

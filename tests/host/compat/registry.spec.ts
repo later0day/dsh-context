@@ -26,6 +26,7 @@ import {
   requestContext,
   stepEnd,
   stepStart,
+  systemMessage,
   toolCall,
   toolResult,
   userMessage,
@@ -39,21 +40,21 @@ import type { Checkpoint, SessionLike } from './registryDriver'
 function canonicalLog(): TimelineEvent[] {
   return [
     header(1, {
-      system: 'You are an agent.',
       tools: [{ name: 'bash', description: 'run a command' }],
       model: 'deepseek-v4-flash',
       provider: 'deepseek',
     }),
-    requestContext(2, { contextWindow: 128000 }),
-    stepStart(3),
-    userMessage(4, [{ type: 'text', text: 'hello there' }], { kind: 'user' }),
-    assistantMessage(5, { turn: 1, step: 0, usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 3 } }),
-    toolCall(6, { callId: 'c1', name: 'bash' }),
-    toolResult(7, { callId: 'c1', content: [{ type: 'text', text: 'ok' }] }),
-    stepEnd(8),
-    assistantMessage(9, { turn: 1, step: 1, usage: { inputTokens: 20, outputTokens: 8 } }),
-    compaction(10, 'summary', { shadowedTokenCount: 12, shadowedSeqs: [4] }),
-    planMode(11, { active: true }),
+    systemMessage(2),
+    requestContext(3, { contextWindow: 128000 }),
+    stepStart(4),
+    userMessage(5, [{ type: 'text', text: 'hello there' }], { kind: 'user' }),
+    assistantMessage(6, { turn: 1, step: 0, usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 3 } }),
+    toolCall(7, { callId: 'c1', name: 'bash' }),
+    toolResult(8, { callId: 'c1', content: [{ type: 'text', text: 'ok' }] }),
+    stepEnd(9),
+    assistantMessage(10, { turn: 1, step: 1, usage: { inputTokens: 20, outputTokens: 8 } }),
+    compaction(11, 'summary', { shadowedTokenCount: 12, shadowedSeqs: [5] }),
+    planMode(12, { active: true }),
   ]
 }
 
@@ -84,7 +85,7 @@ for (const [index, baseline] of BASELINES.entries()) {
       const { driver, session } = bootSession(index)
       const snapshot = driver.snapshot(session)
       assert.deepEqual(Object.keys(snapshot.values).sort(), ['contextHeaders', 'contextTimeline'])
-      assert.equal(snapshot.asOfSeq, 11)
+      assert.equal(snapshot.asOfSeq, 12)
       const timeline = snapshot.values.contextTimeline as { current: { total: number }; nodes: unknown[] }
       assert.ok(timeline.current.total > 0)
       assert.ok(timeline.nodes.length > 0)
@@ -152,7 +153,7 @@ for (const [index, baseline] of BASELINES.entries()) {
       for (const key of ['contextTimeline', 'contextHeaders']) {
         const row = rows[key] as { ver: number; seq: number }
         assert.equal(row.ver, key === 'contextTimeline' ? 20 : 1)
-        assert.equal(row.seq, 11)
+        assert.equal(row.seq, 12)
       }
       // And the write-gate equivalent on every intermediate state of a fresh fold.
       assertStatesPlainJson(driveTimeline(canonicalLog()))
@@ -168,7 +169,7 @@ for (const [index, baseline] of BASELINES.entries()) {
 
       // A stale-row tail read: the floor anchors one below the lowest usable watermark.
       const floor = driver.restoreFloor(rows)
-      assert.equal(floor, 11)
+      assert.equal(floor, 12)
       // A full cold read (empty rows, baseSeq 0) refolds from init and matches the live snapshot.
       const cold = driver.restore({}, log, 0, session.header)
       assert.deepEqual(cold.values, driver.snapshot(session).values)
@@ -181,7 +182,7 @@ for (const [index, baseline] of BASELINES.entries()) {
     test('a corrupted checkpoint row is skipped by viewCheckpoint, never served', () => {
       const { driver, session } = bootSession(index)
       const rows: Checkpoint = driver.checkpoint(session)
-      rows.contextTimeline = { ver: 999, seq: 11, val: rows.contextTimeline.val }
+      rows.contextTimeline = { ver: 999, seq: 12, val: rows.contextTimeline.val }
       const viewed = driver.viewCheckpoint(rows)
       assert.equal(viewed.contextTimeline, undefined)
       assert.ok(viewed.contextHeaders !== undefined)
@@ -196,14 +197,14 @@ for (const [index, baseline] of BASELINES.entries()) {
       // passing the real wire schema on the way out.
       const log = [
         ...fullLog(),
-        assistantMessage(12, { turn: 1, step: 2, usage: { inputTokens: -80, cacheReadTokens: 150.7, outputTokens: 22.4 } }),
-        assistantMessage(13, { turn: 1, step: 3, usage: { inputTokens: NaN, outputTokens: null } }),
-        assistantMessage(14, { turn: 1, step: 4, usage: { inputTokens: 12 } }),
+        assistantMessage(13, { turn: 1, step: 2, usage: { inputTokens: -80, cacheReadTokens: 150.7, outputTokens: 22.4 } }),
+        assistantMessage(14, { turn: 1, step: 3, usage: { inputTokens: NaN, outputTokens: null } }),
+        assistantMessage(15, { turn: 1, step: 4, usage: { inputTokens: 12 } }),
       ]
       const stale: Checkpoint = {
         contextTimeline: {
           ver: 12,
-          seq: 14,
+          seq: 15,
           val: {
             // The poisoned v12 shape: the newest record carries the raw
             // gateway figure that failed the integer gates on every delivery.
@@ -211,7 +212,7 @@ for (const [index, baseline] of BASELINES.entries()) {
             sums: { user: 0, inject: 0, assistant: 0, tool: 0 },
             systemTokens: 0,
             toolsTokens: 0,
-            requests: [{ seq: 9, time: 0, system: 0, tools: 0, user: 0, inject: 0, assistant: 0, tool: 0, total: 0, prompt: -80, cacheRead: 150, output: 22 }],
+            requests: [{ seq: 10, time: 0, system: 0, tools: 0, user: 0, inject: 0, assistant: 0, tool: 0, total: 0, prompt: -80, cacheRead: 150, output: 22 }],
             events: [],
             archived: [],
             callNames: {},
@@ -227,10 +228,10 @@ for (const [index, baseline] of BASELINES.entries()) {
       const restored = driver.restore(stale, log, 0, session.header)
       const timeline = restored.values.contextTimeline as { requests: { seq: number; prompt?: number; cacheRead?: number; output?: number }[] }
       // Every step is tracked again — the hostile ones included…
-      assert.deepEqual(timeline.requests.map(r => r.seq), [5, 9, 12, 13, 14])
+      assert.deepEqual(timeline.requests.map(r => r.seq), [6, 10, 13, 14, 15])
       // …each billed from its sanitized buckets (no figure dropped, none raw).
       assert.deepEqual(
-        timeline.requests.filter(r => r.seq >= 12).map(r => [r.prompt, r.cacheRead, r.output]),
+        timeline.requests.filter(r => r.seq >= 13).map(r => [r.prompt, r.cacheRead, r.output]),
         [[151, 151, 22], [undefined, undefined, undefined], [12, undefined, undefined]],
       )
     })
@@ -259,9 +260,9 @@ for (const [index, baseline] of BASELINES.entries()) {
       driver.onChanged((_s, key) => seen.push(key))
       const before = driver.snapshot(session)
       // A durable event family the fold ignores (registry still drives it through apply).
-      const foreign = { seq: 12, time: 1, type: 'assistant/chunk', data: {} } as unknown as TimelineEvent
-      session.events[12] = foreign
-      session.seq = 13
+      const foreign = { seq: 13, time: 1, type: 'todo/write', data: {} } as unknown as TimelineEvent
+      session.events[13] = foreign
+      session.seq = 14
       driver.driveEvent(session, foreign)
       const after = driver.snapshot(session)
       assert.deepEqual(after.values, before.values)
@@ -298,9 +299,9 @@ for (const [index, baseline] of BASELINES.entries()) {
 
 describe('registry contract — settings namespace seam', () => {
   // The settings module enforces `/^[a-z][a-z0-9-]*$/` on registered
-  // namespaces (inside `settings.register` on the supported baselines). The
-  // plugin registers the raw literal (branded cast), so the literal must
-  // pass the pattern.
+  // namespaces (inside `settings.register` on the 0.1.5 line). The plugin
+  // registers the raw literal (branded cast; on the Config-form generations
+  // the namespace is the entry id), so the literal must pass the pattern.
   const NAMESPACE_PATTERN = /^[a-z][a-z0-9-]*$/
   const SETTINGS_NAMESPACE = 'dsh-context'
 

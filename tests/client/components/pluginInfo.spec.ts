@@ -56,7 +56,7 @@ describe('PluginInfo', () => {
     // The settings entry: a button (no href) below GitHub — the guarded jump runs on click.
     assert.equal(rows[2].getAttribute('href'), null)
     assert.equal(query(rows[2], '.lc-pi-label').textContent, 'Settings')
-    assert.equal(query(rows[2], '.lc-pi-value').textContent, 'Open preferences')
+    assert.equal(query(rows[2], '.lc-pi-value').textContent, 'Open plugin settings')
     // The tagline is the repo link too: hover underlines it, a click opens GitHub.
     const hint = query(m.container, '.lc-pi-hint')
     assert.ok(text(hint).includes('The best DSH context plugin'))

@@ -35,14 +35,13 @@ describe('createContextHeadersDefinition', () => {
     assert.deepEqual(init, { headers: [] })
 
     const state = def.apply(init, header(1, {
-      system: 'You are an agent.',
       tools: [{ name: 'bash', description: 'run a command' }],
     }) as never)
     assert.notEqual(state, init, 'a header event produces a new state')
     assertPlainJson(state)
     assert.equal(state.headers.length, 1)
     assert.equal(state.headers[0].seq, 1)
-    assert.equal(state.headers[0].systemTokens, estimateSystemTokens('You are an agent.'))
+    assert.ok(!('systemTokens' in state.headers[0]), 'a supported log header never carries a system prompt')
     assert.equal(state.headers[0].tools.length, 1)
     assert.equal(state.headers[0].tools[0].name, 'bash')
 
@@ -56,16 +55,20 @@ describe('createContextHeadersDefinition', () => {
 
   test('a non-header event returns the same state reference', () => {
     const def = createContextHeadersDefinition()
-    const state = fold(def, [header(1, { system: 'sys' })])
+    const state = fold(def, [header(1, { tools: [] })])
     assert.equal(def.apply(state, foreign(2) as never), state)
   })
 
   test('null, undefined, and non-object headers return the same state reference', () => {
     const def = createContextHeadersDefinition()
-    const state = fold(def, [header(1, { system: 'sys' })])
+    const state = fold(def, [header(1, { tools: [] })])
     for (const [seq, raw] of [[2, null], [3, undefined], [4, 42]] as const) {
       assert.equal(def.apply(state, headerEvent(seq, raw) as never), state, `header ${String(raw)} is not an epoch`)
     }
+    // A data-less envelope is unreachable from the harness (append validates
+    // the payload) but must degrade to "not an epoch" all the same: this unit
+    // has no try/catch around its fold.
+    assert.equal(def.apply(state, { type: 'request/header', seq: 5, time: 5000 } as never), state)
   })
 
   test('a non-array tools field folds to an empty tool list', () => {
@@ -96,28 +99,28 @@ describe('createContextHeadersDefinition', () => {
     }
   })
 
-  test('systemTokens is omitted unless a non-empty system string was logged', () => {
+  test('an epoch never carries systemTokens: the prompt lives in system/message nodes', () => {
     const def = createContextHeadersDefinition()
     const view = def.wire.view(fold(def, [
       headerEvent(1, { system: 42 }),
       headerEvent(2, { system: '' }),
       headerEvent(3, { system: 'sys' }),
     ]))
-    assert.ok(!('systemTokens' in view.headers[0]))
-    assert.ok(!('systemTokens' in view.headers[1]))
-    assert.equal(view.headers[2].systemTokens, estimateSystemTokens('sys'))
+    for (const record of view.headers) {
+      assert.ok(!('systemTokens' in record), 'the envelope figure is foldable only from cached v1 rows')
+    }
   })
 
   test('the same epoch seq twice in a row returns the same state reference', () => {
     const def = createContextHeadersDefinition()
-    const state = fold(def, [header(1, { system: 'a' })])
-    assert.equal(def.apply(state, header(1, { system: 'b' }) as never), state, 'duplicate epoch suppressed')
+    const state = fold(def, [header(1, { tools: [] })])
+    assert.equal(def.apply(state, header(1, { tools: [] }) as never), state, 'duplicate epoch suppressed')
     assert.equal(state.headers.length, 1)
   })
 
   test('retention caps at the 50 newest epochs', () => {
     const def = createContextHeadersDefinition()
-    const events = Array.from({ length: 55 }, (_, i) => header(i + 1, { system: `s${i + 1}` }))
+    const events = Array.from({ length: 55 }, (_, i) => header(i + 1, { tools: [] }))
     const state = fold(def, events)
     assert.equal(state.headers.length, 50)
     assert.equal(state.headers[0].seq, 6, 'the oldest five epochs dropped')
@@ -126,7 +129,7 @@ describe('createContextHeadersDefinition', () => {
 
   test('view() copies records and tools off the state', () => {
     const def = createContextHeadersDefinition()
-    const state = fold(def, [headerEvent(1, { system: 'sys', tools: [{ name: 'bash' }] })])
+    const state = fold(def, [headerEvent(1, { tools: [{ name: 'bash' }] })])
     const view = def.wire.view(state)
     view.headers[0].tools[0].name = 'mutated'
     view.headers[0].time = -1
@@ -138,7 +141,6 @@ describe('createContextHeadersDefinition', () => {
     const def = createContextHeadersDefinition()
     const state = fold(def, [
       header(1, {
-        system: 'You are an agent.',
         tools: [{ name: 'bash', description: 'run a command', parameters: { type: 'object' } }],
       }),
     ])
@@ -285,16 +287,16 @@ describe('read-compat over v1 rows', () => {
   test('new epochs fold alongside seeded v1 epochs and the cap keeps trimming', () => {
     const def = createContextHeadersDefinition()
     let state: HeadersState = v1State()
-    state = def.apply(state, header(10, { system: 'next', tools: [{ name: 'write' }] }) as never)
+    state = def.apply(state, header(10, { tools: [{ name: 'write' }] }) as never)
     assert.equal(state.headers.length, 3)
     const view = def.wire.view(state)
     assert.equal(def.wire.viewSchema.safeParse(view).success, true)
-    assert.equal(view.headers[2].systemTokens, estimateSystemTokens('next'))
+    assert.ok(!('systemTokens' in view.headers[2]), 'new folds stay metadata-only on the wire')
     assert.ok(!('system' in state.headers[2]), 'new folds stay metadata-only in state')
     assert.ok('system' in state.headers[0], 'seeded legacy epochs keep their state shape until they age out')
 
     // Retention: the oldest epochs leave regardless of generation.
-    for (let seq = 11; seq <= 60; seq++) state = def.apply(state, header(seq, { system: 's' }) as never)
+    for (let seq = 11; seq <= 60; seq++) state = def.apply(state, header(seq) as never)
     assert.equal(state.headers.length, 50)
     assert.equal(state.headers[0].seq, 11, 'the seeded v1 epoch aged out first')
   })

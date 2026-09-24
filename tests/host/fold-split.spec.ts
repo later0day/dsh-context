@@ -11,7 +11,6 @@ import { buildTimelineDetail, buildTimelineHead } from '../../src/host/fold'
 import type { TimelineEvent } from '../../src/host/fold'
 import { resolveBounds } from '../../src/host/config'
 import {
-  assistantChunk,
   assistantMessage,
   compaction,
   header,
@@ -19,6 +18,7 @@ import {
   requestContext,
   stepEnd,
   stepStart,
+  systemMessage,
   toolCall,
   toolResult,
   userMessage,
@@ -29,54 +29,53 @@ import { assertPlainJson, driveTimeline, timelineDef } from './helpers/projectio
 function canonicalLog(): TimelineEvent[] {
   return [
     header(1, {
-      system: 'You are an agent.',
       tools: [{ name: 'bash', description: 'run a command' }],
       model: 'deepseek-v4-flash',
       provider: 'deepseek',
     }),
-    requestContext(2, { contextWindow: 128000 }),
-    stepStart(3),
-    userMessage(4, [{ type: 'text', text: 'hello there' }], { kind: 'user' }),
-    assistantMessage(5, { turn: 1, step: 0, usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 3 } }),
-    toolCall(6, { callId: 'c1', name: 'bash' }),
-    toolResult(7, { callId: 'c1', content: [{ type: 'text', text: 'ok' }] }),
-    stepEnd(8),
-    assistantMessage(9, { turn: 1, step: 1, usage: { inputTokens: 20, outputTokens: 8 } }),
-    compaction(10, 'summary', { shadowedTokenCount: 12, shadowedSeqs: [4] }),
-    planMode(11, { active: true }),
+    systemMessage(2),
+    requestContext(3, { contextWindow: 128000 }),
+    stepStart(4),
+    userMessage(5, [{ type: 'text', text: 'hello there' }], { kind: 'user' }),
+    assistantMessage(6, { turn: 1, step: 0, usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 3 } }),
+    toolCall(7, { callId: 'c1', name: 'bash' }),
+    toolResult(8, { callId: 'c1', content: [{ type: 'text', text: 'ok' }] }),
+    stepEnd(9),
+    assistantMessage(10, { turn: 1, step: 1, usage: { inputTokens: 20, outputTokens: 8 } }),
+    compaction(11, 'summary', { shadowedTokenCount: 12, shadowedSeqs: [5] }),
+    planMode(12, { active: true }),
   ]
 }
 
 describe('the detailRev ledger', () => {
   test('bumps exactly on the detail-mutating folds of the canonical log', () => {
-    // Mutations: userMessage(4), assistantMessage(5), toolResult(7),
-    // assistantMessage(9), compaction(10), planMode(11) — six in total.
+    // Mutations: userMessage(5), assistantMessage(6), toolResult(8),
+    // assistantMessage(10), compaction(11), planMode(12) — six in total.
     const { state } = driveTimeline(canonicalLog())
     assert.equal(state.detailRev, 6)
   })
 
   test('the working-slot and envelope folds do NOT bump (nothing to refetch)', () => {
     const { def, state } = driveTimeline(canonicalLog())
-    // step/start (arms the step slot), tool/call (arms the call ledger), the
-    // first-token chunk stamp, request/context (capacity metadata), and a
-    // header with an UNCHANGED model all leave the detail collections as-is.
+    // step/start (arms the step slot), tool/call (arms the call ledger),
+    // request/context (capacity metadata), and a header with an UNCHANGED
+    // model all leave the detail collections as-is.
     const follow: TimelineEvent[] = [
-      requestContext(12, { contextWindow: 256000 }),
-      header(13, { model: 'deepseek-v4-flash', provider: 'deepseek', reason: 'change' }),
-      stepStart(14),
-      toolCall(15, { callId: 'c2', name: 'bash' }),
-      assistantChunk(16, { type: 'text-delta', text: 'tok' }),
+      requestContext(13, { contextWindow: 256000 }),
+      header(14, { model: 'deepseek-v4-flash', provider: 'deepseek', reason: 'change' }),
+      stepStart(15),
+      toolCall(16, { callId: 'c2', name: 'bash' }),
     ]
     let st = state
     for (const ev of follow) st = def.apply(st, ev)
     assert.equal(st.detailRev, 6, 'no detail mutation, no bump')
-    // The chunk stamp and the step lifecycle DID fold (state changed) — only the rev stayed.
+    // The capacity metadata and the header DID fold (state changed) — only the rev stayed.
     assert.notEqual(st, state)
   })
 
   test('a real model switch bumps (the events collection gains a row)', () => {
     const { def, state } = driveTimeline(canonicalLog())
-    const switched = def.apply(state, header(12, { model: 'deepseek-v4-pro', provider: 'deepseek', reason: 'change' }))
+    const switched = def.apply(state, header(13, { model: 'deepseek-v4-pro', provider: 'deepseek', reason: 'change' }))
     assert.equal(switched.detailRev, 7)
   })
 

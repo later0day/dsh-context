@@ -7,11 +7,11 @@
  * opening one log.
  *
  * The body is a 3:7 column pair: the insight column (the KPI 2×3 block over
- * the activity heatmap) beside the session column (search, group chips, and
- * the card grid); the heatmap keeps its own fixed 8-week window and PINs the
- * list to a picked day (the panel's drill-down gesture). A session card
- * click jumps to that session through the harness's own `sessions.open` and
- * closes the panel.
+ * the activity heatmap, then the preferences entry row) beside the session
+ * column (search, group chips, and the card grid); the heatmap keeps its own
+ * fixed 8-week window and PINs the list to a picked day (the panel's
+ * drill-down gesture). A session card click jumps to that session through
+ * the harness's own `sessions.open` and closes the panel.
  */
 
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactElement } from 'react'
@@ -27,13 +27,15 @@ import {
 } from '../overview'
 import { overviewStore } from '../overviewStore'
 import type { ClientCtx } from '../services'
+import { openPluginSettings } from '../settingsJump'
 import type { ViewKit } from '../viewkit'
 import { makeBalanceCapsule } from './balanceCapsule'
 import { makeErrorBoundary } from './errorBoundary'
 import { useEscapeClose } from './escapeClose'
-import { makeHeatmap, todayKey } from './heatmap'
+import { makeHeatmap, todayKey, type HeatMetric } from './heatmap'
 import { ContextIcon } from '../icon'
 import { makeOverviewCard } from './overviewCard'
+import { IconSettings } from '../primitives'
 
 export interface OverviewPanelProps {
   /** The root standard kit's sessions seat (absent on a harness without it). */
@@ -44,6 +46,8 @@ export interface OverviewPanelProps {
 
 const RANGES: readonly OverviewRange[] = ['24h', '7d', '30d', 'all']
 const SORTS: readonly OverviewSort[] = ['recent', 'tokens', 'context']
+/** The heatmap's depth metrics, in toggle order (steps is the default). */
+const METRICS: readonly HeatMetric[] = ['sessions', 'steps']
 
 export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: OverviewPanelProps) => ReactElement | null {
   const { t, fmtDuration } = kit
@@ -70,6 +74,7 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
     const [query, setQuery] = useState('')
     const [group, setGroup] = useState<string | null>(null)
     const [sort, setSort] = useState<OverviewSort>('recent')
+    const [metric, setMetric] = useState<HeatMetric>('steps')
     const [page, setPage] = useState(0)
     const close = (): void => { overviewStore.set(false) }
     useEscapeClose(open, close)
@@ -181,10 +186,33 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
                 <div className="lc-card lc-ov-heat-card">
                   <div className="lc-card-title">
                     <span className="lc-card-title-text">{t('ov.heat.title')}</span>
-                    <span className="lc-card-sub">{t('ov.heat.sub')}</span>
+                    {/* One wrapper so the right side pushes with a single auto
+                        margin (two bare auto-margin siblings would split the
+                        free space and drift apart). */}
+                    <span className="lc-heat-ctl">
+                      <span className="lc-card-sub">{t('ov.heat.sub')}</span>
+                      <div className="lc-gran" role="group" aria-label={t('ov.heat.metric')}>
+                        {METRICS.map(m => (
+                          <button
+                            key={m}
+                            type="button"
+                            className={'lc-gran-btn' + (metric === m ? ' lc-gran-on' : '')}
+                            onClick={() => { setMetric(m) }}
+                          >{t('ov.heat.metric.' + m)}</button>
+                        ))}
+                      </div>
+                    </span>
                   </div>
-                  <Heatmap days={days} selected={day} onSelect={setDay} today={todayKey()} />
+                  <Heatmap days={days} metric={metric} selected={day} onSelect={setDay} today={todayKey()} />
                 </div>
+                {/* The settings entry: one quiet row under the activity card, the
+                    same best-effort preferences jump the Context tab's plugin-info
+                    row rides. The jump drives the shell chrome behind this
+                    overlay, so the panel closes with it to leave the jump visible. */}
+                <button type="button" className="lc-ov-settings" onClick={() => { openPluginSettings(); close() }}>
+                  <span className="lc-ov-settings-label"><IconSettings size={14} />{t('plugin.settings')}</span>
+                  <span className="lc-ov-settings-hint">{t('plugin.settingsOpen')}</span>
+                </button>
               </div>
 
               <div className="lc-ov-right">

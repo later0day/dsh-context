@@ -330,12 +330,11 @@ export function makeContentFetcher(sessionId: string): ContentFetcher | undefine
 
 /**
  * Map one raw durable event into the epoch content the browser renders. A
- * `request/header` yields the full system prompt text (V0/V2 envelope) plus
- * each tool's producer description and raw schema; a V3 `system/message`
- * yields the prompt text alone (its tools live in the request header). Both
- * mirror the host fold's per-entry guards — a null or primitive tool entry
- * degrades to an unnamed row instead of throwing the read. Null when the
- * envelope carries neither.
+ * `request/header` yields each tool's producer description and raw schema; a
+ * `system/message` yields the prompt text alone (its tools live in the
+ * request header). Both mirror the host fold's per-entry guards — a null or
+ * primitive tool entry degrades to an unnamed row instead of throwing the
+ * read. Null when the event carries neither.
  */
 function headerContentOf(event: { type: string; data: Record<string, unknown> }): HeaderEpochContent | null {
   const { type, data } = event
@@ -362,10 +361,7 @@ function headerContentOf(event: { type: string; data: Record<string, unknown> })
       schema: t,
     })
   }
-  return {
-    ...(typeof rawHeader.system === 'string' && rawHeader.system !== '' ? { system: rawHeader.system } : {}),
-    tools,
-  }
+  return { tools }
 }
 
 /**
@@ -373,8 +369,8 @@ function headerContentOf(event: { type: string; data: Record<string, unknown> })
  * the lazy counterpart of the node fetcher above. One seq-anchored history
  * read off the requested seq returns the page holding that event (non-message
  * events ride the page verbatim); a `request/header` maps to the epoch's
- * tools (and its V0/V2 system text), a `system/message` to a V3 prompt's
- * text. Landed content caches per seq (history is immutable), and OLDER
+ * tools, a `system/message` to the prompt's text. Landed content caches per
+ * seq (history is immutable), and OLDER
  * epochs sharing the page cache for free — stepping back through epochs walks
  * the same pages. Undefined when no history face exists — the browser keeps a
  * metadata-only degradation instead.

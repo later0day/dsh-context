@@ -8,7 +8,7 @@
  * `dsh-context` namespace and render nothing while it is unavailable (a
  * deployment without the Host half, or a remote browser, shows no trace).
  * The settings-section card mounts expanded when the Plugin Info card's
- * "Open preferences" jump left a fresh expand request (settingsJump.ts),
+ * "Open plugin settings" jump left a fresh expand request (settingsJump.ts),
  * scrolling itself into view.
  */
 
@@ -145,8 +145,8 @@ export function makeSettingsCard(kit: ViewKit): (props: SettingsCardProps) => Re
   return function SettingsCard(props: SettingsCardProps): ReactElement | null {
     const [open, setOpen] = useState(false)
     const itemRef = useRef<HTMLLIElement | null>(null)
-    // "Open preferences" jump: consume its fresh expand request once on mount
-    // and land open; every guard stays local so no host quirk can surface.
+    // "Open plugin settings" jump: consume its fresh expand request once on
+    // mount and land open; every guard stays local so no host quirk can surface.
     useEffect(() => {
       if (!consumeCardExpand()) return
       setOpen(true)

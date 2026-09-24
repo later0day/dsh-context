@@ -218,7 +218,7 @@ describe('surfaceOp variants', () => {
 
   test('a non-replace op object appends', () => {
     const { state } = driveTimeline([
-      userMessage(1, text('x'), undefined, { surfaceOp: { op: 'insert', start: 0, end: 0 } }),
+      userMessage(1, text('x'), undefined, { surfaceOp: { op: 'insert', startSeq: 0, endSeq: 0 } }),
     ])
     assert.equal(state.surface.length, 1)
   })
@@ -229,7 +229,7 @@ describe('surfaceOp variants', () => {
       userMessage(2, text(big)), // 12 tokens
       userMessage(3, text(big)), // 12 tokens — NOT shadowed, survives the replace
       compaction(4, 'summary', { shadowedTokenCount: 100, shadowedSeqs: [1, 2] }),
-      userMessage(5, text('bbbbbbbb'), undefined, { surfaceOp: { op: 'replace', start: 1, end: 2 } }), // 10 tokens
+      userMessage(5, text('bbbbbbbb'), undefined, { surfaceOp: { op: 'replace', startSeq: 1, endSeq: 2 } }), // 10 tokens
     ])
     assert.deepEqual(state.surface.map(n => n.seq), [3, 5])
     assert.equal(state.sums.user, 22)
@@ -243,7 +243,7 @@ describe('surfaceOp variants', () => {
     const { state } = driveTimeline([
       userMessage(1, text(big)), // 12 tokens
       compaction(2, 'prune', { shadowedTokenCount: 12, shadowedSeqs: [1] }),
-      userMessage(3, text('x'.repeat(400)), undefined, { surfaceOp: { op: 'replace', start: 1, end: 1 } }), // 108 tokens
+      userMessage(3, text('x'.repeat(400)), undefined, { surfaceOp: { op: 'replace', startSeq: 1, endSeq: 1 } }), // 108 tokens
     ])
     assert.equal(state.events[0].tokens, 0)
     assert.equal(state.sums.user, 108)
@@ -254,7 +254,7 @@ describe('surfaceOp variants', () => {
       userMessage(1, text('aaaa')), // 9 tokens
       userMessage(2, text('bbbb')), // 9 tokens
       compaction(3, 'summary', { shadowedTokenCount: 50, shadowedSeqs: [] }),
-      userMessage(4, text('cccc'), undefined, { surfaceOp: { op: 'replace', start: 1, end: 2 } }),
+      userMessage(4, text('cccc'), undefined, { surfaceOp: { op: 'replace', startSeq: 1, endSeq: 2 } }),
     ])
     assert.deepEqual(state.surface.map(n => n.seq), [4], 'range replace splices the node in place')
     assert.equal(state.sums.user, 9)
@@ -268,7 +268,7 @@ describe('surfaceOp variants', () => {
       userMessage(1, text('aaaa')),
       userMessage(2, text('bbbb')),
       userMessage(3, text('cccc')),
-      userMessage(4, text('dddddddd'), undefined, { surfaceOp: { op: 'replace', start: 2, end: 2 } }),
+      userMessage(4, text('dddddddd'), undefined, { surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 } }),
     ])
     assert.deepEqual(state.surface.map(n => n.seq), [1, 4, 3])
     assert.deepEqual(state.archived.map(n => [n.seq, n.gone]), [[2, 4]])
@@ -277,7 +277,7 @@ describe('surfaceOp variants', () => {
   test('a replace whose start seq is missing appends', () => {
     const { state } = driveTimeline([
       userMessage(1, text('aaaa')),
-      userMessage(2, text('bbbb'), undefined, { surfaceOp: { op: 'replace', start: 99, end: 100 } }),
+      userMessage(2, text('bbbb'), undefined, { surfaceOp: { op: 'replace', startSeq: 99, endSeq: 100 } }),
     ])
     assert.deepEqual(state.surface.map(n => n.seq), [1, 2])
   })
@@ -285,7 +285,7 @@ describe('surfaceOp variants', () => {
   test('a replace whose end seq is missing appends', () => {
     const { state } = driveTimeline([
       userMessage(1, text('aaaa')),
-      userMessage(2, text('bbbb'), undefined, { surfaceOp: { op: 'replace', start: 1, end: 99 } }),
+      userMessage(2, text('bbbb'), undefined, { surfaceOp: { op: 'replace', startSeq: 1, endSeq: 99 } }),
     ])
     assert.deepEqual(state.surface.map(n => n.seq), [1, 2])
   })
@@ -296,7 +296,7 @@ describe('surfaceOp variants', () => {
     const def = timelineDef({})
     const base = driveTimeline([userMessage(1, text(big))]).state
     const restored: TimelineState = { ...base, pendingShadowedSeqs: [1] }
-    const next = def.apply(restored, userMessage(2, text('bbbb'), undefined, { surfaceOp: { op: 'replace', start: 1, end: 1 } }))
+    const next = def.apply(restored, userMessage(2, text('bbbb'), undefined, { surfaceOp: { op: 'replace', startSeq: 1, endSeq: 1 } }))
     assert.deepEqual(next.surface.map(n => n.seq), [2])
     assert.equal(next.archived.length, 1)
     assert.equal(next.events.length, 0, 'no event to rewrite, no crash')
@@ -308,7 +308,7 @@ describe('surfaceOp variants', () => {
     const def = timelineDef({})
     const base = driveTimeline([userMessage(1, text(big))]).state
     const restored: TimelineState = { ...base, pendingShadowedSeqs: [1], pendingShadowEventSeq: 999 }
-    const next = def.apply(restored, userMessage(2, text('bbbb'), undefined, { surfaceOp: { op: 'replace', start: 1, end: 1 } }))
+    const next = def.apply(restored, userMessage(2, text('bbbb'), undefined, { surfaceOp: { op: 'replace', startSeq: 1, endSeq: 1 } }))
     assert.deepEqual(next.surface.map(n => n.seq), [2])
     assert.equal(next.events.length, 0)
     assert.ok(!('pendingShadowEventSeq' in next))

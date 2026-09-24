@@ -135,11 +135,11 @@ export interface ConversationNodeLike {
  * A durable image attachment reference, as far as this plugin consumes it
  * (dsh's `ImageAttachmentRef`, minimally re-typed so the plugin stays free
  * of an attachment-package dependency). The durable log holds only this ref
- * — never inline bytes. Since dsh 0.1.2-rc.1 the width/height/bytes describe
- * the NORMALIZED raster under a deployment-resolvable policy (defaults:
- * total-pixel budget 2048×2048, long edge capped at 8192px — the 0.1.1 line
- * capped the long edge at 2048px); `originalDimensions` carries the
- * pre-normalization size when normalization reduced the image.
+ * — never inline bytes. On every supported line the width/height/bytes
+ * describe the NORMALIZED raster under a deployment-resolvable policy
+ * (defaults: total-pixel budget 2048×2048, long edge capped at 8192px);
+ * `originalDimensions` carries the pre-normalization size when normalization
+ * reduced the image.
  */
 export interface ImageRefLike {
   attachmentId: string

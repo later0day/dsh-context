@@ -274,8 +274,8 @@ export function createdDayOf(activity: ContextActivity | null): string | undefin
 /**
  * The panel's row pipeline: range (by last-activity), then the heatmap's
  * picked day (sessions contributing to that day's merged ledger), then the
- * search box (title or directory substring). Each stage keeps the rows it
- * cannot prove out of the result — never an exception.
+ * search box (title, directory, or last-message substring). Each stage keeps
+ * the rows it cannot prove out of the result — never an exception.
  */
 export function filterRows(
   rows: readonly OverviewRow[],
@@ -293,7 +293,9 @@ export function filterRows(
     if (query !== '') {
       const inTitle = row.title.toLowerCase().includes(query)
       const inCwd = row.cwd !== undefined && row.cwd.toLowerCase().includes(query)
-      if (!inTitle && !inCwd) return false
+      const lastUser = row.timeline?.lastUser
+      const inLastUser = typeof lastUser === 'string' && lastUser.toLowerCase().includes(query)
+      if (!inTitle && !inCwd && !inLastUser) return false
     }
     return true
   })

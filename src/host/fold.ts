@@ -21,7 +21,7 @@
 
 import type { Category, ContextEventRecord, ContextTimelineDetail, CostModelUsage, FileOpRecord, RequestRecord, SessionCostUsage, Snapshot, SurfaceNode, SystemPromptNode, TimingTotals, ToolTimingTotals } from '../shared/types'
 import { isDeepSeekProvider } from '../shared/providers'
-import { estimateSystemContent, estimateSystemTokens } from '../shared/estimate'
+import { estimateSystemContent } from '../shared/estimate'
 import type { FoldBounds } from './config'
 import {
   estimateMessage,
@@ -34,8 +34,8 @@ import {
 } from './pricing'
 import type { ContentBlock, MessageSource } from './pricing'
 import { deriveEventMessage } from '@deepseek-ai/dsh-session'
-import { decodeKindOfBlock, decodeTallyOfStream, firstTokenTimeOfStream, isTokenChunk, replaceRangeOf } from './logShapes'
-import type { DecodeCounts, DecodeKind } from './logShapes'
+import { decodeTallyOfStream, firstTokenTimeOfStream, replaceRangeOf } from './logShapes'
+import type { DecodeKind } from './logShapes'
 import { opBearingTool, opsOfCall, parseCallArgs, rawArgsNeeded } from '../shared/fileOps'
 
 /**
@@ -71,9 +71,8 @@ export interface TimelineState {
   sums: Record<Category, number>
   systemTokens: number
   /**
-   * The live system-prompt nodes, oldest first — a V3 log's `system/message`
-   * surface nodes, or the single entry a V0/V2 `request/header.header.system`
-   * envelope defines. `systemTokens` is the LAST entry with tokens > 0 (the
+   * The live system-prompt nodes, oldest first — a log's `system/message`
+   * surface nodes. `systemTokens` is the LAST entry with tokens > 0 (the
    * harness's own "last nonempty surviving system" rule), so an empty dormant
    * node keeps its position without clearing the prompt. Bounded by
    * SYSTEM_NODES_MAX. ABSENT on rows folded before this field existed — the
@@ -81,16 +80,6 @@ export interface TimelineState {
    * epoch's own envelope figure.
    */
   systems?: SystemPromptNode[]
-  /**
-   * Whether `systems` was built from the V0/V2 request ENVELOPE
-   * (`header.system`) rather than from V3 `system/message` events. Only then
-   * may a system-less header CLEAR the list: its canonical V0 meaning is
-   * "this request has no system prompt", while a V3 header never carries one
-   * (its prompt lives in the message history). Absent = log-sourced, and
-   * never materialized as an `undefined`-valued property (plain-JSON
-   * precondition — see the note above `model`).
-   */
-  systemsFromHeader?: true
   toolsTokens: number
   /**
    * The projection-cache precondition is plain JSON: a property whose value
@@ -170,28 +159,16 @@ export interface TimelineState {
   /**
    * The open step's start instant, armed by `step/start` and consumed by the
    * `assistant/message` (TTFT/generation split) and `step/end` (wall time)
-   * that follow it; `assistant/chunk` stamps `firstToken` on the step's first
-   * token delta — absent when the stream carried none (legacy or aborted
-   * steps), which leaves that call's model time unattributed. One slot, not a
-   * map: steps are sequential in the log, so the newest `step/start` is the
-   * one those events close — a hostile interleaved log degrades to skipped
-   * durations, never to unbounded state. Same arm/remove lifecycle as
-   * `pendingShadowedSeqs`.
-   *
-   * `decode`, `blocks` and `block` carry the generation split (reasoning /
-   * answer text / tool arguments — see TimingTotals): a V0 log's
-   * `assistant/chunk` `block-start` markers open `block`, close the previous
-   * one into `decode`, and count the opened bucket into `blocks` (the card's
-   * per-slice tally); a V2+ log carries no such events, so `decode` stays
-   * absent and `assistant/message` reads the spans and counts off its embedded
-   * stream instead.
+   * that follow it; the message's embedded stream stamps `firstToken` —
+   * absent when the stream carried none (an aborted step), which leaves that
+   * call's model time unattributed. One slot, not a map: steps are sequential
+   * in the log, so the newest `step/start` is the one those events close — a
+   * hostile interleaved log degrades to skipped durations, never to
+   * unbounded state. Same arm/remove lifecycle as `pendingShadowedSeqs`.
    */
   stepStart?: {
     time: number
     firstToken?: number
-    decode?: Record<DecodeKind, number>
-    blocks?: DecodeCounts
-    block?: { kind: DecodeKind; since: number }
   }
   /**
    * Tool callId → the call's name, start instant, and raw arguments, armed by
@@ -473,8 +450,10 @@ interface MessageLike {
 /**
  * The message nested under an event payload's `message` field
  * (`system/message`, `assistant/message`, `tool/result`) — read structurally
- * rather than through `deriveEventMessage`, whose 0.1.2-rc.1 generation knows
- * nothing of the V3 `system/message` variant. A malformed payload reads null.
+ * because the fold needs a TOTAL read over untrusted payloads: a malformed
+ * message reads null here, never throws or guesses a shape. Purely a type
+ * cast: `deriveEventMessage` returns `event.data` for a user/message (no
+ * `data.message` indirection), so its result feeds every other case.
  */
 function messageOf(data: Record<string, unknown> | undefined): MessageLike | null {
   const message = data?.message
@@ -889,7 +868,6 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
     switch (event.type) {
       case 'request/header': {
         const header = (data?.header ?? {}) as {
-          system?: unknown
           tools?: unknown[]
           config?: { model?: unknown; provider?: unknown }
         }
@@ -897,23 +875,6 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         const s = ensure(['events'])
         // Tools TOTAL = dsh's whole-array price (one JSON string of every schema).
         s.toolsTokens = estimateToolsTotal(tools)
-        // The V0/V2 system prompt rides this ENVELOPE; V3 rejects it outright
-        // (surface.ts: "must omit header.system; use system/message") and
-        // carries the prompt as a surface node instead. A present string is
-        // the envelope's own prompt for every request in its series; an
-        // absent one means "this request has no system prompt" ONLY when the
-        // list was envelope-sourced — otherwise the header is a V3 snapshot
-        // and the log's system nodes stay untouched.
-        const systemText = header.system
-        if (typeof systemText === 'string' && systemText !== '') {
-          s.systems = [{ seq: event.seq, time: event.time, tokens: estimateSystemTokens(systemText) }]
-          s.systemsFromHeader = true
-          s.systemTokens = systemTokensOf(s.systems)
-        } else if (s.systemsFromHeader === true) {
-          s.systems = []
-          delete s.systemsFromHeader
-          s.systemTokens = 0
-        }
         // Current route/model: the durable request envelope is the source of
         // truth (request/context is only route/capacity metadata, appended
         // AFTER request/header per request — see agent-loop `buildRequest`).
@@ -936,7 +897,7 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         break
       }
       case 'system/message': {
-        // The V3 system prompt: a SURFACE node (position 0 of the harness's
+        // The system prompt: a SURFACE node (position 0 of the harness's
         // ordered surface) that the plugin tracks outside its message
         // categories — it is the envelope figure's source, never a
         // user/inject/assistant/tool node, so it must not enter `surface` or
@@ -959,7 +920,6 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
           }
           if (removeSurfaceSeqs(s, claimed, event.seq).length > 0) bumpDetailRev(s)
         }
-        delete s.systemsFromHeader
         pushSystem(s, { seq: event.seq, time: event.time, tokens: estimateSystemContent(messageOf(data)?.content) })
         break
       }
@@ -989,7 +949,6 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         }
         break
       }
-      case 'tool/code-dispatch':
       case 'tool/ptc-dispatch': {
         // A nested PTC (Code Mode) call settling inside a run_code program:
         // one settled sub-dispatch books its file ops exactly like a top-level
@@ -997,8 +956,6 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         // and per-file search attribution degrade to the argument-only
         // forms). The ops buffer under the top run_code call id and flush
         // when its result folds (their locate target is that result's row).
-        // BOTH vocabulary generations land here: `tool/code-dispatch` on
-        // V0/V2 logs, `tool/ptc-dispatch` on V3 (the rename keeps the payload).
         const rootCallId = data?.rootCallId
         const name = data?.name
         if (typeof rootCallId === 'string' && typeof name === 'string') {
@@ -1020,50 +977,8 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         }
         break
       }
-      case 'assistant/chunk': {
-      // V0 stream events: the token flood, one event per chunk, so this case
-      // stays cheap and mostly reference-stable — only the open step's FIRST
-      // token delta stamps the slot (later deltas and steps without a slot
-      // return the same state). V2+ logs carry no such events; their timed
-      // stream rides `assistant/message` / `assistant/attempt` (see below).
-      //
-      // A `block-start` marker opens a decode block (reasoning / answer text /
-      // tool arguments) and closes the previous one into the slot's decode
-      // spans, so the generation window splits by what was being decoded.
-        const start = state.stepStart
-        if (start === undefined) return state
-        const chunk = data?.chunk as { type?: unknown; blockType?: unknown } | null | undefined
-        if (chunk !== null && typeof chunk === 'object' && chunk.type === 'block-start') {
-          const kind = decodeKindOfBlock(chunk.blockType)
-          // An unknown marker still CLOSES the open block (its end is real);
-          // only the interval it would open stays unattributed.
-          if (start.block === undefined && kind === undefined) return state
-          const s = ensure([])
-          const decode = { ...(start.decode ?? { reasoning: 0, text: 0, toolarg: 0 }) }
-          if (start.block !== undefined) decode[start.block.kind] += durOf(start.block.since, event.time)
-          // A known-kind marker is one counted decode block (the card's
-          // per-slice tally); the unknown one counted nothing.
-          const blocks = { ...(start.blocks ?? { reasoning: 0, text: 0, toolarg: 0 }) }
-          if (kind !== undefined) blocks[kind] += 1
-          // The next block is ABSENT (not undefined-valued) when unknown — the
-          // plain-JSON persisted-state precondition (see TimelineState).
-          s.stepStart = {
-            time: start.time,
-            ...(start.firstToken !== undefined ? { firstToken: start.firstToken } : {}),
-            decode,
-            blocks,
-            ...(kind !== undefined ? { block: { kind, since: event.time } } : {}),
-          }
-          break
-        }
-        if (start.firstToken !== undefined) return state
-        if (!isTokenChunk(data?.chunk)) return state
-        const s = ensure([])
-        s.stepStart = { ...start, firstToken: event.time }
-        break
-      }
       case 'assistant/attempt': {
-      // V2+: one model attempt that committed no surface message. Its embedded
+      // One model attempt that committed no surface message. Its embedded
       // stream still carries the attempt's first token, which the harness's own
       // sessionStats fold stamps on the open step the same way — an in-step
       // retry therefore keeps its real TTFT instead of falling into the card's
@@ -1078,7 +993,7 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
       }
       case 'step/start': {
         // Arm the single pending-step slot (see TimelineState.stepStart): the
-        // following assistant/chunk stamps the first token on it, and the
+        // step's first assistant stream stamps the first token on it, and the
         // assistant/message and step/end price the model wait/generation and
         // the whole step against this instant. Always a state change (a new
         // slot value), even over an un-consumed predecessor — sequential logs
@@ -1109,7 +1024,13 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         const source = msg?.source
         if (isInjection(source)) {
           const rec: ContextEventRecord = {
-            seq: event.seq, time: event.time, kind: 'inject', form: source.form || 'context', tokens: node.tokens,
+            seq: event.seq, time: event.time, kind: 'inject',
+            // Re-proved: the harness validates a source's `kind` but not its
+            // `form`, so a hostile form must degrade to the default instead of
+            // failing the record's strict wire/state schemas on every delivery
+            // (the permanent per-session freeze, the #44 class).
+            form: typeof source.form === 'string' && source.form !== '' ? source.form : 'context',
+            tokens: node.tokens,
           }
           if (source.kind === 'skill-invocation') {
             rec.sub = 'skill'
@@ -1288,13 +1209,12 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
             ? (record.turn !== undefined ? 1 : 0)
             : (record.turn === prevLast.turn ? 0 : 1))
         // Timing: one completed model call; its wait/generation split prices
-        // off the slot's first-token stamp. That stamp comes from a V0
-        // `assistant/chunk` delta or, when the log carries none, from the
-        // message's own EMBEDDED stream (V2+ settlements) — the same fallback
-        // the harness's sessionStats fold applies. A call whose stream carried
-        // no token (legacy log, aborted step) stays unattributed and lands in
-        // the card's residue. The pending slot stays armed — the step's tool
-        // calls and `step/end` still follow.
+        // off the slot's first-token stamp, read from the message's own
+        // EMBEDDED stream when the open attempt(s) carried none — the same
+        // fallback the harness's sessionStats fold applies. A call whose
+        // stream carried no token (an aborted step) stays unattributed and
+        // lands in the card's residue. The pending slot stays armed — the
+        // step's tool calls and `step/end` still follow.
         const timing = ensureTiming(s)
         timing.calls += 1
         const stepStart = state.stepStart
@@ -1313,24 +1233,14 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
               timing.speedMs = (timing.speedMs ?? 0) + durOf(firstToken, event.time)
               timing.speedTokens = (timing.speedTokens ?? 0) + output
             }
-            // Generation split: a V0 log's chunk stream accumulated the block
-            // spans and counts in the slot (its last block closes HERE, at the
-            // message); a V2+ log has no chunk events, so both come off the
-            // embedded stream. Either way the three buckets tile the generation
-            // window and only the settlement tail stays unattributed. The split
-            // is priced ONLY when the window was: an unstamped call's model time
-            // is unattributed wholesale, so its spans must not reappear as
+            // Generation split: the three buckets come off the message's
+            // embedded stream and tile the generation window; only the
+            // settlement tail stays unattributed. The split is priced ONLY
+            // when the window was: an unstamped call's model time is
+            // unattributed wholesale, so its spans must not reappear as
             // generation time the caller never charged.
-            if (stepStart.decode !== undefined) {
-              const decode = { ...stepStart.decode }
-              if (stepStart.block !== undefined) {
-                decode[stepStart.block.kind] += durOf(stepStart.block.since, event.time)
-              }
-              for (const kind of DECODE_KINDS) addDecode(timing, kind, decode[kind], stepStart.blocks?.[kind] ?? 0)
-            } else {
-              const tally = decodeTallyOfStream(data?.stream, event.time)
-              for (const kind of DECODE_KINDS) addDecode(timing, kind, tally.spans[kind], tally.blocks[kind])
-            }
+            const tally = decodeTallyOfStream(data?.stream, event.time)
+            for (const kind of DECODE_KINDS) addDecode(timing, kind, tally.spans[kind], tally.blocks[kind])
           }
         }
         // `deriveEventMessage` returns `data.message` for assistant/message, or
@@ -1464,9 +1374,9 @@ function headFieldsOf(state: TimelineState): Snapshot {
   }
   // The live system-prompt nodes ride the wire as COPIES: the browser resolves
   // the prompt in force at any step from them and fetches its TEXT on demand
-  // from `seq` — a `system/message` event on V3, the epoch's `request/header`
-  // on V0/V2. Absent when the log carried none, which is exactly the legacy
-  // shape older clients already degrade on (they fall back to the epoch).
+  // from the `system/message` event at `seq`. Absent on rows folded before
+  // this field existed, which is exactly the legacy shape older clients
+  // already degrade on (they fall back to the header epoch's own figure).
   if (state.systems !== undefined && state.systems.length > 0) {
     result.systems = state.systems.map(n => ({ ...n }))
   }

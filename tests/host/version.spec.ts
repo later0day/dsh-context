@@ -218,10 +218,10 @@ describe('detectHarnessVersion — running anchor', () => {
   })
 
   test('never probes the CLI package from the running anchor', () => {
-    // The fixture pins the CLI at 0.0.1 but the library at the baseline: only
-    // the library answer may come back.
+    // The fixture pins the CLI at 0.0.1 but the libraries at the baseline:
+    // only a library answer may come back.
     const ctx = ctxWithHome(scratchResolver('empty'))
-    assert.equal(detectHarnessVersion(ctx, runningResolver('module-skips-cli'), ELSEWHERE), '0.1.2-rc.1')
+    assert.equal(detectHarnessVersion(ctx, runningResolver('module-skips-cli'), ELSEWHERE), '0.1.5-rc.1')
   })
 
   test('a resolving witness with no readable version falls through to home', () => {
@@ -249,7 +249,7 @@ describe('detectHarnessVersion — home anchor', () => {
   test('reads the CLI package manifest of the running installation', () => {
     const ctx = (home: string) => ctxWithHome(homeResolver(home))
     assert.equal(detectHarnessVersion(ctx('old'), NO_RUNNING), '0.1.1-rc.2')
-    assert.equal(detectHarnessVersion(ctx('baseline'), NO_RUNNING), '0.1.2-rc.1')
+    assert.equal(detectHarnessVersion(ctx('baseline'), NO_RUNNING), '0.1.5-rc.1')
     assert.equal(detectHarnessVersion(ctx('future'), NO_RUNNING), '0.2.0')
     assert.equal(detectHarnessVersion(ctx('dev'), NO_RUNNING), '0.0.0-dev')
   })

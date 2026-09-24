@@ -228,11 +228,18 @@ describe('filterRows', () => {
     assert.deepEqual(filterRows(rows, { range: 'all', day: '2026-09-11', query: '' }, now), [], 'no ledger entry')
   })
 
-  test('the query matches title or directory, case-insensitively', () => {
+  test('the query matches title, directory, or last message, case-insensitively', () => {
     assert.deepEqual(filterRows(rows, { range: 'all', day: null, query: 'FRESH' }, now).map(r => r.id), ['new'])
     assert.deepEqual(filterRows(rows, { range: 'all', day: null, query: '/repo' }, now).map(r => r.id), ['new'])
     assert.deepEqual(filterRows(rows, { range: 'all', day: null, query: '  ' }, now).length, 3, 'a blank query matches all')
     assert.deepEqual(filterRows(rows, { range: 'all', day: null, query: 'zzz' }, now), [])
+    // The session's newest own message joins the haystack.
+    const talked = rowOf({ id: 'talk', title: 'quiet title', timeline: { lastUser: 'ship the QUARTERLY report' } as unknown as ContextTimeline })
+    assert.deepEqual(filterRows([talked], { range: 'all', day: null, query: 'quarterly' }, now).map(r => r.id), ['talk'])
+    assert.deepEqual(filterRows([talked], { range: 'all', day: null, query: 'quiet' }, now).map(r => r.id), ['talk'], 'the title still matches')
+    // A non-string last message (a hostile fold shape) never matches.
+    const odd = rowOf({ id: 'odd', title: 'odd one', timeline: { lastUser: 42 } as unknown as ContextTimeline })
+    assert.deepEqual(filterRows([odd], { range: 'all', day: null, query: '42' }, now), [])
   })
 })
 

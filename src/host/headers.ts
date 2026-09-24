@@ -113,9 +113,16 @@ export const contextHeadersSchema = z.object({
 
 function recordOf(event: SessionEvent): StoredHeaderRecord | null {
   if (event.type !== 'request/header') return null
-  const rawHeader = (event.data as { header?: unknown }).header
+  // Same guarded read as the timeline fold's: this unit has no try/catch of
+  // its own, so even an impossible shape must degrade to "not an epoch"
+  // instead of throwing out of the registry's drive loop.
+  const rawHeader = (event.data as { header?: unknown } | undefined)?.header
   if (rawHeader === null || rawHeader === undefined || typeof rawHeader !== 'object') return null
-  const header = rawHeader as { system?: unknown; tools?: unknown[] }
+  // A supported log's header never carries a system prompt (it lives in the
+  // `system/message` surface nodes), so epochs fold metadata-only; the stored
+  // record's `system` fields exist for the cached v1 rows (see the
+  // read-compat note in the module header).
+  const header = rawHeader as { tools?: unknown[] }
   const tools = Array.isArray(header.tools) ? header.tools : []
   const record: StoredHeaderRecord = {
     seq: event.seq,
@@ -139,9 +146,6 @@ function recordOf(event: SessionEvent): StoredHeaderRecord | null {
       }
       return entry
     }),
-  }
-  if (typeof header.system === 'string' && header.system.length > 0) {
-    record.systemTokens = estimateSystemTokens(header.system)
   }
   return record
 }

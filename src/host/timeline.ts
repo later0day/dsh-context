@@ -242,7 +242,6 @@ const timelineStateSchema = z.object({
   }).strict(),
   systemTokens: z.number().int().nonnegative(),
   systems: z.array(systemPromptNodeSchema).optional(),
-  systemsFromHeader: z.literal(true).optional(),
   toolsTokens: z.number().int().nonnegative(),
   model: z.string().optional(),
   provider: z.string().optional(),
@@ -260,11 +259,6 @@ const timelineStateSchema = z.object({
   stepStart: z.object({
     time: z.number(),
     firstToken: z.number().optional(),
-    // The generation split's in-flight accumulator (see TimelineState.stepStart),
-    // with the opened blocks counted per bucket.
-    decode: z.object({ reasoning: z.number(), text: z.number(), toolarg: z.number() }).strict().optional(),
-    blocks: z.object({ reasoning: z.number().int(), text: z.number().int(), toolarg: z.number().int() }).strict().optional(),
-    block: z.object({ kind: z.enum(['reasoning', 'text', 'toolarg']), since: z.number() }).strict().optional(),
   }).strict().optional(),
   callNames: z.record(z.string(), z.object({ name: z.string(), start: z.number(), argsRaw: z.string().optional() }).strict()),
   pendingShadowedSeqs: z.array(z.number()).optional(),
@@ -359,15 +353,14 @@ export function createContextTimelineDefinition(config: Config, slim: () => bool
     // TARGET (the searched path / the pattern) in addition to the per-file
     // hit rows — the op log's fold semantics changed, so cached rows refold.
     //
-    // 15 since 0.47: the fold reads BOTH supported log generations (see
-    // host/logShapes.ts) — V3 `system/message` nodes, embedded assistant
+    // 15 since 0.47: the fold reads the supported log generations (see
+    // host/logShapes.ts) — `system/message` nodes, embedded assistant
     // streams, `startSeq`/`endSeq` replacements, `tool/ptc-dispatch`. The new
-    // state fields (`systems`, `systemsFromHeader`) are additive-OPTIONAL, so
-    // cached rows keep parsing and stay USABLE: a bump would invalidate every
-    // row and orphan the key for idle sessions, which have no refresh channel
-    // until they go live again (the #37 regression) — strictly worse than a
-    // pre-fix session showing its corrected figures from the next folded
-    // event onward.
+    // state field (`systems`) is additive-OPTIONAL, so cached rows keep
+    // parsing and stay USABLE: a bump would invalidate every row and orphan
+    // the key for idle sessions, which have no refresh channel until they go
+    // live again (the #37 regression) — strictly worse than a pre-fix session
+    // showing its corrected figures from the next folded event onward.
     //
     // 16: the whole-session human-input tally (`humanInputs`) joined the
     // state — a running total that later events cannot backfill, so unlike
@@ -400,6 +393,20 @@ export function createContextTimelineDefinition(config: Config, slim: () => bool
     // rows refold from the log; the startup warm-up (backfill.ts) now probes
     // the `contextTimeline` row too, rebuilding idle sessions' rows instead
     // of orphaning the key.
+    //
+    // Not bumped since: the supported-baseline move (0.1.2-rc.1 → 0.1.5-rc.1,
+    // the plugin floor) retired the pre-V3 log-shape branches
+    // (`header.system` envelope, `assistant/chunk` floods, `start`/`end`
+    // replacement endpoints, `tool/code-dispatch`) that only pre-V3 logs
+    // exercise — no supported log folds differently. Rows folded from those
+    // logs cannot reach this schema anyway: the projection cache's identity
+    // gate (cache-record format version vs the header's current-generation
+    // version) discards them wholesale and the session refolds from the
+    // migrated log. And in the schema itself the strict `stepStart`
+    // sub-schema DISCARDS — not strips — a row still carrying the removed
+    // decode accumulators, which every reader treats as "not served,
+    // refold". Bumping would invalidate every in-generation row and orphan
+    // the key for idle sessions (the #37 regression) for no correctness gain.
     stateVersion: 20,
   }
   return definition

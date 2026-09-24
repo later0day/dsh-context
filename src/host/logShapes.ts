@@ -1,30 +1,28 @@
 /**
  * Shape-driven readers over the durable session-event vocabulary — the ONE
- * place the plugin reconciles the two supported log generations:
+ * place the plugin's log spellings meet. The supported range (dsh
+ * 0.1.5-rc.1+, session formats V3/V4) speaks ONE dialect:
+ * `system/message` surface nodes, `assistant/message.data.stream` /
+ * `assistant/attempt.data.stream` (packed delta runs plus raw chunk
+ * records), `SurfaceOp { startSeq, endSeq }`, `tool/ptc-dispatch`.
  *
- *   - V0 (dsh 0.1.2-rc.1): `request/header.header.system`, `assistant/chunk`
- *     stream events, `SurfaceOp { start, end }`, `tool/code-dispatch`.
- *   - V3 (dsh 0.1.5-alpha.x+): `system/message` surface nodes,
- *     `assistant/message.data.stream` / `assistant/attempt.data.stream`,
- *     `SurfaceOp { startSeq, endSeq }`, `tool/ptc-dispatch`.
- *
- * The fold reads SHAPES, never a detected harness version: a session log is
- * written by exactly one generation, the two spellings are mutually
- * exclusive within it, and a deployment's version probe can be wrong (a
- * healed profile mirror may name a different release than the running
- * harness). Every reader is total over untrusted input — a malformed record
- * yields "nothing here", never a throw (the projection registry drives the
- * fold without an error boundary; one throw stalls the unit's push feed and
- * the browser waits on "loading" forever).
+ * The fold still reads SHAPES, never a detected harness version: the raw log
+ * is untrusted input at every layer, and the supported harness refuses —
+ * never rewrites — a legacy-format log, so anything that reaches these
+ * readers is current-dialect or hostile. Every reader is total over
+ * untrusted input — a malformed record yields "nothing here", never a throw
+ * (the projection registry drives the fold without an error boundary; one
+ * throw stalls the unit's push feed and the browser waits on "loading"
+ * forever).
  *
  * @module dsh-context/host/log-shapes
  */
 
 /**
- * Whether one raw stream chunk carries a token delta — the first-token marker
- * both generations share. Mirrors dsh-llm's `isTokenDelta` (a non-empty text
- * or reasoning fragment, or any Tool-call delta carrying arguments or a name);
- * a malformed chunk is simply not a token.
+ * Whether one raw stream chunk carries a token delta — the first-token
+ * marker, mirroring dsh-llm's `isTokenDelta` (a non-empty text or reasoning
+ * fragment, or any Tool-call delta carrying arguments or a name); a
+ * malformed chunk is simply not a token.
  */
 export function isTokenChunk(chunk: unknown): boolean {
   if (chunk === null || typeof chunk !== 'object') return false
@@ -72,9 +70,7 @@ export interface DecodeTally {
  * Per-kind decode spans AND counted `block-start` markers inside one embedded
  * assistant stream, tiling [first block-start, endTime]: each `block-start`
  * record owns the interval up to the next one, the last one up to `endTime`.
- * This is the V2+ shape, whose timed stream rides the settlement
- * (`assistant/message.data.stream`) instead of separate `assistant/chunk`
- * events. Total over untrusted input — a malformed record is skipped whole (a
+ * Total over untrusted input — a malformed record is skipped whole (a
  * marker with an unusable time anchors no span and counts nothing), a
  * non-finite boundary yields zero, and a stream with no marker (or not an
  * array) yields all zeros.
@@ -130,9 +126,8 @@ function runFirstTokenTime(record: Record<string, unknown>): number | undefined 
 
 /**
  * The first token's instant inside an embedded assistant stream
- * (`assistant/message.data.stream`, `assistant/attempt.data.stream` — the V2+
- * settlement that replaced the V0 `assistant/chunk` events), or undefined
- * when the stream carries no token. Mirrors dsh-llm's
+ * (`assistant/message.data.stream`, `assistant/attempt.data.stream`), or
+ * undefined when the stream carries no token. Mirrors dsh-llm's
  * `assistantStreamFirstTokenTime` over the compact record union.
  */
 export function firstTokenTimeOfStream(stream: unknown): number | undefined {
@@ -154,16 +149,14 @@ export function firstTokenTimeOfStream(stream: unknown): number | undefined {
 /**
  * The inclusive surface range a replacement op covers, or null for `append`
  * and for any unrecognized/hostile op (which the fold treats as an append).
- * Reads BOTH endpoint spellings: V3's `startSeq`/`endSeq` first, then V0's
- * `start`/`end` — each accepted only as a finite number, so a hostile op
- * with one good and one malformed endpoint degrades to append.
+ * The `startSeq`/`endSeq` endpoints are each accepted only as a finite
+ * number, so a hostile op with one malformed endpoint degrades to append.
  */
 export function replaceRangeOf(surfaceOp: unknown): { start: number; end: number } | null {
   if (surfaceOp === null || typeof surfaceOp !== 'object') return null
-  const op = surfaceOp as { op?: unknown; start?: unknown; end?: unknown; startSeq?: unknown; endSeq?: unknown }
+  const op = surfaceOp as { op?: unknown; startSeq?: unknown; endSeq?: unknown }
   if (op.op !== 'replace') return null
-  const start = typeof op.startSeq === 'number' ? op.startSeq : op.start
-  const end = typeof op.endSeq === 'number' ? op.endSeq : op.end
+  const { startSeq: start, endSeq: end } = op
   if (typeof start !== 'number' || !Number.isFinite(start)) return null
   if (typeof end !== 'number' || !Number.isFinite(end)) return null
   return { start, end }

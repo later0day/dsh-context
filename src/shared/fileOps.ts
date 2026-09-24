@@ -2,12 +2,12 @@
  * The file-operation parser — the ONE derivation of "what the agent did to
  * files" from a settled file-tool call. Shared by both halves: the host fold
  * books the op log from the durable tool lifecycle (tool/call +
- * tool/result + tool/code-dispatch), and the client's INLINE-generation
+ * tool/result + tool/ptc-dispatch), and the client's INLINE-generation
  * fallback re-derives ops from the conversation-window join when an older
  * host serves no `fileOps`.
  *
  * Tool coverage matches the harness's built-ins on every supported baseline
- * (0.1.2-rc.1): read / read_image / write / edit (tool-fs) and grep / glob
+ * (0.1.5-rc.1): read / read_image / write / edit (tool-fs) and grep / glob
  * (tool-fs-search), plus the Anthropic-style `str_replace_editor` (view
  * reads, every other command writes). Line deltas are estimates read off the
  * call ARGUMENTS (an edit's old/new strings, a write's content), never off

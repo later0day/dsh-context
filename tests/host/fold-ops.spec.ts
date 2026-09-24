@@ -134,7 +134,7 @@ describe('the file-op log — Code Mode (PTC) sub-dispatches', () => {
     const { state } = driveTimeline([
       toolCall(1, { callId: 'rc1', name: 'run_code', arguments: '{}' }),
       codeDispatch(2, { rootCallId: 'rc1', name: 'bash', arguments: { command: 'ls' } }),
-      { type: 'tool/code-dispatch', seq: 3, time: 3, data: null } as unknown as TimelineEvent,
+      { type: 'tool/ptc-dispatch', seq: 3, time: 3, data: null } as unknown as TimelineEvent,
       codeDispatch(4, { name: 'read' }), // no rootCallId
       toolResult(5, { callId: 'rc1', content: [{ type: 'text', text: 'ok' }] }),
     ])

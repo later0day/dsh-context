@@ -55,9 +55,15 @@ interface SessionQueryLike {
   listSessions(signal?: AbortSignal): Promise<unknown>
 }
 
-/** The cache's two cold-path verbs, as consumed. */
+/**
+ * The cache's two cold-path verbs, as consumed (re-proved at runtime). The
+ * cached-rows probe's face differs across the supported range — dsh
+ * 0.1.5-rc.1 takes `(meta, inheritedEventCount, keys)` while dsh 0.1.7-rc.2
+ * dropped the offset (`(meta, keys)`, the lifecycle identity riding the
+ * header alone) — so {@link servesRows} re-proves the shape per call.
+ */
 interface ProjectionCacheLike {
-  cachedSnapshot(header: SessionHeader, inheritedEventCount: unknown, keys?: readonly string[]): unknown
+  cachedSnapshot(meta: SessionHeader, offsetOrKeys: unknown, keys?: readonly string[]): unknown
   coldSnapshot(header: SessionHeader, inheritedEventCount: unknown, events: readonly SessionEvent[]): unknown
 }
 
@@ -115,6 +121,27 @@ function headerOf(record: unknown): SessionHeader | null {
   return header as unknown as SessionHeader
 }
 
+/** The probe keys: the projection keys the cache must already serve. */
+const PROBE_KEYS = ['contextActivity', 'contextTimeline']
+
+/**
+ * Probe the cache through the face the running generation serves. The older
+ * spelling is tried first and the newer one answers the fallback: on a
+ * 0.1.7-rc.2 cache the 3-arg call binds the branded offset onto `keys`,
+ * where `new Set(0)` throws as soon as a served record is reached — while a
+ * record-less session returns `undefined` without throwing, which is the
+ * correct "not served" either way. On 0.1.5-rc.1 the 3-arg face answers
+ * directly; if it ever throws there, the 2-arg retry degrades to the same
+ * "not served" verdict through the caller's catch.
+ */
+function cachedSnapshotOf(cache: ProjectionCacheLike, header: SessionHeader): unknown {
+  try {
+    return cache.cachedSnapshot(header, SessionLogOffset(0), PROBE_KEYS)
+  } catch {
+    return cache.cachedSnapshot(header, PROBE_KEYS)
+  }
+}
+
 /** Whether the cache already serves BOTH projection rows for this header (nothing to backfill). */
 function servesRows(cache: ProjectionCacheLike, header: SessionHeader): boolean {
   try {
@@ -124,7 +151,7 @@ function servesRows(cache: ProjectionCacheLike, header: SessionHeader): boolean 
     // Both keys must be served: a version-stale row (the timeline's head
     // gained `lastUser` at stateVersion 20) reads as absent here, so the
     // session's stale rows get their one cold refold at startup.
-    const block = asRecord(cache.cachedSnapshot(header, SessionLogOffset(0), ['contextActivity', 'contextTimeline']))
+    const block = asRecord(cachedSnapshotOf(cache, header))
     const values = asRecord(block?.values)
     return values !== null
       && values.contextActivity !== undefined

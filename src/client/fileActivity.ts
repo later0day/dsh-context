@@ -9,7 +9,7 @@
  * call whose arguments aged out of the join names no target and is skipped).
  *
  * Code Mode (PTC) runs nested calls instead: the host folds each settled
- * sub-dispatch (`tool/code-dispatch`) as ops located on the parent run_code
+ * sub-dispatch (`tool/ptc-dispatch`) as ops located on the parent run_code
  * result; the legacy path walks the conversation node's `subCalls` tree to
  * the same effect. A nested dispatch's persisted event carries no result
  * meta (upstream vocabulary), so nested reads keep the limit-estimate form

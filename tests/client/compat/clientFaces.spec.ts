@@ -140,24 +140,22 @@ for (const baseline of BASELINES) {
       const { ctx } = baselineCtx()
       const settings = createContextSettings()
       const View = makeContextView(asClientCtx(ctx), kit, settings)
-      // Without the registry (every line older than the right Sidebar), the
-      // deferred inject never fires: no tab, no body seat, no throw.
+      // Without the registry (a below-baseline gated host, say), the deferred
+      // inject never fires: no tab, no body seat, no throw.
       assert.doesNotThrow(() => {
         watchSidebarContextTab(asClientCtx(ctx), View, kit.t, 'dsh-context')
       })
       assert.deepEqual(ctx.slots.of('sidebar.right.pane.tab'), [])
-      if (baseline.client.sidebar !== undefined) {
-        const definitions: unknown[] = []
-        ctx.setService('sidebarRightTabs', {
-          register: (definition: unknown) => {
-            definitions.push(definition)
-            return () => {}
-          },
-        })
-        assert.equal(definitions.length, 1, 'the generation with the seam gets the tab')
-        assert.equal(ctx.slots.of('sidebar.right.pane.tab').length, 1)
-        assert.equal(ctx.slots.of('sidebar.right.pane.tab.title').length, 1, 'the chip-title seat is registered on this generation')
-      }
+      const definitions: unknown[] = []
+      ctx.setService('sidebarRightTabs', {
+        register: (definition: unknown) => {
+          definitions.push(definition)
+          return () => {}
+        },
+      })
+      assert.equal(definitions.length, 1, 'the generation with the seam gets the tab')
+      assert.equal(ctx.slots.of('sidebar.right.pane.tab').length, 1)
+      assert.equal(ctx.slots.of('sidebar.right.pane.tab.title').length, 1, 'the chip-title seat is registered on this generation')
       ctx.dispose()
     })
 
@@ -165,14 +163,12 @@ for (const baseline of BASELINES) {
       const { ctx } = baselineCtx()
       // No column on this generation: the file names keep their system-open only.
       assert.equal(openResourceVia(asClientCtx(ctx)), undefined, 'no navigation face = no preview opener')
-      if (baseline.client.sidebar !== undefined) {
-        const opened: string[] = []
-        ctx.setService('sidebarRight', { openResource: (address: string) => { opened.push(address) } })
-        const open = openResourceVia(asClientCtx(ctx))
-        assert.ok(open !== undefined, 'the generation with the column serves the opener')
-        assert.equal(open('dsh-resource://file/session/s/a.ts'), true)
-        assert.deepEqual(opened, ['dsh-resource://file/session/s/a.ts'])
-      }
+      const opened: string[] = []
+      ctx.setService('sidebarRight', { openResource: (address: string) => { opened.push(address) } })
+      const open = openResourceVia(asClientCtx(ctx))
+      assert.ok(open !== undefined, 'the generation with the column serves the opener')
+      assert.equal(open('dsh-resource://file/session/s/a.ts'), true)
+      assert.deepEqual(opened, ['dsh-resource://file/session/s/a.ts'])
       ctx.dispose()
     })
 

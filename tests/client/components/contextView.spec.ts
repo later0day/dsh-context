@@ -227,14 +227,14 @@ describe('ContextView — baseline gate', () => {
     const View = makeView(new TestClientCtx())
     const m = await mount(h(View, {
       sessionId: 'sv-gated',
-      useProjection: projectionsFor(timeline({ unsupported: { current: '0.1.1-rc.2', minimum: '0.1.2-rc.1' } })),
+      useProjection: projectionsFor(timeline({ unsupported: { current: '0.1.1-rc.2', minimum: '0.1.5-rc.1' } })),
     }))
     // The modal pops over the tab, naming both versions.
     assert.ok(m.container.querySelector('.lc-modal-backdrop') !== null)
     const card = query(m.container, '.lc-gate-card')
     assert.ok(text(card).includes(DICT_EN['gate.title']))
     assert.ok(text(card).includes('v0.1.1-rc.2'))
-    assert.ok(text(card).includes('v0.1.2-rc.1'))
+    assert.ok(text(card).includes('v0.1.5-rc.1'))
     // The cards keep rendering the fallback's zeroed data behind it.
     assert.ok(text(m.container).includes(DICT_EN['overview.title']))
     assert.ok(text(m.container).includes(DICT_EN['trend.empty']))

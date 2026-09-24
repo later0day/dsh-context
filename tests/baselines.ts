@@ -16,7 +16,7 @@
  */
 
 /** The supported dsh tags, in lockstep with the BASELINES entries below. */
-export type BaselineId = 'v0.1.2-rc.1' | 'v0.1.3-alpha.2' | 'v0.1.5-rc.1' | 'v0.1.7-alpha.2'
+export type BaselineId = 'v0.1.5-rc.1' | 'v0.1.7-rc.2'
 
 /** The harness web half's client faces, as far as the compat probes consume them. */
 export interface ClientSeam {
@@ -45,12 +45,13 @@ export interface ClientSeam {
     registryNeedle: string
   }
   /**
-   * The right Sidebar's tab seam, present only from the generation that ships
-   * it (0.1.5-rc.1+). The plugin's registration is OPTIONAL: a line without
-   * this seam must simply never register the tab, and the matrix asserts the
-   * absence explicitly so a probe can tell "not supported here" from "moved".
+   * The right Sidebar's tab seam — every supported generation ships it
+   * (0.1.5-rc.1 introduced it). The plugin's registration stays an OPTIONAL
+   * deferred inject: a below-baseline host (the gate's fallback composition)
+   * may lack the service entirely, and the client must simply never register
+   * the tab there instead of pending.
    */
-  sidebar?: {
+  sidebar: {
     /** The tab-type registry service's providing source. */
     serviceFile: string
     serviceNeedle: string
@@ -105,11 +106,10 @@ export interface Baseline {
   /**
    * The durable-event families THIS line's log carries that the host fold
    * switches on — the probe asserts every one exists in the tag's
-   * `KNOWN_SESSION_EVENT_TYPES`. The fold reads a UNION of generations
-   * (V0 `assistant/chunk` + `tool/code-dispatch`; V2 `assistant/attempt`; V3
-   * `system/message` + `tool/ptc-dispatch`), and no single line carries them
-   * all, so the list is per baseline by construction; the matrix also asserts
-   * the union covers the fold's whole vocabulary.
+   * `KNOWN_SESSION_EVENT_TYPES`. Both supported generations (V3, V4) carry
+   * the same families, so the lists match; the matrix also asserts the union
+   * covers the fold's whole vocabulary, so a fold case added without a
+   * baseline list fails loudly instead of going unprobed.
    */
   foldEventTypes: readonly string[]
   client: ClientSeam
@@ -156,108 +156,12 @@ export interface Baseline {
 
 export const BASELINES: readonly Baseline[] = [
   {
-    // Session format V0 — the oldest supported line (the plugin's original target).
-    id: 'v0.1.2-rc.1',
-    tag: 'dsh-v0.1.2-rc.1',
-    cordis: '4.0.2',
-    session: '0.1.2-rc.1',
-    foldEventTypes: [
-      'request/header', 'request/context', 'step/start', 'step/end',
-      'user/message', 'tool/call', 'tool/result', 'assistant/message', 'assistant/chunk',
-      'tool/code-dispatch',
-      'plan/mode', 'compaction/summary', 'compaction/prune',
-    ],
-    client: {
-      imageFaceMethod: 'imageUrl',
-      markdownChrome: 'labels',
-      platformModules: [
-        'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
-        '@deepseek-ai/dsh-client-store',
-        '@deepseek-ai/dsh-client-ui-slots',
-        '@deepseek-ai/dsh-client-ui-primitives',
-      ],
-      detailChannel: {
-        hostRpcFile: 'packages/client/connection/src/rpc.ts',
-        hostRpcNeedle: 'HostConnectionRpc',
-        clientRpcFile: 'packages/client/connection/src/client/rpc.ts',
-        clientRpcNeedle: 'call(channel, endpoint, payload',
-        registryFile: 'packages/session/session-projection/src/index.ts',
-        registryNeedle: 'stateOf<',
-      },
-    },
-    settings: {
-      serviceFile: 'packages/settings/settings/src/index.ts',
-      register: true,
-      patternFile: 'packages/settings/settings/src/index.ts',
-      cardSlot: 'settings.plugin.item',
-      cardSlotFiles: ['packages/client/ui-settings-plugins/src/**'],
-      transport: 'settingsScope',
-      transportFile: 'packages/client/ui-settings/src/client/settings-scope.ts',
-      transportPresent: true,
-    },
-    stepGuard: {
-      loopFile: 'packages/core/agent-loop/src/agent.ts',
-      loopNeedles: ["'agent/pre-step'", "append('user/message'"],
-      prependProofFile: 'packages/context/time-context/src/index.ts',
-    },
-  },
-  {
-    // Session format V2: the assistant stream moved INTO the settlement
-    // (`assistant/message.data.stream` / `assistant/attempt.data.stream`), so
-    // `assistant/chunk` no longer exists and the fold's first-token source
-    // changes while every other V0 seam stays.
-    id: 'v0.1.3-alpha.2',
-    tag: 'dsh-v0.1.3-alpha.2',
-    cordis: '4.0.2',
-    session: '0.1.3-alpha.2',
-    foldEventTypes: [
-      'request/header', 'request/context', 'step/start', 'step/end',
-      'user/message', 'tool/call', 'tool/result', 'assistant/message', 'assistant/attempt',
-      'tool/code-dispatch',
-      'plan/mode', 'compaction/summary', 'compaction/prune',
-    ],
-    client: {
-      imageFaceMethod: 'imageUrl',
-      markdownChrome: 'labels',
-      platformModules: [
-        'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
-        '@deepseek-ai/dsh-client-store',
-        '@deepseek-ai/dsh-client-ui-slots',
-        '@deepseek-ai/dsh-client-ui-primitives',
-      ],
-      detailChannel: {
-        hostRpcFile: 'packages/client/connection/src/rpc.ts',
-        hostRpcNeedle: 'HostConnectionRpc',
-        clientRpcFile: 'packages/client/connection/src/client/rpc.ts',
-        clientRpcNeedle: 'call(channel, endpoint, payload',
-        registryFile: 'packages/session/session-projection/src/index.ts',
-        registryNeedle: 'stateOf<',
-      },
-    },
-    settings: {
-      serviceFile: 'packages/settings/settings/src/index.ts',
-      register: true,
-      patternFile: 'packages/settings/settings/src/index.ts',
-      cardSlot: 'settings.plugin.item',
-      cardSlotFiles: ['packages/client/ui-settings-plugins/src/**'],
-      transport: 'settingsScope',
-      transportFile: 'packages/client/ui-settings/src/client/settings-scope.ts',
-      transportPresent: true,
-    },
-    stepGuard: {
-      loopFile: 'packages/core/agent-loop/src/agent.ts',
-      loopNeedles: ["'agent/pre-step'", "append('user/message'"],
-      prependProofFile: 'packages/context/time-context/src/index.ts',
-    },
-  },
-  {
-    // Session format V3: the system prompt became a surface node
-    // (`system/message`) and left `request/header.header.system`; replacement
-    // endpoints renamed to `startSeq`/`endSeq`; the PTC vocabulary renamed to
-    // `tool/ptc-dispatch`; the shell seeds one more platform module. From
-    // 0.1.5-alpha.2 the conversation surface moved under the keyed `main` panel
-    // (`main.conversation`); at 0.1.5-rc.1 the guide entry regained its
-    // optional description line.
+    // The oldest supported line — Session format V3: the system prompt is a
+    // surface node (`system/message`), replacement endpoints spell
+    // `startSeq`/`endSeq`, and the nested PTC vocabulary is
+    // `tool/ptc-dispatch`. From 0.1.5-alpha.2 the conversation surface moved
+    // under the keyed `main` panel (`main.conversation`); at 0.1.5-rc.1 the
+    // guide entry regained its optional description line.
     id: 'v0.1.5-rc.1',
     tag: 'dsh-v0.1.5-rc.1',
     cordis: '4.0.2',
@@ -326,14 +230,23 @@ export const BASELINES: readonly Baseline[] = [
   {
     // Session format V4: the fold's switched families are unchanged (the
     // system prompt still rides `system/message`), but the line retires the
-    // `settings.plugin.item` slot — the plugin's preferences card registers on
-    // the Plugins page's keyed `plugins.bundle.config` slot there, keeping the
-    // old registration for the V0–V3 lines (each slot exists on exactly one
-    // side, so the deferred injects pick their generation and never pend).
-    id: 'v0.1.7-alpha.2',
-    tag: 'dsh-v0.1.7-alpha.2',
+    // `settings.register` host face and the `settings.plugin.item` slot — the
+    // plugin's preferences card registers on the Plugins page's keyed
+    // `plugins.bundle.config` slot there, keeping the old registration for the
+    // V3 line (each slot exists on exactly one side, so the deferred injects
+    // pick their generation and never pend). V4 also rewrites the tool result:
+    // a first-class role-`tool` message with lifted `toolCallId`/`isError`
+    // (the fold reads both spellings). The baseline pins `0.1.7-rc.2`, the
+    // first release of the line with a complete npm dependency closure; rc.2
+    // adds `startsSeries` to the first `request/header` and the
+    // `developer/message` tool-registry events, both inert to the fold.
+    // 0.1.7 enforces plugin dsh-peer compatibility at startup and install
+    // (evaluatePluginCompatibility); this plugin's `>=0.1.5-rc.1` dsh peers
+    // satisfy every supported line under the gate's includePrerelease check.
+    id: 'v0.1.7-rc.2',
+    tag: 'dsh-v0.1.7-rc.2',
     cordis: '4.0.4',
-    session: '0.1.7-alpha.2',
+    session: '0.1.7-rc.2',
     foldEventTypes: [
       'request/header', 'request/context', 'step/start', 'step/end',
       'user/message', 'tool/call', 'tool/result', 'assistant/message', 'assistant/attempt',

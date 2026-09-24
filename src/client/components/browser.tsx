@@ -711,9 +711,8 @@ export function makeContextBrowser(
     // prompt TEXT: the projections carry metadata only, so the selected step's
     // sources are fetched on demand — one seq-anchored history read per open
     // section. The system prompt rides the timeline's own `systems` nodes (a
-    // V3 `system/message`, or the V0/V2 epoch that carried `header.system`),
-    // the tools the header epoch; both map through the same fetcher. Content
-    // caches per seq — history is immutable.
+    // `system/message` event), the tools the header epoch; both map through
+    // the same fetcher. Content caches per seq — history is immutable.
     const fetchHeader = props.fetchHeader
     const headerSeq = view.header !== null ? view.header.seq : null
     const systemSeq = view.system !== null ? view.system.seq : null

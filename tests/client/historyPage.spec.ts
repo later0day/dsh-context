@@ -355,7 +355,6 @@ describe('makeHeaderFetcher — the lazy epoch content read', () => {
       type: 'request/header', seq: 5, time: 5,
       data: {
         header: {
-          system: 'You are an agent.',
           tools: [
             { name: 'bash', description: 'run a command', parameters: { type: 'object' } },
             { name: 'mcp__gh__issue', description: '', plugin: 'mcp:github' },
@@ -369,7 +368,7 @@ describe('makeHeaderFetcher — the lazy epoch content read', () => {
     const fetch = makeHeaderFetcher('sess')!
     const content = await fetch(5)
     assert.deepEqual(calls, [{ address: { kind: 'session', sessionId: 'sess' }, throughSeq: 5, beforeSeq: 6 }])
-    assert.equal(content?.system, 'You are an agent.')
+    assert.equal(content?.system, undefined, 'a header epoch never carries prompt text (it lives in system/message)')
     assert.equal(content?.tools.length, 4)
     assert.equal(content?.tools[0]?.name, 'bash')
     assert.equal(content?.tools[0]?.description, 'run a command')
@@ -393,17 +392,21 @@ describe('makeHeaderFetcher — the lazy epoch content read', () => {
   })
 
   test('a page holding OLDER epochs caches them for free alongside the picked one', async () => {
-    const older = ev('request/header', 1, { header: { system: 'OLD', tools: [] } })
-    const picked = ev('request/header', 5, { header: { system: 'NEW', tools: [] } })
+    // Prompt text comes from system/message epochs; header epochs are tools-only.
+    const olderSys = ev('system/message', 1, { message: { content: [{ type: 'text', text: 'OLD' }] } })
+    const older = ev('request/header', 2, { header: { tools: [] } })
+    const picked = ev('request/header', 5, { header: { tools: [] } })
     const calls: unknown[] = []
-    const ctx = armHistoryFaces({ session: pageFace([older, picked], calls) })
+    const ctx = armHistoryFaces({ session: pageFace([olderSys, older, picked], calls) })
     const fetch = makeHeaderFetcher('s')!
     const c5 = await fetch(5)
-    assert.equal(c5?.system, 'NEW')
+    assert.deepEqual(c5, { tools: [] })
     assert.deepEqual(calls, [{ address: { kind: 'session', sessionId: 's' }, throughSeq: 5, beforeSeq: 6 }])
-    // The older epoch resolves from the cache — no second page read.
+    // The older epochs resolve from the cache — no second page read.
+    const c2 = await fetch(2)
+    assert.deepEqual(c2, { tools: [] })
     const c1 = await fetch(1)
-    assert.equal(c1?.system, 'OLD')
+    assert.equal(c1?.system, 'OLD', 'a system/message epoch maps to its prompt text')
     assert.equal(calls.length, 1)
     ctx.dispose()
   })
