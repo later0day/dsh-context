@@ -13,7 +13,7 @@ import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test, vi } from 'vitest'
 import { BASELINES } from '../../baselines'
-import { conversationNodesOf, imageLoaderOf, openResourceVia } from '../../../src/client/services'
+import { conversationNodesOf, imageLoaderOf, openResourceVia, openSessionVia } from '../../../src/client/services'
 import type { SessionStandardProps } from '../../../src/client/services'
 import { makeContentFetcher, watchHistoryFaces } from '../../../src/client/historyPage'
 import { makeRichText } from '../../../src/client/components/richText'
@@ -103,6 +103,23 @@ for (const baseline of BASELINES) {
       assert.equal(calls.page.length, 1)
       ctx.dispose()
       assert.equal(makeContentFetcher('s-face'), undefined, 'the unloaded slot leaves no face behind')
+    })
+
+    test('the session jump rides this generation\'s navigation seam (issue #90)', () => {
+      // The composition this line actually serves: the view-owner face always
+      // (the sidebar row click's own verb), the retired sessions-service verb
+      // only where the line still declares it — on the V4+ line the service
+      // carries NO selection at all, the exact composition issue #90 died on.
+      const { ctx } = baselineCtx()
+      const nav = baseline.client.sessionNav
+      const jumped: string[] = []
+      ctx.setService('uiWorkspace', { openSession: (id: string) => { jumped.push(id) } })
+      ctx.setService('sessions', nav.sessionsOpen
+        ? { open: (id: string) => { jumped.push(`legacy:${id}`) } }
+        : { list: { getSnapshot: () => ({}) } })
+      openSessionVia(asClientCtx(ctx), 's-jump')
+      assert.deepEqual(jumped, ['s-jump'], 'the jump landed through the view owner')
+      ctx.dispose()
     })
 
     test('a failed history rpc rejects (retryable), never resolving to a fake absence', async () => {

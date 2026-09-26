@@ -26,16 +26,17 @@ import { asRecord, contextBreakdownOf, contextPressureOf, numOf, timelineOf, tok
 
 /**
  * The outward `ctx.sessions` client face, minimally re-typed for the card:
- * the list snapshot feed, session navigation, and direct-child catalog
- * refresh. The real interface lives in the harness runtime; absence of any
- * member degrades the corresponding feature (no live tree / no navigation).
+ * the list snapshot feed and direct-child catalog refresh. The real
+ * interface lives in the harness runtime; absence of any member degrades the
+ * corresponding feature (no live tree). Session navigation is NOT on this
+ * face (the 0.1.6 selection refactor moved it to the view owner) — the card
+ * jumps through services.ts's {@link openSessionVia}.
  */
 export interface SessionsFaceLike {
   list?: {
     getSnapshot(): unknown
     subscribe(fn: () => void): () => void
   }
-  open?(id: string): void
   refreshSubagents?(parentSessionId: string): Promise<unknown>
 }
 
@@ -618,16 +619,6 @@ export function ringSegments(parts: PartsPart[], pct: number | null, radius: num
     segs.push({ key: 'free', color: '', len: circumference - offset, offset, free: true })
   }
   return segs
-}
-
-/** Session-switch navigation, fail-soft: a stale row (list rebuilt between snapshot and click) loses its open() race and is ignored. */
-export function openAgentSession(face: SessionsFaceLike | null, id: string): void {
-  if (face === null || typeof face.open !== 'function') return
-  try {
-    face.open(id)
-  } catch {
-    // The row left the list between render and click — nowhere to go.
-  }
 }
 
 /** Narrow `ctx.get('sessions')` to the card's face (null = harness without the outward sessions service). */

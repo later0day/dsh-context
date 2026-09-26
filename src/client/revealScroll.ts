@@ -2,8 +2,9 @@
  * Scroll an element's nearest scrollable ancestor so the element tops that
  * scrollport. The jump's landing reveal needs this host-agnostic: the
  * conversation tab scrolls the shared `[data-conversation-scroll]` container
- * while the right Sidebar scrolls dockkit's pane body (a CSS-module class,
- * no stable attribute of its own), so the walk takes whichever ancestor
+ * while the right Sidebar's scroller differs per generation (dockkit's pane
+ * body — a CSS-module class with no stable attribute — on the 0.1.5 line, the
+ * tab root itself on the 0.1.7 line), so the walk takes whichever ancestor
  * actually scrolls — the rect delta lands the anchor flush regardless of the
  * container's current position. `document.body` ends the walk: the page
  * itself never scrolls. False — never a throw — when no ancestor scrolls (the

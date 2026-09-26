@@ -2,8 +2,7 @@
 // network card: row/identity/timing narrowing, per-node stat folding from
 // projection values, forest building over the session-list snapshot
 // (lineage walk, sibling order, cap/overflow, cycles, self-stat merge),
-// tidy layout, donut geometry, navigation and face narrowing, duration
-// formatting.
+// tidy layout, donut geometry, face narrowing, duration formatting.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -19,11 +18,9 @@ import {
   ringSegments,
   fmtDurationCompact,
   layoutForest,
-  openAgentSession,
   sessionsFaceOf,
   subagentCostFoldOf,
   type AgentForest,
-  type SessionsFaceLike,
 } from '../../src/client/agentTree'
 import { mergeCostUsage } from '../../src/client/cost'
 import type { ContextTimeline, SessionCostUsage } from '../../src/shared/types'
@@ -732,23 +729,6 @@ describe('familyHue', () => {
   })
 })
 
-describe('openAgentSession', () => {
-  test('opens through the face and swallows the stale-row race', () => {
-    const opened: string[] = []
-    const face: SessionsFaceLike = { open: id => opened.push(id) }
-    openAgentSession(face, 's1')
-    assert.deepEqual(opened, ['s1'])
-    openAgentSession(null, 's1')
-    openAgentSession({}, 's1')
-    openAgentSession({
-      open: () => {
-        throw new Error('unknown session')
-      },
-    }, 's1')
-    assert.deepEqual(opened, ['s1'])
-  })
-})
-
 describe('sessionsFaceOf', () => {
   test('requires the outward service and its list feed', () => {
     assert.equal(sessionsFaceOf({ get: () => undefined }), null)
@@ -757,10 +737,9 @@ describe('sessionsFaceOf', () => {
     assert.equal(sessionsFaceOf({ get: () => ({ list: {} }) }), null)
     assert.equal(sessionsFaceOf({ get: () => ({ list: { getSnapshot: () => ({}) } }) }), null)
     const face = sessionsFaceOf({
-      get: () => ({ list: { getSnapshot: () => ({}), subscribe: () => () => {} }, open: () => {} }),
+      get: () => ({ list: { getSnapshot: () => ({}), subscribe: () => () => {} } }),
     })
     assert.ok(face !== null)
-    assert.equal(typeof face.open, 'function')
   })
 })
 

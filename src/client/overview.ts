@@ -476,19 +476,6 @@ export function aggregateDays(rows: readonly OverviewRow[]): Record<string, DayT
 // ---- presentation helpers --------------------------------------------------
 
 /**
- * Jump to one session: the harness's own selection verb (`sessions.open`,
- * the sidebar row click's mechanism). The face is re-proved per call and a
- * hostile or absent service swallows silently — the panel still closes, so
- * the gesture never dead-ends on an error.
- */
-export function openSession(ctx: ClientCtx, id: string): void {
-  try {
-    const sessions = ctx.get('sessions') as SessionsFace | undefined
-    if (sessions !== undefined && typeof sessions.open === 'function') sessions.open(id)
-  } catch { /* the jump is best-effort; the panel closes regardless */ }
-}
-
-/**
  * Re-pull the session-list baseline so host-side projection backfills
  * (host/backfill.ts) reach a long-connected browser. Fire-and-forget: the
  * verb is re-proved and every failure swallows — the panel renders off the

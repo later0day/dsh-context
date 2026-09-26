@@ -185,6 +185,23 @@ describe.skipIf(reasons.length > 0)('compat matrix — real dsh sources per base
       }
     })
 
+    test('client: the session-jump seam of this generation (issue #90)', () => {
+      // The view owner's navigation verb (the sidebar row click's own), with
+      // the signature this line spells; and the retired sessions-service
+      // `open(id)` selection verb, declared exactly where the line still has it.
+      const nav = baseline.client.sessionNav
+      assert.equal(
+        staging.dshHasString(baseline.tag, nav.workspaceNeedle, nav.workspaceFile),
+        true,
+        'the view-owner navigation verb (uiWorkspace.openSession)',
+      )
+      assert.equal(
+        staging.dshHasString(baseline.tag, 'open(id: SessionId): void', nav.sessionsFile),
+        nav.sessionsOpen,
+        'the retired sessions-service selection verb',
+      )
+    })
+
     test('client: MarkdownText chrome prop', () => {
       assert.equal(staging.dshHasString(baseline.tag, baseline.client.markdownChrome, 'packages/client/ui-primitives/src/markdown/MarkdownText.tsx'), true)
     })

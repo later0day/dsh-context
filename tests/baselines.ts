@@ -45,6 +45,24 @@ export interface ClientSeam {
     registryNeedle: string
   }
   /**
+   * The session-jump seam (the Context Dashboard's session cards and the
+   * Agent network card's nodes — issue #90). Every supported line selects a
+   * session through the view owner's `uiWorkspace.openSession` (the sidebar
+   * row click's own verb), but the 0.1.6 selection refactor re-spelled the
+   * parameter (`sessionId` → `target: SessionTarget`) and retired the
+   * sessions service's own `open(id)` spelling — present through V3, absent
+   * on V4+. Both faces are probed presence-as-declared so a future move
+   * names the seam instead of silently dead-ending the jump.
+   */
+  sessionNav: {
+    /** The view-owner navigation verb's source, plus this line's signature spelling. */
+    workspaceFile: string
+    workspaceNeedle: string
+    /** The sessions contract source, plus whether this line still declares `open(id: SessionId)`. */
+    sessionsFile: string
+    sessionsOpen: boolean
+  }
+  /**
    * The right Sidebar's tab seam — every supported generation ships it
    * (0.1.5-rc.1 introduced it). The plugin's registration stays an OPTIONAL
    * deferred inject: a below-baseline host (the gate's fallback composition)
@@ -210,6 +228,12 @@ export const BASELINES: readonly Baseline[] = [
           ],
         },
       },
+      sessionNav: {
+        workspaceFile: 'packages/client/ui-workspace/src/client/navigation.ts',
+        workspaceNeedle: 'openSession(sessionId: SessionId): void',
+        sessionsFile: 'packages/api/session-controller/src/client/contract/sessions.ts',
+        sessionsOpen: true,
+      },
     },
     settings: {
       serviceFile: 'packages/settings/settings/src/index.ts',
@@ -290,6 +314,12 @@ export const BASELINES: readonly Baseline[] = [
             'readonly icon?: ComponentType<IconProps>',
           ],
         },
+      },
+      sessionNav: {
+        workspaceFile: 'packages/client/ui-workspace/src/client/navigation.ts',
+        workspaceNeedle: 'openSession(target: SessionTarget): void',
+        sessionsFile: 'packages/api/session-controller/src/client/contract/sessions.ts',
+        sessionsOpen: false,
       },
     },
     settings: {

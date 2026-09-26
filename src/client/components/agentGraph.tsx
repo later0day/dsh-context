@@ -21,7 +21,7 @@ import { CATS } from '../categories'
 import type { AgentHeads } from '../agentHeads'
 import { makeAgentHeads, useSessionsSnapshot } from '../agentHeads'
 import { containHorizontalOverscroll } from '../overscroll'
-import type { ClientCtx } from '../services'
+import { openSessionVia, type ClientCtx } from '../services'
 import type { ViewKit } from '../viewkit'
 import type { ContextTimeline } from '../../shared/types'
 import type { AgentNode, AgentSelfStats } from '../agentTree'
@@ -31,7 +31,6 @@ import {
   agentForestOf,
   fmtDurationCompact,
   layoutForest,
-  openAgentSession,
   ringSegments,
   sessionsFaceOf,
 } from '../agentTree'
@@ -149,7 +148,7 @@ export function makeAgentGraph(
 
     const open = (id: string): void => {
       if (id === current.id) return
-      openAgentSession(face, id)
+      openSessionVia(ctx, id)
     }
     const keyOpen = (id: string) => (ev: KeyboardEvent) => {
       if (ev.key !== 'Enter' && ev.key !== ' ') return

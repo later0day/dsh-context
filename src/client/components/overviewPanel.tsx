@@ -11,7 +11,7 @@
  * column (search, group chips, and the card grid); the heatmap keeps its own
  * fixed 8-week window and PINs the list to a picked day (the panel's
  * drill-down gesture). A session card click jumps to that session through
- * the harness's own `sessions.open` and closes the panel.
+ * the harness's own selection verb (openSessionVia) and closes the panel.
  */
 
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactElement } from 'react'
@@ -19,14 +19,14 @@ import { estimateSessionCost, formatCost, type CostCurrency, type ModelPrices } 
 import { fmt } from '../format'
 import { useModelPrices } from '../modelPrices'
 import {
-  aggregateDays, filterRows, groupCountsOf, inGroup, kpisOf, openSession,
+  aggregateDays, filterRows, groupCountsOf, inGroup, kpisOf,
   pageOf, refreshSessions, requestActivityBackfill, rowsOfSnapshot,
   sessionGroupsOf, sessionsSnapshotOf, sortRows,
   UNGROUPED_KEY, workspacesSnapshotOf,
   type OverviewRange, type OverviewRow, type OverviewSort,
 } from '../overview'
 import { overviewStore } from '../overviewStore'
-import type { ClientCtx } from '../services'
+import { openSessionVia, type ClientCtx } from '../services'
 import { openPluginSettings } from '../settingsJump'
 import type { ViewKit } from '../viewkit'
 import { makeBalanceCapsule } from './balanceCapsule'
@@ -120,7 +120,7 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
     const kpi = kpisOf(ranged, allRows.length, prices, currency)
     const days = aggregateDays(allRows)
     const openOne = (id: string): void => {
-      openSession(ctx, id)
+      openSessionVia(ctx, id)
       overviewStore.set(false)
     }
 

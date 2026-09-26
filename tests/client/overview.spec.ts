@@ -1,6 +1,6 @@
 // The Context Dashboard's data layer (src/client/overview.ts): the hostile-
-// snapshot row join, filters, sorts, aggregations, relative time, and the
-// session-open verb — every guard branch with hostile fixtures.
+// snapshot row join, filters, sorts, aggregations, and relative time — every
+// guard branch with hostile fixtures.
 
 import assert from 'node:assert/strict'
 import { describe, test, vi } from 'vitest'
@@ -12,7 +12,6 @@ import {
   groupCountsOf,
   inGroup,
   kpisOf,
-  openSession,
   pageOf,
   projectOf,
   rangeStartOf,
@@ -432,30 +431,6 @@ describe('relativeTime', () => {
   test('future and invalid stamps read as just-now (clock skew is not an error)', () => {
     assert.equal(relativeTime(t, now + 60_000, now), 'ov.time.now')
     assert.equal(relativeTime(t, Number.NaN, now), 'ov.time.now')
-  })
-})
-
-describe('openSession', () => {
-  function ctxWith(services: Record<string, unknown>): ClientCtx {
-    return { get: (name: string) => services[name] } as unknown as ClientCtx
-  }
-
-  test('dispatches through the harness selection verb', () => {
-    const opened: string[] = []
-    openSession(ctxWith({ sessions: { open: (id: string) => { opened.push(id) } } }), 's1')
-    assert.deepEqual(opened, ['s1'])
-  })
-
-  test('absent or verb-less faces swallow silently', () => {
-    openSession(ctxWith({}), 's1')
-    openSession(ctxWith({ sessions: null }), 's1')
-    openSession(ctxWith({ sessions: {} }), 's1')
-    openSession(ctxWith({ sessions: { open: 7 } }), 's1')
-  })
-
-  test('a hostile face never throws into the click handler', () => {
-    openSession(ctxWith({ sessions: { open: () => { throw new Error('boom') } } }), 's1')
-    openSession({ get: () => { throw new Error('boom') } } as unknown as ClientCtx, 's1')
   })
 })
 
