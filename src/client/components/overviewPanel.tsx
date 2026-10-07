@@ -1,21 +1,41 @@
 /**
- * The Context Dashboard panel — the cross-session insight surface opened
- * from the sidebar foot (overviewButton.tsx). Rendered from the frame-wide
- * `shell.overlay` slot behind the module store's flag; data rides the
- * root-scope `useSessions` standard kit (every list row's host-cached
- * projection values), so the panel draws every session's insight without
- * opening one log.
+ * The Context Insights page — the plugin's first-level panel, opened from
+ * the sidebar's panel list (insightPage.ts), a sibling of the shipped
+ * Plugins and Automation tasks pages. Registered on the layout's keyed
+ * `main` slot, so the shell's center column mounts it when the panel is
+ * selected and unmounts it on leave — the page's mount IS its open, and its
+ * data rides the root-scope `useSessions`/`useWorkspaces` standard kit
+ * (every list row's host-cached projection values), so the page draws every
+ * session's insight without opening one log.
  *
- * The body is a 3:7 column pair: the insight column (the KPI 2×3 block over
- * the activity heatmap, then the preferences entry row) beside the session
- * column (search, group chips, and the card grid); the heatmap keeps its own
- * fixed 8-week window and PINs the list to a picked day (the panel's
- * drill-down gesture). A session card click jumps to that session through
- * the harness's own selection verb (openSessionVia) and closes the panel.
+ * The chrome keeps the shipped first-level pages' discipline — one scroll
+ * region that opens with the page heading, the title beside the range group
+ * (and the DeepSeek balance capsule when it serves) — but the content column
+ * spans the pane's full width rather than the shipped pages' centered 960px
+ * frame: the dashboard's grids and legends adapt to the pane, so the width
+ * reads as more dashboard, not wider lines. The page element is the `lc-ov`
+ * query container, so every fold keys off the pane's own width. Hover tips
+ * portal to <body> (hoverTip.tsx) because the container would otherwise
+ * capture their fixed positioning.
+ *
+ * The body's first row is a 1:1 column pair: the KPI metrics band (the
+ * range's six figures — sessions, billed tokens, cost, cache hit, tool
+ * calls, active time — three per row) beside the last-7-days usage chart
+ * (each day's billed tokens and estimated cost as a bar pair, folded off the
+ * merged daily ledger). Below it, the aggregate stats row folds the same
+ * range's sessions into the two donut cards the per-session Context tab
+ * opens with — Token Stats (the composition-split billed volume) and Timing
+ * Stats (the summed totals). The body is then a 3:7 column pair: the
+ * insight column (the activity heatmap, then the preferences entry row)
+ * beside the session column (search, group chips, and the card grid); the
+ * heatmap keeps its own fixed 8-week window and PINs the list to a picked
+ * day (the page's drill-down gesture). A session card click jumps to that
+ * session through the harness's own selection verb (openSessionVia), whose
+ * navigation returns the center column to the conversation.
  */
 
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactElement } from 'react'
-import { estimateSessionCost, formatCost, type CostCurrency, type ModelPrices } from '../cost'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { estimateSessionCost, formatCost, type CostCurrency, type ModelBook } from '../cost'
 import { fmt } from '../format'
 import { useModelPrices } from '../modelPrices'
 import {
@@ -25,15 +45,17 @@ import {
   UNGROUPED_KEY, workspacesSnapshotOf,
   type OverviewRange, type OverviewRow, type OverviewSort,
 } from '../overview'
-import { overviewStore } from '../overviewStore'
 import { openSessionVia, type ClientCtx } from '../services'
 import { openPluginSettings } from '../settingsJump'
 import type { ViewKit } from '../viewkit'
 import { makeBalanceCapsule } from './balanceCapsule'
 import { makeErrorBoundary } from './errorBoundary'
-import { useEscapeClose } from './escapeClose'
 import { makeHeatmap, todayKey, type HeatMetric } from './heatmap'
-import { ContextIcon } from '../icon'
+import { makeDonut } from './donut'
+import { useHoverTip } from './hoverTip'
+import { makeOverviewTokens } from './overviewTokens'
+import { makeOverviewUsage } from './overviewUsage'
+import { makeStatsTiming } from './statsTiming'
 import { makeOverviewCard } from './overviewCard'
 import { IconSettings } from '../primitives'
 
@@ -54,6 +76,13 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
   const Heatmap = makeHeatmap(kit)
   const OverviewCard = makeOverviewCard(kit)
   const BalanceCapsule = makeBalanceCapsule(ctx, kit)
+  // The first row's aggregate pair: the range's sessions folded into the two
+  // donut cards the per-session Context tab opens with (Timing Stats reused
+  // verbatim over the summed totals).
+  const Donut = makeDonut(kit)
+  const OverviewTokens = makeOverviewTokens(kit, Donut)
+  const StatsTiming = makeStatsTiming(kit, Donut)
+  const OverviewUsage = makeOverviewUsage(kit)
   const ErrorBoundary = makeErrorBoundary(t)
 
   /** The display currency follows the active locale (zh → CNY), read per render — the slot outlet re-renders on a locale switch. */
@@ -64,8 +93,7 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
   }
 
   function OverviewBody(props: OverviewPanelProps): ReactElement | null {
-    const open = useSyncExternalStore(overviewStore.subscribe, overviewStore.getSnapshot)
-    const { prices } = useModelPrices()
+    const { book } = useModelPrices()
     // The hook-level standard-kit reads (unconditional; guarded inside).
     const snapshot = sessionsSnapshotOf(props)
     const wsSnapshot = workspacesSnapshotOf(props)
@@ -76,26 +104,21 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
     const [sort, setSort] = useState<OverviewSort>('recent')
     const [metric, setMetric] = useState<HeatMetric>('steps')
     const [page, setPage] = useState(0)
-    const close = (): void => { overviewStore.set(false) }
-    useEscapeClose(open, close)
+    const { zoneProps, bubble } = useHoverTip()
 
     const rows = useMemo(() => rowsOfSnapshot(snapshot, wsSnapshot), [snapshot, wsSnapshot])
     const groups = useMemo(() => sessionGroupsOf(wsSnapshot), [wsSnapshot])
 
-    // On open, summon the host's projection warm-up (this panel is the
-    // rows' only reader — one pass per host process) and re-pull the list
-    // once, so backfilled rows reach a long-connected page.
+    // On mount (the panel's open): summon the host's projection warm-up (this
+    // page is the rows' only reader — one pass per host process) and re-pull
+    // the list once, so backfilled rows reach a long-connected page.
     useEffect(() => {
-      if (open) {
-        requestActivityBackfill()
-        refreshSessions(ctx)
-      }
-    }, [open])
+      requestActivityBackfill()
+      refreshSessions(ctx)
+    }, [])
 
     // Any filter change re-anchors the pager at the first page.
     useEffect(() => { setPage(0) }, [range, day, query, group, sort])
-
-    if (!open) return null
 
     const currency = activeCurrency()
     const now = Date.now()
@@ -117,193 +140,213 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
       sort,
     )
     const paged = pageOf(visible, page)
-    const kpi = kpisOf(ranged, allRows.length, prices, currency)
-    const days = aggregateDays(allRows)
+    const kpi = kpisOf(ranged, allRows.length, book, currency)
+    const days = aggregateDays(allRows, book, currency)
     const openOne = (id: string): void => {
+      // The view owner's verb navigates the center column back to the
+      // conversation itself (selectPanel(null)), so the page needs no close.
       openSessionVia(ctx, id)
-      overviewStore.set(false)
     }
 
     return (
-      <div className="lc-ov-backdrop" onClick={close}>
-        <div className="lc-ov-card" onClick={(ev) => { ev.stopPropagation() }}>
-          <div className="lc-ov-head">
-            <ContextIcon size={18} className="lc-ov-head-icon" />
-            <span className="lc-ov-title">{t('ov.title')}</span>
-            {/* The DeepSeek platform balance (client/balance.ts): renders nothing
-                until a live figure lands, so the header row never reflows for it. */}
-            <BalanceCapsule />
-            <div className="lc-gran lc-ov-range" role="group" aria-label={t('ov.range.label')}>
-              {RANGES.map(r => (
-                <button
-                  key={r}
-                  type="button"
-                  className={'lc-gran-btn' + (range === r ? ' lc-gran-on' : '')}
-                  onClick={() => { setRange(r) }}
-                >{t('ov.range.' + r)}</button>
-              ))}
+      <section className="lc-ov-page" aria-label={t('ov.title')} {...zoneProps}>
+        {bubble}
+        {/* The page's one scroll region: the shipped first-level pages' own
+            discipline — heading, stats, and body scroll as one. */}
+        <div className="lc-ov-pagescroll">
+          <div className="lc-ov-pagecontent">
+            <div className="lc-ov-pagehead">
+              <h1 className="lc-ov-pagetitle">{t('ov.title')}</h1>
+              {/* The DeepSeek platform balance (client/balance.ts): renders nothing
+                  until a live figure lands, so the heading row never reflows for it. */}
+              <BalanceCapsule />
+              <div className="lc-gran lc-ov-range" role="group" aria-label={t('ov.range.label')}>
+                {RANGES.map(r => (
+                  <button
+                    key={r}
+                    type="button"
+                    className={'lc-gran-btn' + (range === r ? ' lc-gran-on' : '')}
+                    onClick={() => { setRange(r) }}
+                  >{t('ov.range.' + r)}</button>
+                ))}
+              </div>
             </div>
-            <button type="button" className="lc-modal-close hover:text-(--dsw-alias-label-primary) hover:bg-(--dsw-alias-bg-layer-2)" aria-label={t('cmd.close')} onClick={close}>×</button>
-          </div>
 
-          {rows === null ? (
-            <div className="lc-empty">{t('ov.unavailable')}</div>
-          ) : (
-            <div className="lc-ov-body">
-              <div className="lc-ov-left">
-                <div className="lc-ov-kpis">
-                  <div className="lc-stat lc-ov-kpi">
-                    <span className="lc-stat-label">{t('ov.kpi.sessions')}</span>
-                    <span className="lc-stat-value">{kpi.sessions}</span>
-                    <span className="lc-stat-sub">{t('ov.kpi.ofTotal', { n: kpi.listed })}</span>
+            {rows === null ? (
+              <div className="lc-empty">{t('ov.unavailable')}</div>
+            ) : (
+              <>
+                {/* The first row: a 1:1 column pair — the KPI metrics band
+                    (the range's six figures, three per row) beside the
+                    last-7-days usage chart (per-day tokens + cost bars off
+                    the merged ledger; the range selector does not scope it). */}
+                <div className="lc-ov-first">
+                  <div className="lc-ov-kpis">
+                    <div className="lc-stat lc-ov-kpi">
+                      <span className="lc-stat-label">{t('ov.kpi.sessions')}</span>
+                      <span className="lc-stat-value">{kpi.sessions}</span>
+                      <span className="lc-stat-sub">{t('ov.kpi.ofTotal', { n: kpi.listed })}</span>
+                    </div>
+                    <div className="lc-stat lc-ov-kpi">
+                      <span className="lc-stat-label">{t('ov.kpi.tokens')}</span>
+                      <span className="lc-stat-value">{fmt(kpi.tokens)}</span>
+                      <span className="lc-stat-sub">{t('stats.turns')} {fmt(kpi.turns)}</span>
+                    </div>
+                    <div className="lc-stat lc-ov-kpi">
+                      <span className="lc-stat-label">{t('stats.cost')}</span>
+                      <span className="lc-stat-value">{kpi.cost === null ? '—' : formatCost(kpi.cost, currency)}</span>
+                      <span className="lc-stat-sub">{t('ov.kpi.pricedSub', { n: kpi.costSessions, total: kpi.sessions })}</span>
+                    </div>
+                    <div className="lc-stat lc-ov-kpi">
+                      <span className="lc-stat-label">{t('stats.cacheHit')}</span>
+                      <span className="lc-stat-value">{kpi.cacheHit === null ? '—' : kpi.cacheHit + '%'}</span>
+                      <span className="lc-stat-sub">{t('ov.kpi.sessionsSub', { n: kpi.usageSessions })}</span>
+                    </div>
+                    <div className="lc-stat lc-ov-kpi">
+                      <span className="lc-stat-label">{t('stats.toolCalls')}</span>
+                      <span className="lc-stat-value">{fmt(kpi.toolCalls)}</span>
+                      <span className="lc-stat-sub">{t('ov.kpi.toolSub', { dur: fmtDuration(kpi.toolsMs) })}</span>
+                    </div>
+                    <div className="lc-stat lc-ov-kpi">
+                      <span className="lc-stat-label">{t('timing.total')}</span>
+                      <span className="lc-stat-value">{fmtDuration(kpi.wallMs)}</span>
+                      <span className="lc-stat-sub">{t('ov.kpi.wallSub', { n: fmt(kpi.calls) })}</span>
+                    </div>
                   </div>
-                  <div className="lc-stat lc-ov-kpi">
-                    <span className="lc-stat-label">{t('ov.kpi.tokens')}</span>
-                    <span className="lc-stat-value">{fmt(kpi.tokens)}</span>
-                    <span className="lc-stat-sub">{t('stats.turns')} {fmt(kpi.turns)}</span>
-                  </div>
-                  <div className="lc-stat lc-ov-kpi">
-                    <span className="lc-stat-label">{t('stats.cost')}</span>
-                    <span className="lc-stat-value">{kpi.cost === null ? '—' : formatCost(kpi.cost, currency)}</span>
-                    <span className="lc-stat-sub">{t('ov.kpi.sessionsSub', { n: kpi.costSessions })}</span>
-                  </div>
-                  <div className="lc-stat lc-ov-kpi">
-                    <span className="lc-stat-label">{t('stats.cacheHit')}</span>
-                    <span className="lc-stat-value">{kpi.cacheHit === null ? '—' : kpi.cacheHit + '%'}</span>
-                    <span className="lc-stat-sub">{t('ov.kpi.sessionsSub', { n: kpi.usageSessions })}</span>
-                  </div>
-                  <div className="lc-stat lc-ov-kpi">
-                    <span className="lc-stat-label">{t('stats.toolCalls')}</span>
-                    <span className="lc-stat-value">{fmt(kpi.toolCalls)}</span>
-                    <span className="lc-stat-sub">{t('ov.kpi.toolSub', { dur: fmtDuration(kpi.toolsMs) })}</span>
-                  </div>
-                  <div className="lc-stat lc-ov-kpi">
-                    <span className="lc-stat-label">{t('timing.total')}</span>
-                    <span className="lc-stat-value">{fmtDuration(kpi.wallMs)}</span>
-                    <span className="lc-stat-sub">{t('ov.kpi.wallSub', { n: fmt(kpi.calls) })}</span>
-                  </div>
+                  <OverviewUsage days={days} currency={currency} today={todayKey()} />
                 </div>
-                <div className="lc-card lc-ov-heat-card">
-                  <div className="lc-card-title">
-                    <span className="lc-card-title-text">{t('ov.heat.title')}</span>
-                    {/* One wrapper so the right side pushes with a single auto
-                        margin (two bare auto-margin siblings would split the
-                        free space and drift apart). */}
-                    <span className="lc-heat-ctl">
-                      <span className="lc-card-sub">{t('ov.heat.sub')}</span>
-                      <div className="lc-gran" role="group" aria-label={t('ov.heat.metric')}>
-                        {METRICS.map(m => (
+                {/* The aggregate stats row: the range's Token Stats and Timing
+                    Stats, folded over the KPI band's own scope (the composition
+                    split and summed totals off kpisOf). */}
+                <div className="lc-ov-stats">
+                  <OverviewTokens tokens={kpi.tokenParts} />
+                  <StatsTiming timing={kpi.timing} />
+                </div>
+                <div className="lc-ov-body">
+                  <div className="lc-ov-left">
+                    <div className="lc-card lc-ov-heat-card">
+                      <div className="lc-card-title">
+                        <span className="lc-card-title-text">{t('ov.heat.title')}</span>
+                        {/* One wrapper so the right side pushes with a single auto
+                            margin (two bare auto-margin siblings would split the
+                            free space and drift apart). */}
+                        <span className="lc-heat-ctl">
+                          <span className="lc-card-sub">{t('ov.heat.sub')}</span>
+                          <div className="lc-gran" role="group" aria-label={t('ov.heat.metric')}>
+                            {METRICS.map(m => (
+                              <button
+                                key={m}
+                                type="button"
+                                className={'lc-gran-btn' + (metric === m ? ' lc-gran-on' : '')}
+                                onClick={() => { setMetric(m) }}
+                              >{t('ov.heat.metric.' + m)}</button>
+                            ))}
+                          </div>
+                        </span>
+                      </div>
+                      <Heatmap days={days} metric={metric} selected={day} onSelect={setDay} today={todayKey()} />
+                    </div>
+                    {/* The settings entry: one quiet row under the activity card, the
+                        same best-effort preferences jump the Context tab's plugin-info
+                        row rides. The jump selects the Plugins panel, which unmounts
+                        this page on its own. */}
+                    <button type="button" className="lc-ov-settings" onClick={() => { openPluginSettings() }}>
+                      <span className="lc-ov-settings-label"><IconSettings size={14} />{t('plugin.settings')}</span>
+                      <span className="lc-ov-settings-hint">{t('plugin.settingsOpen')}</span>
+                    </button>
+                  </div>
+
+                  <div className="lc-ov-right">
+                    <div className="lc-ov-list-head">
+                      <span className="lc-ov-list-title">{t('ov.list.title')}</span>
+                      <span className="lc-ov-list-count">{visible.length}</span>
+                      {day !== null && (
+                        <button type="button" className="lc-ov-day-chip" title={t('ov.list.dayClear')} onClick={() => { setDay(null) }}>
+                          {t('ov.list.dayFilter', { day })} ×
+                        </button>
+                      )}
+                      <input
+                        className="lc-ov-search"
+                        type="search"
+                        value={query}
+                        placeholder={t('ov.list.search')}
+                        aria-label={t('ov.list.search')}
+                        onChange={(ev) => { setQuery(ev.target.value) }}
+                      />
+                      <div className="lc-gran" role="group" aria-label={t('ov.list.sortLabel')}>
+                        {SORTS.map(s => (
                           <button
-                            key={m}
+                            key={s}
                             type="button"
-                            className={'lc-gran-btn' + (metric === m ? ' lc-gran-on' : '')}
-                            onClick={() => { setMetric(m) }}
-                          >{t('ov.heat.metric.' + m)}</button>
+                            className={'lc-gran-btn' + (sort === s ? ' lc-gran-on' : '')}
+                            onClick={() => { setSort(s) }}
+                          >{t('ov.list.sort.' + s)}</button>
                         ))}
                       </div>
-                    </span>
-                  </div>
-                  <Heatmap days={days} metric={metric} selected={day} onSelect={setDay} today={todayKey()} />
-                </div>
-                {/* The settings entry: one quiet row under the activity card, the
-                    same best-effort preferences jump the Context tab's plugin-info
-                    row rides. The jump drives the shell chrome behind this
-                    overlay, so the panel closes with it to leave the jump visible. */}
-                <button type="button" className="lc-ov-settings" onClick={() => { openPluginSettings(); close() }}>
-                  <span className="lc-ov-settings-label"><IconSettings size={14} />{t('plugin.settings')}</span>
-                  <span className="lc-ov-settings-hint">{t('plugin.settingsOpen')}</span>
-                </button>
-              </div>
-
-              <div className="lc-ov-right">
-                <div className="lc-ov-list-head">
-                  <span className="lc-ov-list-title">{t('ov.list.title')}</span>
-                  <span className="lc-ov-list-count">{visible.length}</span>
-                  {day !== null && (
-                    <button type="button" className="lc-ov-day-chip" title={t('ov.list.dayClear')} onClick={() => { setDay(null) }}>
-                      {t('ov.list.dayFilter', { day })} ×
-                    </button>
-                  )}
-                  <input
-                    className="lc-ov-search"
-                    type="search"
-                    value={query}
-                    placeholder={t('ov.list.search')}
-                    aria-label={t('ov.list.search')}
-                    onChange={(ev) => { setQuery(ev.target.value) }}
-                  />
-                  <div className="lc-gran" role="group" aria-label={t('ov.list.sortLabel')}>
-                    {SORTS.map(s => (
-                      <button
-                        key={s}
-                        type="button"
-                        className={'lc-gran-btn' + (sort === s ? ' lc-gran-on' : '')}
-                        onClick={() => { setSort(s) }}
-                      >{t('ov.list.sort.' + s)}</button>
-                    ))}
-                  </div>
-                </div>
-
-                {chips.length > 0 && (
-                  <div className="lc-ov-groups" role="group" aria-label={t('ov.group.label')}>
-                    <button
-                      type="button"
-                      className={'lc-ov-chip' + (group === null ? ' lc-ov-chip-on' : '')}
-                      onClick={() => { setGroup(null) }}
-                    >{t('ov.range.all')}<span className="lc-ov-chip-n">{scoped.length}</span></button>
-                    {chips.map(c => (
-                      <button
-                        key={c.key}
-                        type="button"
-                        className={'lc-ov-chip' + (group === c.key ? ' lc-ov-chip-on' : '')}
-                        onClick={() => { setGroup(group === c.key ? null : c.key) }}
-                      >{c.key === UNGROUPED_KEY ? t('ov.group.ungrouped') : c.key}<span className="lc-ov-chip-n">{c.count}</span></button>
-                    ))}
-                  </div>
-                )}
-
-                {visible.length === 0 ? (
-                  <div className="lc-empty">{t(allRows.length === 0 ? 'ov.list.empty' : 'ov.list.noMatch')}</div>
-                ) : (
-                  <>
-                    <div className="lc-ov-grid">
-                      {paged.items.map(row => (
-                        <OverviewCard
-                          key={row.id}
-                          row={row}
-                          {...(groups?.[row.id] !== undefined ? { group: groups[row.id] } : {})}
-                          costLabel={cardCostOf(row, prices, currency)}
-                          now={now}
-                          onOpen={openOne}
-                        />
-                      ))}
                     </div>
-                    {paged.count > 1 && (
-                      <div className="lc-ov-pager" role="navigation" aria-label={t('ov.list.pager')}>
+
+                    {chips.length > 0 && (
+                      <div className="lc-ov-groups" role="group" aria-label={t('ov.group.label')}>
                         <button
                           type="button"
-                          className="lc-ov-pager-btn"
-                          disabled={paged.index === 0}
-                          aria-label={t('ov.list.prev')}
-                          onClick={() => { setPage(paged.index - 1) }}
-                        >‹</button>
-                        <span className="lc-ov-pager-n">{t('ov.list.page', { n: paged.index + 1, total: paged.count })}</span>
-                        <button
-                          type="button"
-                          className="lc-ov-pager-btn"
-                          disabled={paged.index === paged.count - 1}
-                          aria-label={t('ov.list.next')}
-                          onClick={() => { setPage(paged.index + 1) }}
-                        >›</button>
+                          className={'lc-ov-chip' + (group === null ? ' lc-ov-chip-on' : '')}
+                          onClick={() => { setGroup(null) }}
+                        >{t('ov.range.all')}<span className="lc-ov-chip-n">{scoped.length}</span></button>
+                        {chips.map(c => (
+                          <button
+                            key={c.key}
+                            type="button"
+                            className={'lc-ov-chip' + (group === c.key ? ' lc-ov-chip-on' : '')}
+                            onClick={() => { setGroup(group === c.key ? null : c.key) }}
+                          >{c.key === UNGROUPED_KEY ? t('ov.group.ungrouped') : c.key}<span className="lc-ov-chip-n">{c.count}</span></button>
+                        ))}
                       </div>
                     )}
-                  </>
-                )}
-              </div>
-            </div>
-          )}
+
+                    {visible.length === 0 ? (
+                      <div className="lc-empty">{t(allRows.length === 0 ? 'ov.list.empty' : 'ov.list.noMatch')}</div>
+                    ) : (
+                      <>
+                        <div className="lc-ov-grid">
+                          {paged.items.map(row => (
+                            <OverviewCard
+                              key={row.id}
+                              row={row}
+                              {...(groups?.[row.id] !== undefined ? { group: groups[row.id] } : {})}
+                              costLabel={cardCostOf(row, book, currency)}
+                              now={now}
+                              onOpen={openOne}
+                            />
+                          ))}
+                        </div>
+                        {paged.count > 1 && (
+                          <div className="lc-ov-pager" role="navigation" aria-label={t('ov.list.pager')}>
+                            <button
+                              type="button"
+                              className="lc-ov-pager-btn"
+                              disabled={paged.index === 0}
+                              aria-label={t('ov.list.prev')}
+                              onClick={() => { setPage(paged.index - 1) }}
+                            >‹</button>
+                            <span className="lc-ov-pager-n">{t('ov.list.page', { n: paged.index + 1, total: paged.count })}</span>
+                            <button
+                              type="button"
+                              className="lc-ov-pager-btn"
+                              disabled={paged.index === paged.count - 1}
+                              aria-label={t('ov.list.next')}
+                              onClick={() => { setPage(paged.index + 1) }}
+                            >›</button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      </section>
     )
   }
 
@@ -313,8 +356,8 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
 }
 
 /** One card's priced cost label, or the dash (no book yet, nothing billed, unpriceable model). */
-function cardCostOf(row: OverviewRow, prices: ModelPrices | null, currency: CostCurrency): string {
+function cardCostOf(row: OverviewRow, book: ModelBook | null, currency: CostCurrency): string {
   if (row.timeline?.cost === undefined) return '—'
-  const cost = estimateSessionCost(row.timeline.cost, prices, currency)
+  const cost = estimateSessionCost(row.timeline.cost, book, currency)
   return cost === null ? '—' : formatCost(cost, currency)
 }

@@ -1,10 +1,10 @@
 // Headline derivation (src/client/headline.ts): the provider-anchored
-// occupancy (projected → derived → heuristic), the window/pct pairing, and
-// the anchored composition parts.
+// occupancy (projected → sampled → derived → heuristic), the window/pct
+// pairing on the kernel's occupancy grid, and the anchored composition parts.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
-import { headlineOf } from '../../src/client/headline'
+import { headlineOf, occupancyPercent } from '../../src/client/headline'
 import type { ContextTimeline, RequestRecord } from '../../src/shared/types'
 
 function timeline(over: Partial<ContextTimeline> = {}): ContextTimeline {
@@ -42,6 +42,21 @@ describe('headlineOf occupancy', () => {
     const data = timeline({ requests: [req({ prompt: 150 })] })
     const h = headlineOf(data, { projectedTokens: 'junk' as unknown as number })
     // lastReq.prompt + surface movement since: 150 + (100 - 80).
+    assert.equal(h.tokens, 170)
+  })
+
+  test('the bare provider sample serves when the projection carries no forward value', () => {
+    // The kernel's own order (contextOccupancy: projectedTokens ?? pressureTokens),
+    // ahead of the plugin's derived anchor — the sample's 150, not the derived 170.
+    const data = timeline({ requests: [req({ prompt: 150 })] })
+    const h = headlineOf(data, { pressureTokens: 150, contextWindow: 1000 })
+    assert.equal(h.tokens, 150)
+    assert.equal(h.pct, 15)
+  })
+
+  test('a non-number pressureTokens falls through to the derived anchor', () => {
+    const data = timeline({ requests: [req({ prompt: 150 })] })
+    const h = headlineOf(data, { pressureTokens: 'junk' as unknown as number })
     assert.equal(h.tokens, 170)
   })
 
@@ -104,9 +119,18 @@ describe('headlineOf window and pct', () => {
     assert.equal(h.pct, null)
   })
 
+  test('the pct keeps one decimal on the kernel\'s occupancy grid', () => {
+    // The kernel reads round(200 / 300 * 100) = 67; the plugin prints 66.7.
+    const h = headlineOf(timeline(), { projectedTokens: 200, contextWindow: 300 })
+    assert.equal(h.pct, 66.7)
+    assert.equal(headlineOf(timeline(), { projectedTokens: 1, contextWindow: 1_000_000 }).pct, 0)
+  })
+
   test('the pct clamps at 100', () => {
     const h = headlineOf(timeline(), { projectedTokens: 250, contextWindow: 100 })
     assert.equal(h.pct, 100)
+    // An occupancy past its own window (a compacted/shrunk route) never over-reads.
+    assert.equal(occupancyPercent(400, 300), 100)
   })
 })
 

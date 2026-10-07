@@ -19,7 +19,7 @@
  *   the request/event records are the raw material of `buildTimelineView`.
  */
 
-import type { Category, ContextEventRecord, ContextTimelineDetail, CostModelUsage, FileOpRecord, RequestRecord, SessionCostUsage, Snapshot, SurfaceNode, SystemPromptNode, TimingTotals, ToolTimingTotals } from '../shared/types'
+import type { Category, ContextEventRecord, ContextTimelineDetail, CostModelUsage, FileOpRecord, RequestRecord, SessionCostUsage, Snapshot, SurfaceNode, SystemPromptNode, TimingSpan, TimingTotals, ToolTimingTotals } from '../shared/types'
 import { isDeepSeekProvider } from '../shared/providers'
 import { estimateSystemContent } from '../shared/estimate'
 import type { FoldBounds } from './config'
@@ -34,7 +34,7 @@ import {
 } from './pricing'
 import type { ContentBlock, MessageSource } from './pricing'
 import { deriveEventMessage } from '@deepseek-ai/dsh-session'
-import { decodeTallyOfStream, firstTokenTimeOfStream, replaceRangeOf } from './logShapes'
+import { decodeSpansOfStream, decodeTallyOfStream, firstTokenTimeOfStream, replaceRangeOf } from './logShapes'
 import type { DecodeKind } from './logShapes'
 import { opBearingTool, opsOfCall, parseCallArgs, rawArgsNeeded } from '../shared/fileOps'
 
@@ -171,6 +171,58 @@ export interface TimelineState {
     firstToken?: number
   }
   /**
+   * The open step's CLOSED user-wait intervals (real log instants), pushed
+   * replace-style as each wait settles: an approval decision (its asked →
+   * decided pair closes via `stepApprovals`) and an `ask_user_question`
+   * call's whole tool window (its body is the answer wait itself, in both
+   * the blocking and the timed schema's foreground phase). `step/end`
+   * subtracts their clamped union from the step window to price the
+   * request's `activeMs`, then DELETES the slot. Same arm/remove lifecycle
+   * as `stepStart` — never written in place, so no CloneKey covers it.
+   */
+  stepWaits?: { start: number; end: number }[]
+  /**
+   * The open step's PENDING approval waits (request id → its `approval/asked`
+   * instant), armed only while a step is open and disarmed by the matching
+   * `approval/decided`. A crash mid-decision leaves the pair dangling —
+   * resume repair appends no synthetic decision — so `step/end` closes the
+   * survivors at its own instant. One record, not a map: pending approvals
+   * are a handful at most, and the rebuild-on-change copy stays trivial.
+   * Deleted at `step/start` (a superseded step's leftovers) and `step/end`.
+   */
+  stepApprovals?: Record<string, number>
+  /**
+   * The seq of the request record committed by the open step's
+   * `assistant/message` — the back-pointer `step/end` stamps `activeMs`
+   * onto. It stays the requests TAIL until then (nothing pushes between a
+   * step's message and its end, and the turn trim only drops the oldest),
+   * so the stamp is an O(1) tail write guarded by the seq. Same arm/remove
+   * lifecycle as `stepStart`.
+   */
+  stepRequestSeq?: number
+  /**
+   * The timing strip's painted spans (shared/types.ts TimingSpan): every
+   * completed step's time slices in log order, stamped with their REAL
+   * instants — the TTFT wait, the decode blocks in stream order, the tool-run
+   * windows, and the in-step residue. The client packs them gapless, each
+   * band's width its share of the cumulative active time (idle time BETWEEN
+   * steps carries no span and takes no track). Bounded by TIMING_SPANS_MAX
+   * (newest tail kept). Flushed per step at `step/end` from the `stepSpans`
+   * accumulator.
+   */
+  spans: TimingSpan[]
+  /**
+   * The open step's accumulated painted spans: the assistant message pushes
+   * the model slices (TTFT + the decode blocks), each paired tool result its
+   * run window; `step/end` clamps them into the step window, de-overlaps
+   * first-wins (parallel runs paint their union), fills the holes with the
+   * residue kind, and flushes the tiling into `spans`. Absent until the first
+   * in-step span; DELETED at the flush (the plain-JSON precondition). Same
+   * arm/remove lifecycle as `stepStart` — never written in place, always
+   * replaced, so no CloneKey covers it.
+   */
+  stepSpans?: TimingSpan[]
+  /**
    * Tool callId → the call's name, start instant, and raw arguments, armed by
    * `tool/call` and DELETED when its `tool/result` folds in (one result per
    * call, in log order) — the map stays at pending-call size instead of
@@ -266,6 +318,9 @@ function trimState(st: TimelineState, bounds: FoldBounds): void {
     st.turnRuns = countTurnRuns(st.requests)
   }
   if (st.events.length > bounds.maxEvents) st.events = st.events.slice(-bounds.maxEvents)
+  // The timing strip's spans: newest tail (a plain count cap — see
+  // TIMING_SPANS_MAX; the strip paints the retained window's time axis).
+  if (st.spans.length > TIMING_SPANS_MAX) st.spans = st.spans.slice(-TIMING_SPANS_MAX)
   // The file-op log: newest tail; the newest dropped op's seq rides
   // `fileOpsFloor` (the same coverage-floor family as archiveFloor).
   if (st.fileOps.length > bounds.maxFileOps) {
@@ -297,6 +352,14 @@ function trimState(st: TimelineState, bounds: FoldBounds): void {
   }
 }
 
+/**
+ * Bound on the timing strip's painted spans (TimelineState.spans): a count
+ * cap, newest tail kept — the same hardcoded-cap family as SYSTEM_NODES_MAX.
+ * At ~6–8 spans per step the cap covers a few hundred recent steps, far past
+ * the strip's pixel resolution on any real pane.
+ */
+const TIMING_SPANS_MAX = 2_000
+
 export function createTimelineState(): TimelineState {
   return {
     surface: [],
@@ -309,12 +372,14 @@ export function createTimelineState(): TimelineState {
     archived: [],
     callNames: {},
     fileOps: [],
+    spans: [],
   }
 }
 
 function categoryOf(type: string, message: { source?: MessageSource } | undefined): Category {
   if (type === 'assistant/message') return 'assistant'
   if (type === 'tool/result') return 'tool'
+  if (type === 'developer/message') return 'inject'
   // Skill machinery is its own bucket (issue #66): a user-explicit `/name`
   // invocation rides a `skill-invocation` source, the available-skills digest
   // a `skill-catalog` one — both durable user/message injections that the
@@ -448,12 +513,9 @@ interface MessageLike {
 }
 
 /**
- * The message nested under an event payload's `message` field
- * (`system/message`, `assistant/message`, `tool/result`) — read structurally
- * because the fold needs a TOTAL read over untrusted payloads: a malformed
- * message reads null here, never throws or guesses a shape. Purely a type
- * cast: `deriveEventMessage` returns `event.data` for a user/message (no
- * `data.message` indirection), so its result feeds every other case.
+ * A message nested under data.message. A structural read keeps malformed
+ * payloads total and handles developer messages absent from the V3
+ * dependency's deriveEventMessage. User messages instead live in data itself.
  */
 function messageOf(data: Record<string, unknown> | undefined): MessageLike | null {
   const message = data?.message
@@ -503,10 +565,9 @@ function applySurface(
     seq: ev.seq,
     time: ev.time,
     cat,
-    // Empty assistant messages project to no model message (usage-only), so
-    // they price 0 — `deriveEventMessage` returns null for that case, and
-    // `estimateMessage(null, true)` short-circuits before ROLE_OVERHEAD.
-    tokens: estimateMessage(message, type === 'assistant/message'),
+    // Empty assistant/developer messages project to no model message, so
+    // skip content and role framing together.
+    tokens: estimateMessage(message, type === 'assistant/message' || type === 'developer/message'),
   }
   // Image blocks ride the NODE (absent when zero): the stats board's image
   // cell sums the live surface, so a compacted message's images stop counting.
@@ -549,6 +610,13 @@ function applySurface(
       timing.toolsMs += dur
       timing.toolCalls += 1
       bumpToolTotals(timing, toolEntry.name, dur)
+      // The strip's tool window paints only while a step is open to own it
+      // (a cross-step/foreign result still prices the totals above); the
+      // step/end flush clamps and de-overlaps it. Replace-style push — the
+      // accumulator is never written in place (see TimelineState.stepSpans).
+      if (st.stepStart !== undefined) {
+        st.stepSpans = [...(st.stepSpans ?? []), { kind: 'tools', start: toolEntry.start, end: ev.time }]
+      }
     }
     // Consume-once: the entry is never looked up again after its result
     // folds in (see TimelineState.callNames). Rebuild without the used ids
@@ -640,7 +708,7 @@ export interface UsageLike {
 }
 
 /** One usage object's buckets, deeply normalized to billed counts (see {@link tokenCountOf}). */
-interface BilledUsage {
+export interface BilledUsage {
   input: number
   cacheRead: number
   cacheWrite: number
@@ -677,8 +745,12 @@ export function tokenCountOf(value: unknown): number | null {
  * DeepSeek's peak windows (the official list: UTC 01:00–04:00 and 06:00–10:00,
  * Monday through Friday — Beijing Time 09:00–12:00 and 14:00–18:00). All other
  * hours, plus entire weekends, bill at the half-price off-peak rate.
+ *
+ * Exported for the activity unit (host/activity.ts): the daily ledger prices
+ * each day's buckets with the same split, so its per-day fees sum to the
+ * session-cost totals the timeline fold books.
  */
-function isPeakUtc(time: number): boolean {
+export function isPeakUtc(time: number): boolean {
   const at = new Date(time)
   const day = at.getUTCDay()
   if (day === 0 || day === 6) return false
@@ -997,9 +1069,17 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         // assistant/message and step/end price the model wait/generation and
         // the whole step against this instant. Always a state change (a new
         // slot value), even over an un-consumed predecessor — sequential logs
-        // never hit that, hostile ones just supersede it.
+        // never hit that, hostile ones just supersede it. A superseded step's
+        // leftover span accumulator dies here too (its spans predate the new
+        // window and would clamp to nothing at the flush regardless). The
+        // wait/approval/request back-pointer slots die with it (their waits
+        // predate the new window the same way).
         const s = ensure([])
         s.stepStart = { time: event.time }
+        delete s.stepSpans
+        delete s.stepWaits
+        delete s.stepApprovals
+        delete s.stepRequestSeq
         break
       }
       case 'step/end': {
@@ -1007,32 +1087,118 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         // refold) — nothing to price, and the state must stay reference-equal.
         const start = state.stepStart
         if (start === undefined) return state
-        const s = ensure(['timing'])
+        const s = ensure(state.stepRequestSeq !== undefined ? ['timing', 'requests'] : ['timing'])
         ensureTiming(s).wallMs += durOf(start.time, event.time)
-        // Consume-once: DELETE the optional field — assigning `undefined`
+        // The step's ACTIVE time prices the trend chart's duration overlay:
+        // the whole step window (the model call plus its tool runs) minus the
+        // clamped union of the step's user waits (see TimelineState.stepWaits)
+        // — approval decisions, including any pair left dangling by a crash
+        // (closed at this end instant), and `ask_user_question` answer
+        // windows. The stamp lands on the step's committed request record
+        // (the requests tail while the seq guard holds — a hostile refold
+        // that lost the row just skips it).
+        const waits: { start: number; end: number }[] = [...(state.stepWaits ?? [])]
+        for (const id in state.stepApprovals) waits.push({ start: state.stepApprovals[id], end: event.time })
+        waits.sort((a, b) => (a.start - b.start) || (a.end - b.end))
+        let waitMs = 0
+        let waitCursor = start.time
+        for (const wait of waits) {
+          const from = Math.max(waitCursor, wait.start)
+          const to = Math.min(wait.end, event.time)
+          if (to > from) { waitMs += to - from; waitCursor = to }
+        }
+        const activeMs = durOf(start.time, event.time) - waitMs
+        const last = state.requests.at(-1)
+        if (last !== undefined && last.seq === state.stepRequestSeq) {
+          s.requests[s.requests.length - 1] = { ...last, activeMs }
+        }
+        // Flush the open step's accumulated spans into the strip's painted
+        // list (see TimelineState.stepSpans): clamp every span into the step
+        // window, then tile it left to right — first-wins de-overlap
+        // (parallel tool runs paint their UNION, never double wall time) and
+        // every hole fills with the residue kind, so [step start, step end]
+        // always tiles gapless. A zero-width step (hostile times) flushes
+        // nothing. The spans ride the detail channel, so the flush dirties
+        // the detail revision for open tabs.
+        const painted: TimingSpan[] = []
+        for (const span of state.stepSpans ?? []) {
+          const from = Math.max(start.time, span.start)
+          const to = Math.min(event.time, span.end)
+          if (to > from) painted.push({ kind: span.kind, start: from, end: to })
+        }
+        painted.sort((a, b) => (a.start - b.start) || (a.end - b.end))
+        const flushed: TimingSpan[] = []
+        let cursor = start.time
+        for (const span of painted) {
+          const from = Math.max(cursor, span.start)
+          if (span.end <= from) continue
+          if (from > cursor) flushed.push({ kind: 'other', start: cursor, end: from })
+          flushed.push({ kind: span.kind, start: from, end: span.end })
+          cursor = span.end
+        }
+        if (event.time > cursor) flushed.push({ kind: 'other', start: cursor, end: event.time })
+        s.spans = [...state.spans, ...flushed]
+        // Consume-once: DELETE the optional fields — assigning `undefined`
         // would break the plain-JSON persisted-state precondition.
         delete s.stepStart
+        delete s.stepSpans
+        delete s.stepWaits
+        delete s.stepApprovals
+        delete s.stepRequestSeq
+        bumpDetailRev(s)
         break
       }
-      case 'user/message': {
-      // `deriveEventMessage` is the canonical per-event projection: returns
-      // `event.data` for user/message (no `data.message` indirection).
-        const msg = deriveEventMessage(event as never) as MessageLike | null
+      case 'approval/asked': {
+        // Arm the approval's wait interval (see TimelineState.stepApprovals):
+        // the harness awaits the user's decision inline between this event
+        // and its `approval/decided` — pure user time inside the step's tool
+        // window. Only an open step owns one (an out-of-step ask prices
+        // nothing here and must leave the state reference-equal).
+        const id = data?.id
+        if (state.stepStart === undefined || typeof id !== 'string') return state
+        const s = ensure([])
+        s.stepApprovals = { ...state.stepApprovals, [id]: event.time }
+        break
+      }
+      case 'approval/decided': {
+        // Close the matching wait into `stepWaits`; a decided without its
+        // armed asked (an out-of-step pair, a refold window) prices nothing.
+        const id = data?.id
+        const open = state.stepApprovals
+        const askedAt = typeof id === 'string' ? open?.[id] : undefined
+        if (open === undefined || askedAt === undefined) return state
+        const s = ensure([])
+        s.stepWaits = [...(state.stepWaits ?? []), { start: askedAt, end: event.time }]
+        const kept: Record<string, number> = {}
+        for (const k in open) if (k !== id) kept[k] = open[k]
+        if (Object.keys(kept).length > 0) s.stepApprovals = kept
+        else delete s.stepApprovals
+        break
+      }
+      case 'user/message':
+      case 'developer/message': {
+        // The V3 dependency's deriveEventMessage has no developer case;
+        // supported V4 logs nest that message under data.message.
+        const developer = event.type === 'developer/message'
+        const msg = developer ? messageOf(data) : deriveEventMessage(event as never) as MessageLike | null
+        if (developer && (msg === null || !Array.isArray(msg.content))) return state
         const s = ensure(['surface', 'sums', 'archived', 'events'])
         bumpDetailRev(s)
         const node = applySurface(s, event, event.type, data, msg)
         const source = msg?.source
-        if (isInjection(source)) {
+        if (developer || isInjection(source)) {
           const rec: ContextEventRecord = {
-            seq: event.seq, time: event.time, kind: 'inject',
+            seq: event.seq,
+            time: event.time,
+            kind: 'inject',
             // Re-proved: the harness validates a source's `kind` but not its
             // `form`, so a hostile form must degrade to the default instead of
             // failing the record's strict wire/state schemas on every delivery
             // (the permanent per-session freeze, the #44 class).
-            form: typeof source.form === 'string' && source.form !== '' ? source.form : 'context',
+            form: typeof source?.form === 'string' && source.form !== '' ? source.form : 'context',
             tokens: node.tokens,
           }
-          if (source.kind === 'skill-invocation') {
+          if (source?.kind === 'skill-invocation') {
             rec.sub = 'skill'
             rec.name = typeof source.name === 'string' ? source.name : '?'
           } else {
@@ -1045,7 +1211,7 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
               node.name = label
             }
             // A notice carries the producer's bounded one-line account; show it after the source name, as the dsh transcript row does.
-            if (source.form === 'notice' && typeof source.summary === 'string' && source.summary !== '') {
+            if (source?.form === 'notice' && typeof source.summary === 'string' && source.summary !== '') {
               rec.detail = source.summary
             }
           }
@@ -1084,6 +1250,14 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         // tally): the result only carries its tool name when it pairs with
         // the armed call, so an unpaired/foreign one counts nothing.
         if (node.tool === ASK_USER_TOOL) s.humanInputs = (s.humanInputs ?? 0) + 1
+        // The Q&A tool's whole window is the user's answer wait — its body
+        // only awaits the reply (the blocking schema outright, the timed one
+        // through its foreground phase) — so the open step books it as a wait
+        // interval for the `activeMs` subtraction at `step/end`. Same pairing
+        // authority as the tally above: an unpaired result waits nothing.
+        if (pendingEntry !== undefined && pendingEntry.name === ASK_USER_TOOL && state.stepStart !== undefined) {
+          s.stepWaits = [...(state.stepWaits ?? []), { start: pendingEntry.start, end: event.time }]
+        }
         // The file-op derivation (shared/fileOps.ts): the armed call's
         // arguments + the result's presentation meta. Unpaired results book
         // nothing (parity with the surface node's missing tool label).
@@ -1149,7 +1323,8 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         bumpDetailRev(s)
         const total = s.systemTokens + s.toolsTokens + s.sums.user + s.sums.inject + s.sums.skill + s.sums.assistant + s.sums.tool
         const record: RequestRecord = {
-          time: event.time, seq: event.seq,
+          time: event.time,
+          seq: event.seq,
           system: s.systemTokens,
           tools: s.toolsTokens,
           user: s.sums.user,
@@ -1163,6 +1338,11 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         // materialize an `undefined` property (plain-JSON precondition, the trap that broke the projection cache here).
         if (data && typeof data.turn === 'number') record.turn = data.turn
         if (data && typeof data.step === 'number') record.step = data.step
+        // Arm the step's request back-pointer (see TimelineState.stepRequestSeq):
+        // `step/end` stamps the step's active time onto this record — the trend
+        // chart's duration overlay. A message folding without an open step slot
+        // arms nothing and its record never gains the field.
+        if (state.stepStart !== undefined) s.stepRequestSeq = record.seq
         // The provider-reported output tokens, hoisted for the timing seat
         // below: the throughput pairing needs this exact figure, and `null`
         // must mean "the message carried no readable output bucket" — the
@@ -1208,27 +1388,53 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
           + (prevLast === undefined
             ? (record.turn !== undefined ? 1 : 0)
             : (record.turn === prevLast.turn ? 0 : 1))
-        // Timing: one completed model call; its wait/generation split prices
-        // off the slot's first-token stamp, read from the message's own
-        // EMBEDDED stream when the open attempt(s) carried none — the same
-        // fallback the harness's sessionStats fold applies. A call whose
-        // stream carried no token (an aborted step) stays unattributed and
-        // lands in the card's residue. The pending slot stays armed — the
-        // step's tool calls and `step/end` still follow.
+        // Timing: one completed model call; its wait/generation boundary sits
+        // at the first OBSERVABLE instant — the slot's first-token stamp,
+        // read from the message's own EMBEDDED stream when the open
+        // attempt(s) carried none (the same fallback the harness's
+        // sessionStats fold applies), reached back to an earlier block
+        // marker when the stream's markers precede the token: a redacted
+        // reasoning block leaves no chunk behind, so anchoring at the token
+        // would charge the marker-tiled decode window to the wait as well
+        // and the legend's rows would double-count it past 100%. A call
+        // whose stream carried no token (an aborted step) stays unattributed
+        // and lands in the card's residue. The pending slot stays armed —
+        // the step's tool calls and `step/end` still follow.
         const timing = ensureTiming(s)
         timing.calls += 1
         const stepStart = state.stepStart
         if (stepStart !== undefined) {
           const firstToken = stepStart.firstToken ?? firstTokenTimeOfStream(data?.stream)
           if (firstToken !== undefined) {
-            timing.ttftMs += durOf(stepStart.time, firstToken)
-            timing.genMs += durOf(firstToken, event.time)
+            const decodeBlocks = decodeSpansOfStream(data?.stream, event.time)
+            let decodeStart = firstToken
+            for (const block of decodeBlocks) decodeStart = Math.min(decodeStart, block.start)
+            timing.ttftMs += durOf(stepStart.time, decodeStart)
+            timing.genMs += durOf(decodeStart, event.time)
+            // The strip's model slices: the silent wait, then the decode
+            // blocks in STREAM order off the SAME decodeStart boundary, so
+            // the rows, the ring and the strip read one window. The FIRST
+            // surviving block reaches back to that instant (a marker can
+            // sit marginally past the token); the later blocks keep their
+            // marker-stamped starts. A marker-less stream leaves the window
+            // to the step/end residue fill. Replace-style push (see
+            // stepSpans).
+            const modelSpans: TimingSpan[] = [{ kind: 'ttft', start: stepStart.time, end: decodeStart }]
+            for (const block of decodeBlocks) {
+              const to = Math.min(event.time, block.end)
+              if (to <= block.start) continue
+              modelSpans.push({ kind: block.kind, start: modelSpans.length === 1 ? decodeStart : block.start, end: to })
+            }
+            s.stepSpans = [...(s.stepSpans ?? []), ...modelSpans]
             // The throughput seat, paired exactly as the harness's session-stats
             // fold pairs them: a call counts ONLY when both its decode window
             // (this branch) and its provider-reported output tokens (the usage
             // above) are known — a token-stamped call without usage prices the
             // genMs slice but not this, and usage without a decode window
-            // (never stamped) counts nowhere.
+            // (never stamped) counts nowhere. TPS KEEPS the first-token
+            // anchor on purpose: it is the harness-parity figure, priced on
+            // the same instants as `assistantStreamFirstTokenTime`, not the
+            // card's marker-aware window.
             if (output !== null) {
               timing.speedMs = (timing.speedMs ?? 0) + durOf(firstToken, event.time)
               timing.speedTokens = (timing.speedTokens ?? 0) + output
@@ -1248,6 +1454,25 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         // message — same rule as dsh's surface fold).
         const asstMsg = deriveEventMessage(event as never) as MessageLike | null
         applySurface(s, event, event.type, data, asstMsg)
+        break
+      }
+      case 'session/end-seed': {
+        // The fork/seed boundary the session core stamps at creation: events
+        // before a TAGGED marker (`inherited: true`) are the parent-log
+        // prefix a seeded child replays verbatim, usage settlements included
+        // — spend the session it forked from already priced. Zeroing the
+        // cost totals here makes a seeded session's own cost (and its
+        // parent's Subagent Cost fold) count post-seed spend only (issue
+        // #94). The UNTAGGED marker is the ordinary resume/replay boundary
+        // every session carries: it must leave the state reference
+        // untouched, or every resume would wipe the session's history.
+        // Nested seeds re-mark at their own cut, so the surviving total is
+        // always the session's own spend since ITS seed. `{}`, not
+        // `undefined` — an undefined-valued property fails the plain-JSON
+        // cache precondition (see TimelineState).
+        if (data?.inherited !== true) break
+        const s = ensure([])
+        s.cost = {}
         break
       }
       case 'plan/mode': {
@@ -1271,7 +1496,9 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
           s.pendingShadowEventSeq = event.seq
         }
         s.events.push({
-          seq: event.seq, time: event.time, kind: event.type === 'compaction/summary' ? 'compaction' : 'prune',
+          seq: event.seq,
+          time: event.time,
+          kind: event.type === 'compaction/summary' ? 'compaction' : 'prune',
           tokens: data && typeof data.shadowedTokenCount === 'number' ? data.shadowedTokenCount : 0,
           ...(event.type === 'compaction/summary' && data && Array.isArray(data.shadowedSeqs)
             ? { count: data.shadowedSeqs.length }
@@ -1401,6 +1628,8 @@ function detailCollectionsOf(state: TimelineState, bounds: FoldBounds): Omit<Con
     // the detail payload share this builder) — COPIES, never state aliases.
     fileOps: state.fileOps.map(o => ({ ...o })),
     ...(state.fileOpsFloor !== undefined ? { fileOpsFloor: state.fileOpsFloor } : {}),
+    // The timing strip's painted spans ride the same collections — COPIES too.
+    spans: state.spans.map(s => ({ ...s })),
   }
   // The served slice: the newest `maxNodes` tail PLUS every live inject/skill
   // node older than the tail. Injections (AGENTS.md, session-start context, …)

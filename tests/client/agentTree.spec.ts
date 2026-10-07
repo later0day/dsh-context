@@ -145,6 +145,9 @@ describe('agentStatsOf', () => {
   test('pressure-only rows still yield an occupancy head without slices', () => {
     const projected = agentStatsOf({ contextPressure: { projectedTokens: 250, contextWindow: 1000 } })
     assert.deepEqual(projected.head, { tokens: 250, window: 1000, pct: 25, parts: [] })
+    // The same one-decimal occupancy grid the overview card reads (headline.ts).
+    const fractional = agentStatsOf({ contextPressure: { projectedTokens: 833, contextWindow: 1000 } })
+    assert.equal(fractional.head?.pct, 83.3)
     // Falls back to the raw sample when no projection exists.
     const sampled = agentStatsOf({ contextPressure: { pressureTokens: 100 } })
     assert.deepEqual(sampled.head, { tokens: 100, window: undefined, pct: null, parts: [] })
@@ -364,10 +367,10 @@ describe('subagentCostFoldOf', () => {
   }
 
   test('absent snapshot or anchor folds nothing', () => {
-    assert.deepEqual(subagentCostFoldOf(undefined, 's1'), { usage: null, cold: [] })
-    assert.deepEqual(subagentCostFoldOf(snap({}), 's1'), { usage: null, cold: [] })
-    assert.deepEqual(subagentCostFoldOf(snap({ s1: row({}) }), undefined), { usage: null, cold: [] })
-    assert.deepEqual(subagentCostFoldOf(snap({ s1: row({}) }), ''), { usage: null, cold: [] })
+    assert.deepEqual(subagentCostFoldOf(undefined, 's1'), { usage: null, cold: [], count: 0 })
+    assert.deepEqual(subagentCostFoldOf(snap({}), 's1'), { usage: null, cold: [], count: 0 })
+    assert.deepEqual(subagentCostFoldOf(snap({ s1: row({}) }), undefined), { usage: null, cold: [], count: 0 })
+    assert.deepEqual(subagentCostFoldOf(snap({ s1: row({}) }), ''), { usage: null, cold: [], count: 0 })
   })
 
   test('merges the whole descendant subtree, never the current session itself', () => {
@@ -383,6 +386,8 @@ describe('subagentCostFoldOf', () => {
     // root's own usage stays out; a timeline row without cost contributes nothing.
     assert.deepEqual(fold.usage, mergeCostUsage(COST_B, COST_A))
     assert.deepEqual(fold.cold, [])
+    // kid + grand + kid2 — the stranger and the detached orphan are no descendants.
+    assert.equal(fold.count, 3)
   })
 
   test('a descendant without a timeline row is a cold fetch target until its head lands', () => {
@@ -394,6 +399,7 @@ describe('subagentCostFoldOf', () => {
     const fold = subagentCostFoldOf(snap(byId), 'root')
     assert.equal(fold.usage, null, 'nothing warm or landed yet')
     assert.deepEqual(fold.cold, ['cold', 'bare'])
+    assert.equal(fold.count, 2, 'a cold descendant is a subagent too')
     // The landed head injects the cold relative's usage and empties the fetch list.
     const landed = new Map<string, ContextTimeline>([['cold', { ...timeline(50), cost: COST_B }]])
     assert.deepEqual(subagentCostFoldOf(snap(byId), 'root', landed).usage, COST_B)
@@ -408,6 +414,7 @@ describe('subagentCostFoldOf', () => {
     // current session's own usage never counts in the subtree fold.
     assert.deepEqual(fold.usage, null)
     assert.deepEqual(fold.cold, [])
+    assert.equal(fold.count, 1)
   })
 
   test('blank placeholders are not agents and a lineage cycle cannot loop the walk', () => {
@@ -420,6 +427,7 @@ describe('subagentCostFoldOf', () => {
     const fold = subagentCostFoldOf(snap(byId), 'root')
     assert.deepEqual(fold.usage, null, 'the blank usage and the detached cycle stay out (root\'s own cost never counts)')
     assert.deepEqual(fold.cold, [])
+    assert.equal(fold.count, 0, 'the blank placeholder is no subagent either')
   })
 
   test('a cycle reachable from the current session is cut at the revisited id', () => {
@@ -432,6 +440,7 @@ describe('subagentCostFoldOf', () => {
     const fold = subagentCostFoldOf(snap(byId), 'root')
     assert.deepEqual(fold.usage, COST_B, 'p counts once; the current session never counts as its own child')
     assert.deepEqual(fold.cold, [])
+    assert.equal(fold.count, 1)
   })
 
   test('hostile rows and timeline values degrade to fewer contributions', () => {
@@ -449,6 +458,7 @@ describe('subagentCostFoldOf', () => {
     // throw); the hostile cost loses its junk branch and coerces its fields.
     assert.deepEqual(fold.usage, { p: { m: { peak: { uncached: 0, cacheRead: 7, cacheWrite: 0, output: 0 } } } })
     assert.deepEqual(fold.cold, [])
+    assert.equal(fold.count, 2, 'the non-row never joined the walk')
   })
 })
 

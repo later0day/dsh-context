@@ -10,12 +10,15 @@
  * construction. The estimated category counts carry the ≈ marker (the
  * composition card's convention); the center total and the output count are
  * exact. Zero parts stay hidden once any usage is reported; the empty state
- * (no provider report yet) keeps all seven rows behind a dash center.
+ * (no provider report yet) keeps all seven rows behind a dash center. The
+ * title row's right corner carries the session's cache-hit share — the harness
+ * chat line's own reads-over-billed formula — hidden until something was billed.
  */
 
 import { useState, type ReactElement } from 'react'
 import type { ContextBreakdown, Snapshot, TokenUsage } from '../../shared/types'
 import { billedParts } from '../categories'
+import { cacheHitPercent } from '../format'
 import { numOf } from '../services'
 import type { ViewKit } from '../viewkit'
 
@@ -44,6 +47,11 @@ export function makeStatsTokens(kit: ViewKit, Donut: (props: DonutProps) => Reac
       : 0
     const output = props.usage !== null ? numOf(props.usage.outputTokens) : 0
     const total = input + output
+    // The title row's corner figure: cache reads over billed prompt-side input,
+    // the harness chat line's own formula (statsContext's cell shares it).
+    const hit = props.usage === null
+      ? null
+      : cacheHitPercent(numOf(props.usage.cacheReadTokens), input)
     // Null usage (no provider report — the chat line shows no pill either)
     // takes the same zeroed split billedParts produces for a zero report.
     const parts = billedParts(props.current, props.breakdown, props.usage ?? NO_USAGE)
@@ -61,6 +69,9 @@ export function makeStatsTokens(kit: ViewKit, Donut: (props: DonutProps) => Reac
       <div className="lc-card lc-col-stats lc-col-donut flex-1 min-w-[min(360px,100%)]">
         <div className="lc-card-title">
           <span className="lc-card-title-text">{t('tokens.title')}</span>
+          {hit !== null && (
+            <span className="lc-card-rate" title={t('stats.cacheHitTip')}>{t('stats.cacheHit')} {hit}%</span>
+          )}
         </div>
         {/* donut + legend row: the gap folds at a 320px card, below 240px the row wraps
             and the ring centers over the full-width legend (all keyed to the lc-card container). */}

@@ -10,49 +10,36 @@ A DeepSeek Harness plugin for context insight, actions, and management.
   - NPM: @deepseek-ai/dsh
   - MUST ensure the full clone of the DeepSeek Harness repository is available locally, before any work.
   - MUST always dive deep into the details of dsh source code and dependencies, for its mechanisms, lifecycles, and modules. Ensure every decision is based on the full and actual truth of the dsh source code.
-  - Local git clone of [dsh](https://github.com/deepseek-ai/deepseek-harness):
-    - may be found in the `~/dev/deepseek-harness` directory
-    - `git pull` on the `main` branch to update
-    - commits and version tags are available for reference and diff
-    - run `pnpm install` to update dependencies after a `git pull` or switching commit/tag
+  - Local clone at `~/dev/deepseek-harness`: `git pull` on `main` to update, and run `pnpm install` after pulling or switching commit/tag. Commits and version tags are available for reference and diff.
 
 - DeepSeek Harness Plugin:
-  - docs:
-    - Reference: https://deepseek-harness.github.io/deepseek-harness/en/reference/
-  - Example plugins:
-    - Available on GitHub topic `dsh-plugin`: https://github.com/topics/dsh-plugin
+  - Reference docs: https://deepseek-harness.github.io/deepseek-harness/en/reference/
+  - Example plugins: GitHub topic `dsh-plugin` — https://github.com/topics/dsh-plugin
 
 ## Coding
-- Always consider the minimal change and the most performance efficient implementation.
-- Try best to use the existing classes, utilities, styles, style tokens, events, presets and lifecycles provided by DeepSeek Harness.ess.
-- Use English in code comments, documentation, Pull Request description, and commit messages.
-- Smaller, less-coupling and modulized code and tests are preferred for better maintainability and testability.
-- Avoid adding unnecessary code comments (unless for the pinned major decision or for those provide significant value) and code duplication.
-- Update or remove the outdated or unhelpful code comments when modifying the code.
-- Before any commit, MUST ALWAYS do ALL the following checks:
-  - Check the to-do list, and ensure all the items are properly completed or closed.
-  - Use sub-agent to carefully independently review and simplify all the diffs and all code changes, to ensure they are necessary, correct, proper for the purpose, fact-based and not over-engineered. 
-  - Cleanup the generated temporary files. Cleanup temporary or unhelpful comments.
-  - MUST Run `pnpm run lint:fix && pnpm run test && pnpm run build` in single command and capture FULL output, to ensure:
-    - passing all the linting and test
-    - the per-file code coverage MUST BE literally 100%.
-      - The coverage table lists ONLY the files below 100% (`coverage.skipFull` in `vitest.config.ts`): a passing run prints an empty table (headers only, no `All files` row), and the run also fails the `coverage.thresholds` gate when any file drops below 100 — the offending files then appear in the table.
-      - Example passing output (nothing below 100%):
-        - % Coverage report from v8
-          -------------------|---------|----------|---------|---------|-------------------
-          File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
-          -------------------|---------|----------|---------|---------|-------------------
-          -------------------|---------|----------|---------|---------|-------------------
+- Make the minimal change that fully solves the problem, with the most efficient implementation.
+- Reuse the classes, utilities, styles, style tokens, events, presets, and lifecycles that DeepSeek Harness already provides.
+- Keep code and tests small, loosely coupled, and modular; avoid duplication.
+- Add comments only for major decisions or significant value, and update or delete outdated ones when modifying the code.
+- Write comments, documentation, PR descriptions, and commit messages in English.
+- Generate one-time temp files in the `.tmp` directory and clean them up right after use.
 
-## Parsing resilience (log data must never crash or hang a view)
+## Pre-commit checks
 
-The plugin lives off data it does not own: the durable session log (event shapes vary across dsh versions, producers, and hand-edited replays), the conversation snapshot behind the client join, projection payloads on the wire, history RPC pages, and persisted stores. Treat all of it as untrusted input at every layer. The two failures to design out: any client- or host-side parsing that blanks the page (the error card), and anything that leaves the page stuck on "loading".
+Complete ALL of these before ANY commit:
 
-- Never let one bad record take down a view. A malformed node, event, tool entry, or file op degrades to zero rows for that item — the card, the tab, and the session keep working.
-- Host-side projection folds must be TOTAL. The harness projection registry drives `apply` straight off the session/event bus with no error boundary of its own: one throwing fold stalls that unit's cells and its `session/projection` push feed, and the browser then waits on "loading" forever. So: unknown event types return the state unchanged; per-event processing is isolated so a malformed event is dropped whole (all-or-nothing — no partial state); and never materialize an `undefined`-valued property into persisted state, because the plain-JSON precondition makes one such property fail EVERY projection-cache write for the session (sessions then break in unrelated, far-away places).
-- Client-side parsing degrades visibly. Sanitize delivered projection payloads at the boundary (the `timelineOf` pattern: collections re-proved, scalars zeroed, whole-value absence stays `null` → loading screen); isolate per-item work in any fold over join/log data (per-item guards, or a bounded catch when a hostile object may throw on property access); every async fetch must resolve to data or a visible retryable state, never an unhandled rejection that leaves a spinner.
-- Re-prove every field at runtime. Structural narrowing over blind casts; optional chaining over non-null assertions; skip elements that fail the shape instead of throwing.
-- Every parser carries hostile fixtures next to its happy path: wrong types, null/missing fields, null or primitive elements inside arrays, unpaired references, and objects that throw on property access. The 100% coverage bar applies to every guard branch — an untested guard is an unverified promise.
+- Close out the to-do list, ensuring every item is completed, cleaned up or explicitly closed.
+- Review the full diff independently: every change necessary, correct, and not over-engineered.
+- Clean up generated temporary files and temporary or unhelpful comments.
+- Run `pnpm run lint:fix && pnpm run test && pnpm run build` as a single command and capture the FULL output.
+  - Example for per-file 100% coverage output:
+    ```
+    % Coverage report from v8
+    -------------------------|---------|----------|---------|---------|-------------------
+    File                     | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+    -------------------------|---------|----------|---------|---------|-------------------
+    -------------------------|---------|----------|---------|---------|-------------------
+    ```
 
 ## Layout & responsive
 
@@ -61,31 +48,17 @@ The plugin lives off data it does not own: the durable session log (event shapes
 - Mind container-query side effects: size containment changes containing-block behavior, so fullscreen overlays portal to `document.body`. Point-of-use specifics live in the CSS comments next to the rules they guard.
 - Verify layout changes visually before shipping: a spread of widths from desktop down to phone (~390px), in both locales (English labels are the truncation stress case), on a long session, including the `/context` modal.
 
-## Building
+## Build & run
 - Run `pnpm run build` after code changes applied.
-- Run `pnpm run watch` to keep hot-reloaded on dsh with local plugin installed. It also helps developer to see the code changes in the browser.
-
-## DSH web server
-- The dsh web server may be already running, and accessible at `http://127.0.0.1:3080/` by browser.
-- Run `pnpm run web` to restart the dsh web server (kills the running `dsh web` first, then starts `dsh web --no-open`).
-- If the auth token issue encounters with browser, kill the dsh process and restart it by running `dsh web --no-open`.
-  - Example output: 
-    - $ dsh web --no-open
-      > dsh web: http://127.0.0.1:3080/?token=XXXXXXXXX
-
-## Dependency
-- Consider updating the dependencies to the latest version if possible, as the deepseek-harness is evolving rapidly.
+- Run `pnpm run watch` to keep the local plugin hot-reloaded on dsh while developing in the browser.
+- The dsh web server may already be running at `http://127.0.0.1:3080/`.
+- Run `pnpm run web` to restart it (kills the running `dsh web` first, then starts `dsh web --no-open`).
+- If the browser hits an auth-token issue, kill the dsh process and restart with `dsh web --no-open`, then open the printed `http://127.0.0.1:3080/?token=XXXXXXXXX` URL.
 
 ## Compatibility - Important!
-- MUST be able to install and work correctly on `@deepseek-ai/dsh` **0.1.5-rc.1+** (the `0.1.5` line from rc.1, the `0.1.7` line from rc.2), with no regressions in runtime dependencies, message parsing, or any user-visible behavior. **`docs/compatibility.md` is the single source of truth for compatibility** — the supported releases, the per-generation event vocabulary, the client seams each line serves, and the runtime baseline gate — so keep that page current and reference it instead of restating its rules here.
-- The supported range spans two durable-log generations (V3, V4) that must all keep working from ONE code path; a pre-V3 log is migrated or refused by the RUNNING harness before any plugin read, so the fold never sees legacy spellings. Fold by **SHAPE, never by detected version**, and `src/host/logShapes.ts` is the ONE place the log spellings meet (`firstTokenTimeOfStream`, `replaceRangeOf`, `isTokenChunk`) — `applyTimeline` keeps a single code path over all of them. Never branch fold behavior on `detectHarnessVersion`.
-- Capabilities that only NEWER lines serve are OPTIONAL seams: reach them through a deferred `ctx.inject([...], …)` — never a hard module `inject` — so an older harness leaves the plugin fully functional with the capability absent (no pending fiber, no throw). Re-prove the service shape before use, guard the registration, and declare the module in `dsh.client.inject`.
-- Base every compatibility decision on the ACTUAL dsh source, never on assumption: keep the full clone current (`git pull` on `main`; `pnpm install` after switching commit/tag) and dive into the mechanisms, lifecycles, and modules involved.
-- Low-level logic (token counting, first-token timing, …) MUST mirror the newest supported dsh implementation: the estimators here match `dsh-token-meter`'s `estimateSystemMessage` (`estimateSystemTokens` / `estimateSystemContent`) and the first-token rule matches `dsh-llm`'s `assistantStreamFirstTokenTime`. The fold's statistics are verified against the harness's OWN projection values on real logs.
-
-### Compatibility verification mechanism
-- `tests/baselines.ts` is the ONE source of truth for the supported baselines and their per-version seam faces. To add a future dsh version: add one `Baseline` entry there (tag, vendored cordis, faces), add its tag to the release workflow fetch step, then run `pnpm test` — re-fit or refactor the seam a failing probe names.
-- The per-baseline suites run as part of `pnpm test`; `docs/compatibility.md` documents what each check covers. The `compat` project additionally boots the BUILT plugin (`pnpm run build` first) against the ACTUAL harness sources at each baseline tag, and needs the dsh checkout (env `DSH_REPO`, default `~/dev/deepseek-harness`).
+- MUST install and work correctly on every supported `@deepseek-ai/dsh` release, with no regressions in runtime dependencies, message parsing, or any user-visible behavior.
+- **`docs/compatibility.md` is the single source of truth** — supported releases, durable-log generations, fold-by-shape and optional-seam rules, parsing resilience for untrusted log/projection data, low-level parity with the harness's own metering, and the baseline gates. Read it BEFORE any compatibility-relevant change, and keep it current whenever the code or the supported set changes.
+- Consider updating dependencies to the latest version where possible — deepseek-harness evolves rapidly.
 
 ## I18n
 - Chinese (Simplified) and English are supported for UI elements.
@@ -95,33 +68,18 @@ The plugin lives off data it does not own: the durable session log (event shapes
 ## Docs
 - `docs` directory contains only end-user faced documents.
 - `docs/social-preview.png` (GitHub social preview) must be exactly **1280 × 640 pixels**.
-- `README.md`
-  - Images:
-    - Only embed external links in the `README.md`, in order to help the readers on both GitHub and NPM to access the images
-      - For example, putting the image in the `docs` directory and embedding it in the `README.md` with links:
-        - ![some image](https://raw.githubusercontent.com/bowenliang123/dsh-context/main/docs/some-image.png)
-
-## Temp files
-- Generate one-time temp files in the `.tmp` directory, and properly clean them up right after use.
+- `README.md` images must use external URLs so they render on both GitHub and NPM — put the file in `docs/` and embed it as `![alt](https://raw.githubusercontent.com/bowenliang123/dsh-context/main/docs/<image>.png)`.
 
 ## Git
 - When asked to commit, please commit the possibly mixed changes separately for each task or purpose.
 - `gh` cli is installed and logged in.
-- Run `git push` after create commits.
-
-## Workflow
-
-- To-do list
-  - ALWAYS keep the coding agent's to-do list up to date throughout starting or finishing every step/task of planning, investigation and implementation.
-  - Before closing any task, review all pending to-do items and ensure each is completed, cleaned up or explicitly closed.
-
-## Tool Usage
-- Always read the file first using the `read` tool before using the `edit` tool, which prevents errors like "Error: edit requires reading '/path/file' first — read the file, then retry."
+- Run `git push` after creating commits.
 
 ## Releasing
 - Version X.Y.Z, 大版本.次版本.小版本。
+- Review all the commits/changes since last tagged release.
 - Releases are cut by tagging: `git tag vX.Y.Z && gh release create vX.Y.Z`.
-- A [GitHub Actions workflow](.github/workflows/release.yml) then builds, tests, and publishes the package to npm automatically by github workflow. Agent don't have to do or check it manually.
+- A [GitHub Actions workflow](.github/workflows/release.yml) then builds, tests, and publishes the package to npm automatically — no manual action needed.
 - Write the release notes from the [release template](.github/release_template.md)
 
 <!-- CODEGRAPH_START -->

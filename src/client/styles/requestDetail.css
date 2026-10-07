@@ -25,19 +25,19 @@
 /* The link class marks a hoverable ROW (buttons and the chip-carrying inputs row alike); the pointer cursor belongs only to the
    actual click targets — button rows and individual chips. */
 button.lc-brief-row-link { cursor: pointer; }
-.lc-brief-tag { flex: none; box-sizing: border-box; min-width: 56px; text-align: center; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary); position: relative; }
+.lc-brief-tag { flex: none; box-sizing: border-box; min-width: 56px; text-align: center; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); position: relative; }
 /* The tag's explanation bubble — the shared `.lc-tip` chrome: instant styled reveal on tag hover (a `group-hover/tip` variant), never intercepts the pointer. */
 .lc-brief-tip { bottom: calc(100% + 6px); left: 0; max-width: 240px; white-space: normal; text-align: left; line-height: 1.5; font-weight: 400; }
 .lc-brief-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The empty-state In row's placeholder: same anatomy as the preview text, muted. */
 .lc-brief-empty { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); }
 /* Standalone fact chip on the opener/reply rows (call breadcrumb, image count) — the row kind tag's look, content-sized. */
-.lc-brief-fact { flex: none; box-sizing: border-box; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary); }
+.lc-brief-fact { flex: none; box-sizing: border-box; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); }
 /* Input chips: the name tag is flex-none so it always survives truncation — only the preview text ellipsizes. */
 .lc-brief-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 260px; min-width: 0; overflow: hidden; font-size: 12px; padding: 0 7px; border-radius: 5px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-primary); transition: background-color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
 /* The reply row's single chip grows to the row's width, so a long reply text reads as far as the card allows. */
 .lc-brief-chip-grow { flex: 1; max-width: none; }
-.lc-brief-chip-tag { flex: none; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary); }
+.lc-brief-chip-tag { flex: none; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); }
 .lc-brief-chip-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lc-brief-chip-link { cursor: pointer; }
 .lc-brief-more { flex: none; font-size: 11px; color: var(--dsw-alias-label-secondary); }

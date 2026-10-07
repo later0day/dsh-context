@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
-import { decodeKindOfBlock, decodeTallyOfStream, firstTokenTimeOfStream, isTokenChunk, replaceRangeOf } from '../../src/host/logShapes'
+import { decodeKindOfBlock, decodeSpansOfStream, decodeTallyOfStream, firstTokenTimeOfStream, isTokenChunk, replaceRangeOf } from '../../src/host/logShapes'
 
 describe('decodeKindOfBlock', () => {
   test('maps the three block kinds the harness emits', () => {
@@ -89,6 +89,75 @@ describe('decodeTallyOfStream', () => {
       spans: { reasoning: 50, text: 0, toolarg: 0 },
       blocks: { reasoning: 1, text: 1, toolarg: 0 },
     })
+  })
+})
+
+describe('decodeSpansOfStream', () => {
+  const chunk = (time: number, blockType: string) => ({ type: 'chunk', time, chunk: { type: 'block-start', blockType } })
+
+  test('keeps the block sequence: each marker owns the interval to the next, the last one to endTime', () => {
+    assert.deepEqual(decodeSpansOfStream([
+      chunk(1000, 'reasoning'),
+      { type: 'reasoning-chunks', time0: 1010, index: 0, dt: [], texts: ['think'] },
+      chunk(1300, 'text'),
+      { type: 'text-chunks', time0: 1310, index: 1, dt: [], texts: ['answer'] },
+      chunk(1500, 'tool-call'),
+      { type: 'tool-call-chunks', time0: 1510, index: 2, dt: [], id: 'c1', args: ['{}'] },
+    ], 2000), [
+      { kind: 'reasoning', start: 1000, end: 1300 },
+      { kind: 'text', start: 1300, end: 1500 },
+      { kind: 'toolarg', start: 1500, end: 2000 },
+    ])
+  })
+
+  test('a repeated kind stays two spans — the strip paints stream order, not a tally', () => {
+    assert.deepEqual(decodeSpansOfStream([
+      chunk(1000, 'reasoning'), chunk(1300, 'text'), chunk(1500, 'reasoning'),
+    ], 2000), [
+      { kind: 'reasoning', start: 1000, end: 1300 },
+      { kind: 'text', start: 1300, end: 1500 },
+      { kind: 'reasoning', start: 1500, end: 2000 },
+    ])
+  })
+
+  test('an unknown blockType closes the previous span but leaves its own interval unspanned', () => {
+    assert.deepEqual(decodeSpansOfStream([chunk(1000, 'reasoning'), chunk(1400, 'image')], 1900), [
+      { kind: 'reasoning', start: 1000, end: 1400 },
+    ])
+  })
+
+  test('a zero-length or backwards interval drops out', () => {
+    assert.deepEqual(decodeSpansOfStream([chunk(500, 'reasoning'), chunk(500, 'text')], 900), [
+      { kind: 'text', start: 500, end: 900 },
+    ])
+    assert.deepEqual(decodeSpansOfStream([chunk(1000, 'text'), chunk(900, 'reasoning')], 950), [
+      { kind: 'reasoning', start: 900, end: 950 },
+    ])
+  })
+
+  test('a marker with an unusable time is skipped WHOLE — the previous block keeps its interval', () => {
+    assert.deepEqual(decodeSpansOfStream([
+      chunk(1000, 'reasoning'),
+      { type: 'chunk', time: 'x', chunk: { type: 'block-start', blockType: 'text' } },
+      chunk(1500, 'text'),
+    ], 2000), [
+      { kind: 'reasoning', start: 1000, end: 1500 },
+      { kind: 'text', start: 1500, end: 2000 },
+    ])
+  })
+
+  test('malformed records, hostile containers, no markers, and a non-finite endTime yield none', () => {
+    assert.deepEqual(decodeSpansOfStream(undefined, 100), [])
+    assert.deepEqual(decodeSpansOfStream('stream', 100), [])
+    assert.deepEqual(decodeSpansOfStream([], 100), [])
+    assert.deepEqual(decodeSpansOfStream([{ type: 'text-chunks', time0: 1, index: 0, dt: [], texts: ['a'] }], 100), [])
+    assert.deepEqual(decodeSpansOfStream([chunk(500, 'text')], Number.NaN), [])
+    assert.deepEqual(decodeSpansOfStream([
+      null, 7, 'x',
+      { type: 'chunk' },
+      { type: 'chunk', time: 1, chunk: null },
+      { type: 'chunk', time: 2, chunk: { type: 'text-delta', text: 'x' } },
+    ], 100), [])
   })
 })
 

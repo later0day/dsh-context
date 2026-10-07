@@ -159,6 +159,11 @@ export function planMode(seq: number, data?: Record<string, unknown>): TimelineE
   return { type: 'plan/mode', seq, time: at(), ...(data === undefined ? {} : { data }) }
 }
 
+/** session/end-seed: the fork/seed boundary marker; `data` widened for hostile fixtures. */
+export function endSeed(seq: number, data?: unknown): TimelineEvent {
+  return { type: 'session/end-seed', seq, time: at(), ...(data === undefined ? {} : { data }) as Record<string, unknown> }
+}
+
 /** An event the fold does not care about (a todo write, a turn marker, …). */
 export function foreign(seq: number, type = 'todo/write'): TimelineEvent {
   return { type, seq, time: at(), data: {} }

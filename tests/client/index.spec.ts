@@ -10,7 +10,7 @@ import { DICT_EN, DICT_ZH } from '../../src/client/i18n'
 import { modalStoreOf, type ModalStore } from '../../src/client/modalStore'
 import type { SettingsField, SettingsScopeLike, SettingsState } from '../../src/client/settings'
 import { TestClientCtx, TestSessions, asClientCtx } from './helpers/harness'
-import { click, mount, query, queryAll } from './helpers/kit'
+import { click, mount, query, queryAll, text } from './helpers/kit'
 
 // The entry ships via `module.exports` (bundle handoff shape); its runtime
 // exports are the plugin triple, opaque to the static import type.
@@ -198,50 +198,58 @@ describe('client entry: conversation.input.overlay slot', () => {
   })
 })
 
-describe('client entry: Context Dashboard seats', () => {
-  test('registers the sidebar-foot entry and the frame overlay, both rendering', async () => {
+describe('client entry: Context Insights page seats', () => {
+  test('registers the keyed main page and the sidebar panel-list entry under one id', async () => {
     const ctx = new TestClientCtx()
     applyTo(ctx)
 
-    const actions = ctx.slots.of('sidebar.footer.action')
-    assert.equal(actions.length, 1)
-    assert.equal(actions[0].registration.name, 'sidebar.footer.action')
-    assert.equal(actions[0].registration.id, 'context-overview')
-    assert.equal(actions[0].registration.locale, 'dsh-context')
-    const actionEl = actions[0].component({ wide: true }) as ReactElement
-    assert.equal((actionEl.type as { name: string }).name, 'OverviewButton')
-    const actionMount = await mount(actionEl)
-    assert.equal(query(actionMount.container, '.lc-ov-entry-label').textContent, 'Context Insights')
-    await actionMount.unmount()
+    const pages = ctx.slots.of('main')
+    assert.equal(pages.length, 1)
+    assert.equal(pages[0].registration.name, 'main')
+    assert.equal(pages[0].registration.key, 'dsh-context')
+    assert.equal(pages[0].registration.locale, 'dsh-context')
+    const pageEl = pages[0].component({}) as ReactElement
+    assert.equal((pageEl.type as { name: string }).name, 'OverviewPanel')
+    const pageMount = await mount(pageEl)
+    assert.ok(query(pageMount.container, 'section.lc-ov-page') !== null, 'the page renders on mount (mount IS the open)')
+    assert.ok(text(pageMount.container).includes('The session list is unavailable'), 'no standard kit degrades visibly')
+    await pageMount.unmount()
 
-    const overlays = ctx.slots.of('shell.overlay')
-    assert.equal(overlays.length, 1)
-    assert.equal(overlays[0].registration.name, 'shell.overlay')
-    assert.equal(overlays[0].registration.id, 'context-overview')
-    assert.equal(overlays[0].registration.locale, 'dsh-context')
-    const overlayEl = overlays[0].component({}) as ReactElement
-    assert.equal((overlayEl.type as { name: string }).name, 'OverviewPanel')
-    const overlayMount = await mount(overlayEl)
-    assert.equal(overlayMount.container.textContent, '', 'closed by default')
-    await overlayMount.unmount()
+    const entries = ctx.slots.of('sidebar.panellist')
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].registration.name, 'sidebar.panellist')
+    assert.equal(entries[0].registration.id, 'dsh-context', 'the entry id addresses the main panel')
+    assert.equal(entries[0].registration.order, 20, 'after the shipped Plugins (0) and Automation tasks (10)')
+    assert.equal(entries[0].registration.locale, 'dsh-context')
+    assert.equal(entries[0].registration.label?.(), 'Context Insights')
+    const iconMount = await mount(entries[0].component({ size: 16 }) as ReactElement)
+    assert.ok(query(iconMount.container, 'svg') !== null, 'the entry glyph renders')
+    await iconMount.unmount()
     ctx.dispose()
   })
 
-  test('the entry opens the overlay through the shared store', async () => {
+  test('the insightsEntry preference unwinds and remounts the pair', async () => {
     const ctx = new TestClientCtx()
     applyTo(ctx)
-    const actionEl = ctx.slots.of('sidebar.footer.action')[0].component({ wide: true }) as ReactElement
-    const actionMount = await mount(actionEl)
-    await click(query(actionMount.container, 'button.lc-ov-entry'))
-    const overlayEl = ctx.slots.of('shell.overlay')[0].component({}) as ReactElement
-    const overlayMount = await mount(overlayEl)
-    assert.ok(overlayMount.container.textContent!.includes('The session list is unavailable'))
-    await actionMount.unmount()
-    await overlayMount.unmount()
-    // Reset for other specs sharing the module store.
-    const { overviewStore } = await import('../../src/client/overviewStore')
-    overviewStore.set(false)
+    // The preference flips through the registered settings card's set verb
+    // (the configForms transport is absent here, so drive the store directly
+    // through the last registered settings card face).
+    const scope = makeScope({ status: 'ready', value: {}, writable: true })
+    ctx.setService('settingsScope', { bind: () => scope })
+    assert.equal(ctx.slots.of('settings.plugin.item').length, 1, 'the V3 card seat armed')
+    const face = ctx.slots.of('settings.plugin.item')[0].registration.inject?.() as {
+      hooks: { contextSettings: { getSnapshot(): SettingsState } }
+      set: (field: SettingsField, value: string) => void
+    }
+    face.set('insightsEntry', 'hide')
+    assert.equal(ctx.slots.of('main').length, 0, 'hiding the entry unwinds the page')
+    assert.equal(ctx.slots.of('sidebar.panellist').length, 0, 'hiding unwinds the entry')
+    face.set('insightsEntry', 'show')
+    assert.equal(ctx.slots.of('main').length, 1)
+    assert.equal(ctx.slots.of('sidebar.panellist').length, 1)
     ctx.dispose()
+    assert.equal(ctx.slots.of('main').length, 0, 'the plugin dispose unwinds the pair')
+    assert.equal(ctx.slots.of('sidebar.panellist').length, 0)
   })
 })
 
@@ -363,7 +371,7 @@ describe('client entry: configForms inject (the Config-form generation)', () => 
     const m = await mount(h(el.type as never, {
       useContextSettings: <T,>(sel: (state: SettingsState) => T): T => sel(store.getSnapshot()),
     }))
-    assert.equal(queryAll(m.container, '.lc-settings-select').length, 6)
+    assert.equal(queryAll(m.container, '.lc-settings-select').length, 8)
     assert.equal(m.container.querySelector('.lc-settings-head'), null, 'no settings-section chrome on this seat')
     await m.unmount()
     disposeRegistration()
@@ -453,7 +461,7 @@ describe('client entry: settings card slot', () => {
     assert.ok(query(m.container, '.lc-settings-card'))
     await click(query(m.container, '.lc-settings-head'))
     const selects = queryAll(m.container, '.lc-settings-select')
-    assert.equal(selects.length, 6)
+    assert.equal(selects.length, 8)
     for (const s of selects) assert.ok((s as HTMLButtonElement).disabled)
     await m.unmount()
     ctx.dispose()

@@ -116,6 +116,16 @@ export interface ActivityDay {
   tokens: number
   /** Completed model calls (assistant settlements) that day. */
   requests: number
+  /**
+   * The day's billed buckets keyed provider → model → pricing period — the
+   * same SessionCostUsage raw material the timeline's session-cost totals
+   * carry, scoped to the day the requests INITIATED in, so the client prices
+   * each day off the same model-price book as the KPI band. ADDITIVE-OPTIONAL:
+   * absent on rows folded before the field existed (older plugin builds), on
+   * days whose settlements predate any model header, and on settlements the
+   * provider left unmetered — the usage chart degrades to tokens-only bars.
+   */
+  cost?: SessionCostUsage
 }
 
 /**
@@ -139,6 +149,9 @@ export type DefaultGranularity = 'step' | 'turn'
 
 export type DefaultTrendMode = 'total' | 'delta'
 
+/** The browser delta baseline: against the immediately preceding record, or the previous turn's last step. */
+export type DefaultDeltaBase = 'step' | 'turn'
+
 /** File Activity row order: most operations first, most-recently-touched first, or path ascending. */
 export type DefaultFileSort = 'count' | 'latest' | 'path'
 
@@ -151,13 +164,18 @@ export type DefaultPlacement = 'all' | 'tab' | 'sidebar'
 /** Whether the Context Insights panel's sidebar entry is offered at all. */
 export type InsightsEntry = 'show' | 'hide'
 
+/** Whether the trend chart mounts with the per-request duration curve overlaid. */
+export type DefaultDurationCurve = 'show' | 'hide'
+
 export interface PluginSettings {
   defaultPlacement: DefaultPlacement
   defaultGranularity: DefaultGranularity
   defaultTrendMode: DefaultTrendMode
+  defaultDeltaBase: DefaultDeltaBase
   defaultToolSort: DefaultToolSort
   defaultFileSort: DefaultFileSort
   insightsEntry: InsightsEntry
+  defaultDurationCurve: DefaultDurationCurve
 }
 
 /** The section fields the settings card edits, as the Host schema names them. */
@@ -290,6 +308,13 @@ export interface Snapshot {
    */
   fileOps?: FileOpRecord[]
   fileOpsFloor?: number
+  /**
+   * The timing strip's painted spans (see TimingSpan) — present on the INLINE
+   * wire value and on the detail payload, absent from the slim head (they ride
+   * the detail channel there) and from rows folded before the collection
+   * existed (older hosts; the client then shows no strip).
+   */
+  spans?: TimingSpan[]
 }
 
 /**
@@ -331,6 +356,13 @@ export interface ContextTimelineDetail {
   fileOps?: FileOpRecord[]
   /** The newest dropped op's seq when the op log trimmed (coverage honesty, same family as archiveFloor). */
   fileOpsFloor?: number
+  /**
+   * The timing strip's painted spans (see TimingSpan): the completed steps'
+   * time slices in log order, positioned by their real instants. Additive-
+   * optional: a payload folded before the collection existed (older hosts)
+   * serves without it, and the timing card shows no strip then.
+   */
+  spans?: TimingSpan[]
 }
 
 /**
@@ -435,6 +467,23 @@ export interface TokenUsage {
 }
 
 /**
+ * One painted span of the timing card's session-time strip (the card's bottom
+ * band): a completed step's time slice — the TTFT wait, one decode block (in
+ * stream order), one tool-run window, or an in-step residue gap — folded
+ * host-side at `step/end`. The instants are the slice's REAL occurrence times
+ * (the hover tip reads them); the strip packs the spans gapless in log order,
+ * each band's width its share of the session's cumulative active time (idle
+ * time BETWEEN steps carries no span and takes no track). `end` > `start`
+ * always (the fold drops zero/negative slices).
+ */
+export interface TimingSpan {
+  /** The slice kind — the timing card's own slice vocabulary (same keys, same colors). */
+  kind: 'ttft' | 'reasoning' | 'text' | 'toolarg' | 'tools' | 'other'
+  start: number
+  end: number
+}
+
+/**
  * Cumulative billed-token totals for one pricing bucket of the session-cost
  * estimate (host-folded, never trimmed — running totals over the COMPLETE
  * session log, immune to the request/event retention bounds).
@@ -463,20 +512,26 @@ export interface ToolTimingTotals {
  * own embedded stream (`assistant/message.data.stream` /
  * `assistant/attempt.data.stream`), matching the harness's own
  * session-stats fold. Durations are wall-clock milliseconds: `wallMs` sums
- * whole steps, `ttftMs` the step-start → first-token slice (the model wait)
- * and `genMs` the first-token → assistant-message slice (the generation) —
+ * whole steps, `ttftMs` the step-start → decode-start slice (the model wait)
+ * and `genMs` the decode-start → assistant-message slice (the generation) —
  * both only over calls whose stream carried a token delta, `toolsMs` the sum
  * of per-call tool durations (parallel calls each count, so it can overlap).
- * Absent until the first step lifecycle completes in the log.
+ * The decode window opens at the first OBSERVABLE instant — the first token,
+ * or an earlier `block-start` marker the token packing could not stamp (a
+ * redacted reasoning block leaves no chunk behind): anchoring at the token
+ * would charge the marker-tiled window to the wait as well, double-counting
+ * it past 100% in the legend. Absent until the first step lifecycle
+ * completes in the log.
  *
  * The generation window itself splits by WHAT was being decoded, off the
  * stream's `block-start` framing (`blockType`): `reasoningMs` (the model's
  * thinking), `textMs` (the answer text), and `toolArgMs` (the tool-call
  * arguments). Each marker owns the interval up to the next one (the last one
- * up to the assistant message), so the three tile the marker span and together
- * account for essentially all of `genMs` — the span opens at the first marker,
- * which can sit marginally before the first token, so it is not an exact
- * partition. They are ADDITIVE-OPTIONAL: cached projection rows written before
+ * up to the assistant message), so the three tile the marker span — exactly
+ * `genMs` when the first marker leads the first token (the window opens
+ * there); when the first marker sits marginally PAST the token the lead-in
+ * gap stays inside `genMs` unattributed, so the buckets never exceed it.
+ * They are ADDITIVE-OPTIONAL: cached projection rows written before
  * the split carry `genMs` without them, so the card falls back to the
  * un-split shape instead of the cache row being discarded (the
  * stateVersion-15 rationale in host/timeline.ts).
@@ -484,9 +539,9 @@ export interface ToolTimingTotals {
 export interface TimingTotals {
   /** Summed wall time of completed steps (the session's active time). */
   wallMs: number
-  /** Summed step-start → first-token time (the model wait, TTFT). */
+  /** Summed step-start → decode-start time (the model wait, TTFT). */
   ttftMs: number
-  /** Summed first-token → assistant-message time (the generation). */
+  /** Summed decode-start → assistant-message time (the generation). */
   genMs: number
   /** Reasoning-decode slice of `genMs` (the model's thinking). */
   reasoningMs?: number
@@ -512,7 +567,9 @@ export interface TimingTotals {
    * output tokens and `speedMs` the first-token → assistant-message
    * windows, over the calls that carried BOTH a first-token stamp and a
    * usage report — a subset of `genMs`, which counts every token-stamped
-   * call regardless of usage. Additive-optional: cached rows written before
+   * call regardless of usage. `speedMs` KEEPS the first-token anchor (not
+   * the marker-aware decode start): it is the harness-parity figure.
+   * Additive-optional: cached rows written before
    * the seat existed lack them, and the card falls back to no chip.
    */
   speedTokens?: number
@@ -609,6 +666,15 @@ export interface RequestRecord {
    */
   cacheRead?: number
   output?: number
+  /**
+   * The request's step ACTIVE milliseconds (`step/start` → `step/end`: the
+   * model call plus its tool runs) minus the in-step user waits — approval
+   * decisions and `ask_user_question` answer windows — the trend chart's
+   * duration overlay. Stamped at `step/end` onto the step's committed record;
+   * absent while that step is still open (the live tail) or when the step
+   * closed without one (an unpaired/hostile log).
+   */
+  activeMs?: number
   /**
    * Turn-mode aggregate marker, set by the Client's aggregateByTurn (one bar
    * per turn shows its LAST step's record). The Host never sets it.

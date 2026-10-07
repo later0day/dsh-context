@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, test, vi } from 'vitest'
 import { makeContextView } from '../../../src/client/components/contextView'
 import { watchHistoryFaces } from '../../../src/client/historyPage'
 import { requestContextFocus, takeContextFocus } from '../../../src/client/viewFocus'
+import { resetTimelineDetailStores } from '../../../src/client/timelineSource'
 import { createContextSettings } from '../../../src/client/settings'
 import type { SettingsScopeLike } from '../../../src/client/settings'
 import { resetModelPrices, setModelPricesLoader } from '../../../src/client/modelPrices'
@@ -30,6 +31,10 @@ const kit = makeKit()
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  // The cold-start share (timelineSource.ts) is page-lifetime per session:
+  // drop it so one test's cold read never leaks its failed/ready state into
+  // a later test that reuses the same session id.
+  resetTimelineDetailStores()
 })
 
 
@@ -135,6 +140,18 @@ describe('ContextView — projection guards', () => {
     await m3.unmount()
   })
 
+  test('a cold read that settles without data surfaces the retryable failure, not a stall', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: false, status: 500, json: async () => null } as Response))
+    const View = makeView(new TestClientCtx())
+    const m = await mount(h(View, { sessionId: 'sv-cold-fail', useProjection: () => undefined }))
+    await until(() => text(m.container).includes(DICT_EN['detail.loadFailed']), 'the failure note never surfaced')
+    assert.ok(!text(m.container).includes(DICT_EN.loading), 'no spinner remains once failed')
+    await act(async () => {
+      buttonByText(m.container, DICT_EN['detail.loadFailed']).click()
+    })
+    await m.unmount()
+  })
+
   test('renders the full tab without a session id (the agent card anchors nothing)', async () => {
     const View = makeView(new TestClientCtx())
     const m = await mount(h(View, { useProjection: projectionsFor(timeline()) }))
@@ -178,11 +195,11 @@ describe('ContextView — projection guards', () => {
     assert.ok(text(m.container).includes(DICT_EN['overview.used']))
     // The Token card's center is the chat stats line's whole-session billed
     // total off the official tokenUsage projection (100 + 200 + 0 + 50), and
-    // the Context card's cache-hit cell shows the line's own rate two decimals
-    // deep (200 / 300, truncated).
+    // its corner shows the line's own cache-hit rate two decimals deep
+    // (200 / 300, truncated).
     const tokensCard = queryAll(m.container, '.lc-head > .lc-col-donut')[0]
     assert.equal(query(tokensCard, '.lc-donut-center b').textContent, '350')
-    assert.ok(text(m.container).includes('66.66%'))
+    assert.equal(query(tokensCard, '.lc-card-rate').textContent, 'Cache Hit 66.66%')
     assert.ok(text(m.container).includes('m-only'))
     await m.unmount()
   })
@@ -438,15 +455,11 @@ describe('ContextView — interactions', () => {
     const segs = queryAll(m.container, '.lc-bar .lc-bar-stack > .lc-cat-seg')
     assert.equal(segs.length, 3)
     for (const s of segs) assert.equal(s.getAttribute('data-cat'), 'assistant')
-    assert.ok(text(m.container).includes(DICT_EN['trend.focus'].replace('{cat}', DICT_EN['cat.assistant'])),
-      'the card subtitle names the focused category')
 
-    // Collapsing the category restores the whole composition and drops the subtitle.
+    // Collapsing the category restores the whole composition.
     await click(queryAll(m.container, '.lc-br-cat-row')[5])
     assert.equal(text(query(m.container, '.lc-axis-top')), '420')
     assert.equal(queryAll(m.container, '.lc-bar[data-seq="4"] .lc-bar-stack > .lc-cat-seg').length, 5)
-    const trendCard = queryAll(m.container, '.lc-card').find(c => text(c).includes(DICT_EN['trend.title']))
-    assert.ok(trendCard !== undefined && trendCard.querySelector('.lc-card-sub') === null, 'unfocused: no subtitle')
     await m.unmount()
   })
 
@@ -457,10 +470,15 @@ describe('ContextView — interactions', () => {
     const titleText = query(card, '.lc-card-title-text')
     assert.equal(text(titleText), DICT_EN['trend.title'])
 
-    // The switch is the title text's NEXT sibling — left of the card's right-hand control cluster.
+    // The three display modifiers ride the title text's right as ONE segmented group, left of the
+    // card's right-hand control cluster.
     const toggleOf = () => buttonByText(m.container, DICT_EN['trend.adaptive'])
-    assert.equal(toggleOf().parentElement?.previousElementSibling, titleText)
-    assert.equal(toggleOf().parentElement?.getAttribute('title'), DICT_EN['trend.adaptiveHint'])
+    const modsGroupOf = () => buttonByText(m.container, DICT_EN['trend.dna']).parentElement as HTMLElement
+    assert.ok(modsGroupOf().className.includes('lc-trend-mods'))
+    assert.equal(modsGroupOf().previousElementSibling, titleText)
+    assert.equal(toggleOf().parentElement, modsGroupOf())
+    assert.equal(toggleOf().previousElementSibling, buttonByText(m.container, DICT_EN['trend.dna']), 'Adaptive rides right of DNA inside the group')
+    assert.equal(toggleOf().getAttribute('title'), DICT_EN['trend.adaptiveHint'])
     assert.ok(!toggleOf().className.includes('lc-gran-on'), 'off at mount')
 
     // Toggling is mount-local: the chart keeps rendering (jsdom has no layout, so the zero-width viewport falls
@@ -471,6 +489,114 @@ describe('ContextView — interactions', () => {
     await click(toggleOf())
     assert.ok(!toggleOf().className.includes('lc-gran-on'))
     assert.equal(text(query(m.container, '.lc-axis-top')), '420')
+    await m.unmount()
+  })
+
+  test('the duration toggle overlays the active-time curve with a right-hand quartile axis', async () => {
+    const View = makeView(new TestClientCtx())
+    const m = await mount(h(View, {
+      sessionId: 'sv-ms-curve',
+      useProjection: projectionsFor(timeline({
+        requests: [
+          { seq: 2, turn: 1, step: 1, time: T0 + 1000, system: 100, tools: 200, user: 10, inject: 0, assistant: 20, tool: 0, total: 330, activeMs: 1000 },
+          { seq: 4, turn: 1, step: 2, time: T0 + 3000, system: 100, tools: 200, user: 10, inject: 0, assistant: 60, tool: 30, total: 400, activeMs: 2000 },
+        ],
+      })),
+    }))
+
+    // The switch rides inside the title-adjacent modifier group, after the adaptive one.
+    const msBtn = () => buttonByText(m.container, DICT_EN['trend.duration'])
+    const group = msBtn().parentElement as HTMLElement
+    assert.ok(group.className.includes('lc-trend-mods'))
+    assert.equal(msBtn().getAttribute('title'), DICT_EN['trend.durationTip'])
+    assert.equal(msBtn().previousElementSibling, buttonByText(m.container, DICT_EN['trend.adaptive']), 'Duration rides right of the adaptive switch')
+    // The settings default (show) mounts the overlay ON: the curve spans the two stamped bars and the
+    // right axis reads the 2s peak (jsdom's zero-width viewport keeps the whole-log scale, adaptive off anyway).
+    assert.ok(msBtn().className.includes('lc-gran-on'), 'on at mount (the settings default)')
+    assert.equal(queryAll(m.container, '.lc-duration polyline').length, 1)
+    assert.equal(text(query(m.container, '.lc-axis-r .lc-axis-top')), '2.0s')
+    assert.equal(text(query(m.container, '.lc-axis-r .lc-axis-mid')), '1.0s')
+
+    // Off: the curve and its axis drop away; back on they return. Mount-local, never written back.
+    await click(msBtn())
+    assert.ok(!msBtn().className.includes('lc-gran-on'))
+    assert.equal(queryAll(m.container, '.lc-duration').length, 0)
+    assert.equal(queryAll(m.container, '.lc-axis-r').length, 0)
+
+    await click(msBtn())
+    assert.equal(queryAll(m.container, '.lc-duration polyline').length, 1)
+    assert.equal(queryAll(m.container, '.lc-axis-r').length, 1)
+    await m.unmount()
+  })
+
+  test('the trend card\'s DNA toggle fingerprints the bars, combinable with Delta', async () => {
+    const m = await mountRich('sv-trend-dna')
+    const dnaBtn = () => buttonByText(m.container, DICT_EN['trend.dna'])
+    assert.ok(!dnaBtn().className.includes('lc-gran-on'), 'off at mount')
+    const dnaGroup = dnaBtn().parentElement as HTMLElement
+    assert.ok(dnaGroup.className.includes('lc-trend-mods'))
+    assert.equal(dnaBtn().getAttribute('title'), DICT_EN['trend.dnaTip'])
+    assert.equal(dnaBtn().nextElementSibling, buttonByText(m.container, DICT_EN['trend.adaptive']), 'DNA rides left of the adaptive switch')
+
+    // DNA on: the bars become per-item fingerprints and the axis reads totals.
+    await click(dnaBtn())
+    assert.ok(dnaBtn().className.includes('lc-gran-on'))
+    assert.equal(queryAll(m.container, '.lc-bar-dna').length, 3)
+    assert.equal(text(query(m.container, '.lc-axis-top')), '420')
+
+    // The strip reads in the model's read order: the tool schema leads, then the messages by seq.
+    const g = query(m.container, '.lc-bar[data-seq="4"] .lc-bar-dna').style.background
+    const amberAt = g.indexOf('color-amber-500')
+    const greenAt = g.indexOf('color-green-500')
+    const blueAt = g.indexOf('color-blue-500')
+    const tealAt = g.indexOf('color-teal-500')
+    assert.ok(amberAt >= 0 && greenAt > amberAt && blueAt > greenAt && tealAt > blueAt, g)
+
+    // DNA + Delta: the mode switch stays live and each bar diffs its bands against the previous
+    // one — the first bar carries no change (no strip), the axis turns signed around a zero line.
+    await click(buttonByText(m.container, DICT_EN['gran.delta']))
+    assert.equal(queryAll(m.container, '.lc-bar-dna').length, 2)
+    assert.ok(text(query(m.container, '.lc-axis-mid')).includes('0'), 'the delta zero line label rides the axis')
+
+    // DNA off: the segmented delta arms are back with the Delta state intact.
+    await click(dnaBtn())
+    assert.ok(!dnaBtn().className.includes('lc-gran-on'))
+    assert.equal(queryAll(m.container, '.lc-bar-dna').length, 0)
+    assert.ok(queryAll(m.container, '.lc-bar-up').length > 0, 'delta arms are back')
+    await m.unmount()
+  })
+
+  test('the trend and browser DNA toggles move as one', async () => {
+    const m = await mountRich('sv-dna-link')
+    const trendDna = () => buttonByText(m.container, DICT_EN['trend.dna'])
+    const browserDna = () => query(m.container, '.lc-br-dna-ctl .lc-gran-btn')
+    assert.ok(!trendDna().className.includes('lc-gran-on') && !browserDna().className.includes('lc-gran-on'), 'both off at mount')
+
+    // The browser follows the trend toggle — its composition bar redraws as a fingerprint too.
+    await click(trendDna())
+    assert.ok(browserDna().className.includes('lc-gran-on'), 'the browser follows the trend toggle')
+    assert.equal(queryAll(m.container, '.lc-br-bar-dna').length, 1)
+
+    // And the trend follows the browser toggle — the chart's strips drop away.
+    await click(browserDna())
+    assert.ok(!trendDna().className.includes('lc-gran-on'), 'the trend follows the browser toggle')
+    assert.equal(queryAll(m.container, '.lc-bar-dna').length, 0)
+    assert.equal(queryAll(m.container, '.lc-br-bar-dna').length, 0)
+    await m.unmount()
+  })
+
+  test('clicking a DNA band reveals that item in the Context browser', async () => {    const m = await mountRich('sv-dna-reveal')
+    await click(buttonByText(m.container, DICT_EN['trend.dna']))
+    // Give the strip a real 112px stack area, then click its very top: the hit is the LAST band of
+    // bar seq 4 — the 'file output' tool result (system and the header lead the strip below it).
+    const dnaDiv = query(m.container, '.lc-bar[data-seq="4"] .lc-bar-dna')
+    dnaDiv.getBoundingClientRect = () => ({ top: 0, left: 0, right: 14, bottom: 112, width: 14, height: 112, x: 0, y: 0, toJSON: () => null }) as DOMRect
+    await act(async () => { dnaDiv.dispatchEvent(new MouseEvent('click', { bubbles: true, clientY: 0 })) })
+    await flush()
+    // The browser left the live surface for the bar's step and opened the node's row — the pin
+    // alone would only select the step (accordion reset), so the open row is the reveal.
+    assert.equal(query<HTMLSelectElement>(m.container, 'select.lc-br-pick').value, '4')
+    assert.ok(text(query(m.container, '.lc-br-elem-on')).includes('file output'))
     await m.unmount()
   })
 
@@ -1071,7 +1197,7 @@ describe('ContextView — locale and settings', () => {
       getSnapshot: () => ({
         status: 'ready',
         writable: true,
-        value: { defaultGranularity: 'turn', defaultTrendMode: 'delta', defaultFileSort: 'path' },
+        value: { defaultGranularity: 'turn', defaultTrendMode: 'delta', defaultFileSort: 'path', defaultDurationCurve: 'hide' },
       }),
       subscribe: () => () => {},
       set: async () => {},
@@ -1099,6 +1225,8 @@ describe('ContextView — locale and settings', () => {
     }))
     assert.ok(buttonByText(m.container, DICT_EN['gran.turn']).className.includes('lc-gran-on'))
     assert.ok(buttonByText(m.container, DICT_EN['gran.delta']).className.includes('lc-gran-on'))
+    // The 'hide' curve preference mounts the Duration toggle off (the schema default mounts it on).
+    assert.ok(!buttonByText(m.container, DICT_EN['trend.duration']).className.includes('lc-gran-on'))
     // Turn aggregation applies at mount: two bars (turn 1 aggregate + turn-less).
     assert.equal(queryAll(m.container, '.lc-bar').length, 2)
     // The File Activity card opens sorted by the 'path' preference, not by op count.
@@ -1273,8 +1401,8 @@ describe('ContextView — the split generation (slim head + detail channel)', ()
     const m = await mount(h(View, { sessionId: 'sv-slim', useProjection: projectionsFor(slimHead()) }))
 
     // First paint: the counters are real (no detail needed), the detail cards name the pending read.
-    const values = queryAll(m.container, '.lc-stat-value').map(el => text(el))
-    assert.deepEqual(values.slice(0, 2), ['1', '3'], 'turns/steps from the head counters')
+    const values = queryAll(m.container, '.lc-flow-kv b').map(el => text(el))
+    assert.deepEqual(values, ['1', '3', '0'], 'turns/steps from the head counters; no subagents without the sessions face')
     assert.ok(text(m.container).includes(DICT_EN['detail.loading']))
     assert.equal(queryAll(m.container, '.lc-bar').length, 0, 'the chart waits for the detail')
     assert.equal(queryAll(m.container, '.lc-br-pick option').length, 1, 'the picker holds only the live row')

@@ -298,6 +298,7 @@ describe('timelineOf', () => {
       detailRev: 12,
       fileOps: [{ seq: 2, path: 'a.ts', kind: 'read', tool: 'read', err: false, added: 0, removed: 0 }],
       fileOpsFloor: 5,
+      spans: [{ kind: 'ttft', start: 0, end: 100 }, null],
     }
     const out = timelineOf(head)
     assert.ok(out !== null)
@@ -309,6 +310,7 @@ describe('timelineOf', () => {
     assert.deepEqual(out.archive, [])
     assert.equal(out.fileOps?.length, 1, 'the op log survives the head sanitize')
     assert.equal(out.fileOpsFloor, 5)
+    assert.equal(out.spans?.length, 1, 'the strip spans survive, junk entries dropped')
   })
 
   test('the slim head fields re-prove: partial counts zero per field, shapeless last/detailRev drop', () => {
@@ -937,5 +939,25 @@ describe('activityOf', () => {
       },
     })
     assert.deepEqual(out, { days: { '2026-09-16': { tokens: 15, requests: 1 } } })
+  })
+
+  test('a well-formed pricing record rides both the pass-through and the sanitized copy', () => {
+    const cost = { deepseek: { 'deepseek-v4': { peak: { uncached: 10, cacheRead: 5, cacheWrite: 0, output: 2 } } } }
+    const wire = { days: { '2026-09-16': { tokens: 15, requests: 1, cost } } }
+    assert.ok(activityOf(wire) === (wire as never))
+    const dirty = { days: { '2026-09-16': { tokens: 15, requests: 1, cost }, '09-16': { tokens: 1, requests: 1 } } }
+    assert.deepEqual(activityOf(dirty), { days: { '2026-09-16': { tokens: 15, requests: 1, cost } } })
+  })
+
+  test('a malformed pricing record drops the fee whole; the day survives', () => {
+    const out = activityOf({
+      days: {
+        '2026-09-16': { tokens: 15, requests: 1, cost: 'x' },
+        '2026-09-15': { tokens: 3, requests: 1, cost: { deepseek: 7 } },
+      },
+    })
+    assert.deepEqual(out, {
+      days: { '2026-09-16': { tokens: 15, requests: 1 }, '2026-09-15': { tokens: 3, requests: 1 } },
+    })
   })
 })

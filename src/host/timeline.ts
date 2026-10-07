@@ -70,6 +70,11 @@ const requestRecordSchema = z.object({
   skill: z.number().int().nonnegative().optional(),
   cacheRead: z.number().int().nonnegative().optional(),
   output: z.number().int().nonnegative().optional(),
+  /**
+   * The request's step active milliseconds (see RequestRecord.activeMs).
+   * Optional so a record whose step never closed (the live tail) still parses.
+   */
+  activeMs: z.number().nonnegative().optional(),
   stepCount: z.number().int().positive().optional(),
 }).strict()
 
@@ -111,6 +116,13 @@ const fileOpSchema = z.object({
   program: z.string().optional(),
   pattern: z.literal(true).optional(),
   gone: z.number().int().nonnegative().optional(),
+}).strict()
+
+/** One painted span of the timing strip (shared/types.ts TimingSpan). */
+const timingSpanSchema = z.object({
+  kind: z.enum(['ttft', 'reasoning', 'text', 'toolarg', 'tools', 'other']),
+  start: z.number(),
+  end: z.number(),
 }).strict()
 
 const currentSchema = z.object({
@@ -223,6 +235,7 @@ export const contextTimelineSchema = z.object({
   archiveFloor: z.number().int().nonnegative().optional(),
   fileOps: z.array(fileOpSchema).optional(),
   fileOpsFloor: z.number().int().nonnegative().optional(),
+  spans: z.array(timingSpanSchema).optional(),
 }).strict() as unknown as z.ZodType<ContextTimeline>
 
 /**
@@ -260,12 +273,17 @@ const timelineStateSchema = z.object({
     time: z.number(),
     firstToken: z.number().optional(),
   }).strict().optional(),
+  stepWaits: z.array(z.object({ start: z.number(), end: z.number() }).strict()).optional(),
+  stepApprovals: z.record(z.string(), z.number()).optional(),
+  stepRequestSeq: z.number().optional(),
   callNames: z.record(z.string(), z.object({ name: z.string(), start: z.number(), argsRaw: z.string().optional() }).strict()),
   pendingShadowedSeqs: z.array(z.number()).optional(),
   pendingShadowEventSeq: z.number().optional(),
   detailRev: z.number().int().nonnegative().optional(),
   fileOps: z.array(fileOpSchema),
   fileOpsFloor: z.number().int().nonnegative().optional(),
+  spans: z.array(timingSpanSchema),
+  stepSpans: z.array(timingSpanSchema).optional(),
   pendingCodeOps: z.record(z.string(), z.array(fileOpSchema)).optional(),
 }) as unknown as z.ZodType<TimelineState>
 
@@ -394,6 +412,11 @@ export function createContextTimelineDefinition(config: Config, slim: () => bool
     // the `contextTimeline` row too, rebuilding idle sessions' rows instead
     // of orphaning the key.
     //
+    // 21: `deepseek-account` joined the DeepSeek peak/off-peak split
+    // (shared/providers) — its cached cost buckets were all booked under
+    // `peak` and cannot be reinterpreted into the right periods, so rows
+    // refold from the log, which rebuilds the split (issue #91).
+    //
     // Not bumped since: the supported-baseline move (0.1.2-rc.1 → 0.1.5-rc.1,
     // the plugin floor) retired the pre-V3 log-shape branches
     // (`header.system` envelope, `assistant/chunk` floods, `start`/`end`
@@ -407,7 +430,39 @@ export function createContextTimelineDefinition(config: Config, slim: () => bool
     // decode accumulators, which every reader treats as "not served,
     // refold". Bumping would invalidate every in-generation row and orphan
     // the key for idle sessions (the #37 regression) for no correctness gain.
-    stateVersion: 20,
+    // 22: the fold zeroes the session-cost totals at the tagged fork/seed
+    // boundary (`session/end-seed` carrying `inherited: true`): a seeded
+    // session's cost now counts post-seed spend only — the parent-history
+    // prefix its seed replayed verbatim, settlements included, was already
+    // priced by the session it forked from (issue #94). Cached rows for
+    // seeded forks refold from the log; untagged resume markers reset
+    // nothing, so ordinary rows refold to the same totals.
+    //
+    // 23: the timing strip's painted spans joined the state (`spans` + the
+    // per-step `stepSpans` accumulator) — the completed steps' time slices
+    // positioned by their real instants, flushed at `step/end`. A running
+    // per-step collection that later events cannot backfill (the timing
+    // totals' own v11 precedent), so cached rows refold from the log, which
+    // rebuilds the spans for sessions started under older plugin builds.
+    //
+    // 24: the timing totals' wait/generation boundary moved from the first
+    // token to the first OBSERVABLE instant (an earlier block marker wins —
+    // a redacted reasoning block leaves no chunk for the token rule to
+    // stamp), matching the boundary the spans already paint. Rows folded
+    // under 23 charged the marker-tiled decode window to BOTH the wait and
+    // the generation split, so their legend rows sum past 100% and cannot
+    // be re-split by later events; cached rows refold from the log.
+    //
+    // 25: developer/message tool-registry changes now enter the injection
+    // surface and request history. Later events cannot recover the omitted
+    // nodes or tokens, so cached rows refold from the durable log.
+    //
+    // 26: the per-request step active time (`activeMs`) joined request
+    // records — the trend chart's duration overlay. Later events cannot
+    // backfill it for requests already folded (the v9 `cacheRead` precedent),
+    // so cached rows refold from the durable log; the v20 warm-up rebuilds
+    // idle sessions' rows the first time the dashboard opens.
+    stateVersion: 26,
   }
   return definition
 }

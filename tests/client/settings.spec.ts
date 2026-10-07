@@ -50,17 +50,21 @@ describe('createContextSettings defaults', () => {
       placement: 'all',
       granularity: 'step',
       mode: 'total',
+      deltaBase: 'step',
       toolSort: 'count',
       fileSort: 'count',
       insightsEntry: 'show',
+      durationCurve: 'show',
       writable: false,
     })
     assert.equal(s.defaultPlacement(), 'all')
     assert.equal(s.defaultGranularity(), 'step')
     assert.equal(s.defaultTrendMode(), 'total')
+    assert.equal(s.defaultDeltaBase(), 'step')
     assert.equal(s.defaultToolSort(), 'count')
     assert.equal(s.defaultFileSort(), 'count')
     assert.equal(s.insightsEntry(), 'show')
+    assert.equal(s.defaultDurationCurve(), 'show')
   })
 })
 
@@ -85,6 +89,8 @@ describe('set', () => {
     assert.equal(s.defaultGranularity(), 'turn')
     s.set('defaultPlacement', 'sidebar')
     assert.equal(s.defaultPlacement(), 'sidebar')
+    s.set('defaultDeltaBase', 'turn')
+    assert.equal(s.defaultDeltaBase(), 'turn')
   })
 
   test('an unchanged value does not notify listeners', () => {
@@ -197,9 +203,11 @@ describe('attach', () => {
         defaultPlacement: 'sidebar',
         defaultGranularity: 'turn',
         defaultTrendMode: 'delta',
+        defaultDeltaBase: 'turn',
         defaultToolSort: 'name',
         defaultFileSort: 'path',
         insightsEntry: 'hide',
+        defaultDurationCurve: 'hide',
       },
       writable: true,
     })
@@ -209,9 +217,11 @@ describe('attach', () => {
       placement: 'sidebar',
       granularity: 'turn',
       mode: 'delta',
+      deltaBase: 'turn',
       toolSort: 'name',
       fileSort: 'path',
       insightsEntry: 'hide',
+      durationCurve: 'hide',
       writable: true,
     })
   })
@@ -239,9 +249,11 @@ describe('attach', () => {
         placement: 'all',
         granularity: 'step',
         mode: 'total',
+        deltaBase: 'step',
         toolSort: 'count',
         fileSort: 'count',
         insightsEntry: 'show',
+        durationCurve: 'show',
         writable: false,
       })
     }
@@ -251,15 +263,17 @@ describe('attach', () => {
     const s = createContextSettings()
     s.attach(new TestSettingsScope({
       status: 'ready',
-      value: { defaultPlacement: 'window', defaultGranularity: 'bogus', defaultTrendMode: 7, defaultToolSort: 'alpha', defaultFileSort: 'alpha', insightsEntry: 42 },
+      value: { defaultPlacement: 'window', defaultGranularity: 'bogus', defaultTrendMode: 7, defaultDeltaBase: 'bogus', defaultToolSort: 'alpha', defaultFileSort: 'alpha', insightsEntry: 42, defaultDurationCurve: 'always' },
       writable: false,
     }))
     assert.equal(s.defaultPlacement(), 'all')
     assert.equal(s.defaultGranularity(), 'step')
     assert.equal(s.defaultTrendMode(), 'total')
+    assert.equal(s.defaultDeltaBase(), 'step')
     assert.equal(s.defaultToolSort(), 'count')
     assert.equal(s.defaultFileSort(), 'count')
     assert.equal(s.insightsEntry(), 'show')
+    assert.equal(s.defaultDurationCurve(), 'show')
   })
 
   test('an invalid scope placement degrades to all instead of keeping the current one', () => {
@@ -284,16 +298,26 @@ describe('attach', () => {
     assert.equal(s.insightsEntry(), 'show')
   })
 
+  test('an invalid scope duration-curve value degrades to show instead of keeping the current one', () => {
+    const s = createContextSettings()
+    s.set('defaultDurationCurve', 'hide')
+    assert.equal(s.defaultDurationCurve(), 'hide')
+    const scope = new TestSettingsScope({ status: 'ready', value: { defaultDurationCurve: 'always' }, writable: false })
+    s.attach(scope)
+    assert.equal(s.defaultDurationCurve(), 'show')
+  })
+
   test('explicit schema-default values are accepted', () => {
     const s = createContextSettings()
     s.attach(new TestSettingsScope({
       status: 'ready',
-      value: { defaultPlacement: 'all', defaultGranularity: 'step', defaultTrendMode: 'total', defaultToolSort: 'count', defaultFileSort: 'count', insightsEntry: 'show' },
+      value: { defaultPlacement: 'all', defaultGranularity: 'step', defaultTrendMode: 'total', defaultDeltaBase: 'step', defaultToolSort: 'count', defaultFileSort: 'count', insightsEntry: 'show' },
       writable: false,
     }))
     assert.equal(s.defaultPlacement(), 'all')
     assert.equal(s.defaultGranularity(), 'step')
     assert.equal(s.defaultTrendMode(), 'total')
+    assert.equal(s.defaultDeltaBase(), 'step')
     assert.equal(s.defaultToolSort(), 'count')
     assert.equal(s.defaultFileSort(), 'count')
     assert.equal(s.insightsEntry(), 'show')
@@ -304,6 +328,7 @@ describe('attach', () => {
     s.set('defaultPlacement', 'tab')
     s.set('defaultToolSort', 'size')
     s.set('insightsEntry', 'hide')
+    s.set('defaultDurationCurve', 'hide')
     s.attach(new TestSettingsScope({ status: 'ready', value: { defaultFileSort: 'latest' }, writable: false }))
     assert.equal(s.defaultPlacement(), 'tab', 'the in-session choice survives a section without the field')
     assert.equal(s.defaultGranularity(), 'step')
@@ -311,6 +336,7 @@ describe('attach', () => {
     assert.equal(s.defaultToolSort(), 'size', 'the in-session tool sort survives a section without the field')
     assert.equal(s.defaultFileSort(), 'latest')
     assert.equal(s.insightsEntry(), 'hide', 'the in-session entry choice survives a section without the field')
+    assert.equal(s.defaultDurationCurve(), 'hide', 'the in-session curve choice survives a section without the field')
   })
 
   test('scope updates republish to subscribers', () => {
@@ -334,11 +360,14 @@ describe('attach', () => {
     scope.emit({ status: 'ready', value: { defaultToolSort: 'name' }, writable: true })
     assert.equal(calls, 5)
     assert.equal(s.defaultToolSort(), 'name')
-    scope.emit({ status: 'ready', value: { defaultFileSort: 'path' }, writable: false })
+    scope.emit({ status: 'ready', value: { defaultDeltaBase: 'turn' }, writable: true })
     assert.equal(calls, 6)
+    assert.equal(s.defaultDeltaBase(), 'turn')
+    scope.emit({ status: 'ready', value: { defaultFileSort: 'path' }, writable: false })
+    assert.equal(calls, 7)
     assert.equal(s.store.getSnapshot().writable, false)
     scope.emit({ status: 'ready', value: { insightsEntry: 'hide' }, writable: false })
-    assert.equal(calls, 7)
+    assert.equal(calls, 8)
     assert.equal(s.insightsEntry(), 'hide')
   })
 

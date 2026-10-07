@@ -3,8 +3,9 @@
 // remembered (and an absent or failed route) renders nothing, the locale's
 // currency shows with the account's first currency as fallback, and the
 // non-zero parts of the breakdown (topped-up / granted; the pill itself
-// carries the total) ride the harness Tooltip's hover bubble. The route read
-// is stubbed per test; memory and storage are reset between tests.
+// carries the total) ride the page's hover tip via the pill's data
+// attributes. The route read is stubbed per test; memory and storage are
+// reset between tests.
 
 import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
@@ -12,7 +13,7 @@ import { afterEach, describe, test, vi } from 'vitest'
 import { makeBalanceCapsule } from '../../../src/client/components/balanceCapsule'
 import { PLATFORM_BALANCE_STORAGE_KEY, resetPlatformBalance } from '../../../src/client/balance'
 import { asClientCtx, TestClientCtx } from '../helpers/harness'
-import { flush, hover, makeKit, mount, query, queryAll, text, unhover } from '../helpers/kit'
+import { flush, makeKit, mount, query, text } from '../helpers/kit'
 
 const kit = makeKit()
 
@@ -82,17 +83,13 @@ describe('BalanceCapsule', () => {
     assert.equal(pill?.getAttribute('rel'), 'noreferrer')
     assert.equal(query(m.container, '.lc-ov-balance-label')?.textContent, 'DeepSeek balance')
     assert.equal(query(m.container, '.lc-ov-balance-value')?.textContent, '$12.50')
-    // The breakdown lives in the harness Tooltip's hover bubble (no native
-    // `title`): the pill already carries the total, so only the non-zero
-    // parts ride the bubble — the topped-up line leads the granted one.
+    // The breakdown lives in the pill's data attributes for the page's hover
+    // tip (no native `title`): the pill already carries the total, so only
+    // the non-zero parts ride the bubble — the topped-up line leads the
+    // granted one, and the tip drops below the pill.
     assert.equal(pill?.getAttribute('title'), null)
-    await hover(pill)
-    assert.equal(
-      query(m.container, '[role="tooltip"]').textContent,
-      'Topped-up balance: $10.00\nGranted balance: $2.50',
-    )
-    await unhover(pill)
-    assert.equal(queryAll(m.container, '[role="tooltip"]').length, 0, 'the bubble drops when the pointer leaves')
+    assert.equal(pill?.getAttribute('data-lc-tip'), 'Topped-up balance: $10.00\nGranted balance: $2.50')
+    assert.equal(pill?.getAttribute('data-lc-tip-side'), 'bottom')
     await m.unmount()
   })
 
@@ -105,8 +102,7 @@ describe('BalanceCapsule', () => {
     const m = await mount(h(Capsule, {}))
     await flush()
     const pill = query(m.container, '.lc-ov-balance')
-    await hover(pill)
-    assert.equal(query(m.container, '[role="tooltip"]').textContent, 'Topped-up balance: $9.00', 'the zero granted line is gone')
+    assert.equal(pill.getAttribute('data-lc-tip'), 'Topped-up balance: $9.00', 'the zero granted line is gone')
     await m.unmount()
 
     stubRoute({
@@ -117,8 +113,7 @@ describe('BalanceCapsule', () => {
     const m2 = await mount(h(bare, {}))
     await flush()
     assert.equal(query(m2.container, '.lc-ov-balance-value')?.textContent, '$0.00', 'the pill still shows the figure')
-    await hover(query(m2.container, '.lc-ov-balance'))
-    assert.equal(queryAll(m2.container, '[role="tooltip"]').length, 0, 'nothing to break down — no bubble')
+    assert.equal(query(m2.container, '.lc-ov-balance').getAttribute('data-lc-tip'), null, 'nothing to break down — no tip')
     await m2.unmount()
   })
 
@@ -131,11 +126,7 @@ describe('BalanceCapsule', () => {
     await flush()
     assert.equal(query(m.container, '.lc-ov-balance-label')?.textContent, 'DeepSeek 余额')
     assert.equal(query(m.container, '.lc-ov-balance-value')?.textContent, '¥110.00')
-    await hover(query(m.container, '.lc-ov-balance'))
-    assert.equal(
-      query(m.container, '[role="tooltip"]').textContent,
-      '充值余额: ¥100.00\n赠送余额: ¥10.00',
-    )
+    assert.equal(query(m.container, '.lc-ov-balance').getAttribute('data-lc-tip'), '充值余额: ¥100.00\n赠送余额: ¥10.00')
     await m.unmount()
   })
 

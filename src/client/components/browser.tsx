@@ -3,12 +3,12 @@ import { UNKNOWN_TOOL_SOURCE, type Category, type ContextHeaders, type ContextTi
 import { assemble } from '../assemble'
 import type { Assembled } from '../assemble'
 import { CATS, CAT_COLOR, partsOf } from '../categories'
-import { dnaOf } from '../dna'
+import { dnaBaseLabel, dnaOf } from '../dna'
 import type { DnaItem } from '../dna'
 import type { ContentFetcher, ConversationNodeLike, HeaderFetcher } from '../services'
-import type { ContextSettings, DefaultToolSort } from '../settings'
+import type { ContextSettings, DefaultDeltaBase, DefaultToolSort } from '../settings'
 import type { ViewKit } from '../viewkit'
-import { blockSummaryOf, callSummaryOf, parseCallArgs } from '../callSummary'
+import { blockSummaryOf, callNamesOf, callSummaryOf, parseCallArgs } from '../callSummary'
 import type { DetailState } from '../timelineSource'
 import { makeDetailNote } from './detailNote'
 import { makeNodeText } from './nodes'
@@ -48,10 +48,20 @@ export interface ContextBrowserProps {
   /** Pin-seq: a pin selects that step; pinSeq null returns the browser to the live surface. */
   pinSeq?: number | null
   /**
-   * One-shot reveal request from the step brief: select the step, open the category and the node element, scroll it into view;
-   * handed back via `onNodeFocusHandled` so the same row can fire again.
+   * DNA mode's on/off, LINKED across cards: the Context tab passes its trend card's toggle state
+   * so both DNA switches move as one. Controlled only when BOTH props arrive; absent (the
+   * /context modal) — the browser keeps its own mount-local toggle.
    */
-  nodeFocus?: { step: number | 'live'; seq: number; cat: Category } | null
+  dna?: boolean
+  onDnaChange?: (on: boolean) => void
+  /**
+   * One-shot reveal request (the step brief's locate, a trend-DNA band pick): select the step, open the
+   * item's category and element, scroll it into view. `key` is the band key both DNA surfaces share —
+   * 'sys' (system prompt), 'tool:<name>' (a tool schema), 'n<seq>' (a message) — so the same bridge
+   * serves header bands and message nodes; handed back via `onNodeFocusHandled` so the same row can
+   * fire again.
+   */
+  nodeFocus?: { step: number | 'live'; key: string; cat: Category | 'system' | 'tools' } | null
   onNodeFocusHandled?: () => void
   hoverKey?: string | null
   onHoverKey?: (key: string | null) => void
@@ -199,6 +209,7 @@ function TextSection(props: {
 }): ReactElement {
   const { rich } = props
   const [mode, setMode] = rich.useRichMode()
+  const find = rich.useRichFind(props.text, mode)
   const lineCount = useMemo(() => lineCountOf(props.text), [props.text])
   return (
     <Section
@@ -207,10 +218,15 @@ function TextSection(props: {
       actions={<>
         <rich.RichSwitch mode={mode} onPick={setMode} />
         <rich.RichCopy text={props.text} />
+        {find.button}
       </>}
       meta={<span className="lc-ts-card-meta">{props.lines(lineCount)}</span>}
     >
-      <rich.RichText text={props.text} mode={mode} />
+      {find.bar}
+      {/* Keyed by the text itself: a content change remounts the body outright, so React never diffs over the find bar's DOM marks. */}
+      <div key={find.bodyKey} ref={find.bodyRef}>
+        <rich.RichText text={props.text} mode={mode} />
+      </div>
     </Section>
   )
 }
@@ -572,6 +588,63 @@ function nodeNameOf(n: SurfaceNode): string {
   return typeof n.name === 'string' ? n.name : ''
 }
 
+/**
+ * The content kinds one assistant message proves, as the assistant category's
+ * kind chips count and filter them: thinking (a reasoning block — only the
+ * conversation join can prove it), tool calls (join blocks, else the fold's
+ * text-less-reply `calls` stamp), and answer text (join blocks, else the
+ * node's `text`). Legacy `content` joins classify the same way the body
+ * renders them. The flags are independent, so a combined reply lights
+ * several chips.
+ */
+function msgKindsOf(n: SurfaceNode, conv: ConversationNodeLike | undefined): { think: boolean; tool: boolean; answer: boolean } {
+  let think = false
+  let tool = false
+  let answer = false
+  for (const blocks of [conv?.blocks, conv?.content]) {
+    if (!Array.isArray(blocks)) continue
+    for (const b of blocks) {
+      const blk = b !== null && typeof b === 'object' ? b as { type?: unknown; kind?: unknown } : null
+      const k = blk !== null
+        ? typeof blk.kind === 'string' ? blk.kind : typeof blk.type === 'string' ? blk.type : ''
+        : ''
+      if (k === 'reasoning') think = true
+      else if (k === 'tool-call') tool = true
+      else if (k === 'text') answer = true
+    }
+  }
+  return {
+    think,
+    tool: tool || (Array.isArray(n.calls) && n.calls.length > 0),
+    answer: answer || (typeof n.text === 'string' && n.text !== ''),
+  }
+}
+
+/**
+ * The reasoning texts one assistant row's conversation join proves, concatenated for the row filter's scan —
+ * the fold stamps no reasoning on the node, so this is the only scan face the thinking blocks expose. Both block
+ * vocabularies classify here (the body renders the same blocks as the Reasoning sections); malformed blocks drop.
+ */
+function reasoningTextOf(conv: ConversationNodeLike | undefined): string {
+  if (conv === undefined) return ''
+  let out = ''
+  for (const blocks of [conv.blocks, conv.content]) {
+    if (!Array.isArray(blocks)) continue
+    for (const b of blocks) {
+      const blk = b !== null && typeof b === 'object' ? b as { type?: unknown; kind?: unknown; text?: unknown } : null
+      const k = blk !== null
+        ? typeof blk.kind === 'string' ? blk.kind : typeof blk.type === 'string' ? blk.type : ''
+        : ''
+      if (k === 'reasoning' && typeof blk?.text === 'string') out += blk.text + '\n'
+    }
+  }
+  return out
+}
+
+/** The assistant rows' kind chips, in display order. */
+const ROW_KINDS = ['think', 'tool', 'answer'] as const
+type RowKind = (typeof ROW_KINDS)[number]
+
 function countOf(asm: Assembled, byCat: Partial<Record<Category, SurfaceNode[]>>, c: string): number {
   if (c === 'system') return asm.system !== null ? 1 : 0
   if (c === 'tools') return asm.header !== null ? asm.header.tools.length : 0
@@ -614,12 +687,32 @@ export function makeContextBrowser(
     // it, while step picks (setOpenCat(null) below) keep it so the same lens
     // compares epochs.
     const [rowQuery, setRowQuery] = useState('')
+    // The assistant category's picked kind chip (null = none). It follows the
+    // text filter's lens rules: reset on a category switch, kept across step
+    // picks.
+    const [rowKind, setRowKind] = useState<RowKind | null>(null)
     // Mount-time default from the plugin settings card; in-toolbar toggling
     // stays mount-local and never writes back.
     const [toolSort, setToolSort] = useState<DefaultToolSort>(() => settings.defaultToolSort())
-    // DNA mode: the composition bar redraws as ONE band per context item in prompt order (dna.ts), hovered/clicked per item.
-    const [dna, setDna] = useState(false)
+    // DNA mode: the composition bar redraws as ONE band per context item in prompt order (dna.ts), hovered/clicked per
+    // item. Parent-linked when both props arrive — the Context tab's trend toggle moves this one too; a lone
+    // prop is ignored — otherwise mount-local (the /context modal).
+    const [dnaLocal, setDnaLocal] = useState(false)
+    const dnaLinked = props.dna !== undefined && props.onDnaChange !== undefined
+    const dna = dnaLinked ? props.dna === true : dnaLocal
+    const setDna = (on: boolean): void => {
+      if (dnaLinked) {
+        /* v8 ignore next 1 -- `dnaLinked` requires both props, so the handler is always present. */
+        props.onDnaChange?.(on)
+      } else {
+        setDnaLocal(on)
+      }
+    }
     const [dnaKey, setDnaKey] = useState<string | null>(null)
+    // δ baseline toggle: 'step' diffs against the immediately preceding record, 'turn' against the
+    // previous turn's last step. Mount default from the plugin settings card; in-toolbar toggling
+    // stays mount-local and never writes back.
+    const [deltaBase, setDeltaBase] = useState<DefaultDeltaBase>(() => settings.defaultDeltaBase())
     // Every open-category change (toggle, step pick, pin, brief reveal) reports outward so the Context tab
     // can focus the trend chart on the open category.
     const onOpenCat = props.onOpenCat
@@ -666,8 +759,10 @@ export function makeContextBrowser(
       setCat(null)
       setOpenElem(null)
     }, [pinSeq, onOpenCat])
-    // Step-brief reveal: select the owning step, open the node's category + element (the pagination effect above already pulls older
-    // history for a missing join), then arm a one-shot scroll consumed by the layout effect once the row renders.
+    // Reveal (step brief / trend-DNA pick): select the owning step, open the item's category +
+    // element (the pagination effect above already pulls older history for a missing join), clear
+    // the row lens so a stale filter cannot hide the revealed row, then arm a one-shot scroll
+    // consumed by the layout effect once the row renders.
     const rootRef = useRef<HTMLDivElement | null>(null)
     const focusScrollRef = useRef(false)
     const nodeFocus = props.nodeFocus
@@ -675,7 +770,9 @@ export function makeContextBrowser(
       if (nodeFocus === null || nodeFocus === undefined) return
       setSel(nodeFocus.step)
       setCat(nodeFocus.cat)
-      setOpenElem('n' + String(nodeFocus.seq))
+      setOpenElem(nodeFocus.key)
+      setRowQuery('')
+      setRowKind(null)
       focusScrollRef.current = true
       if (props.onNodeFocusHandled !== undefined) props.onNodeFocusHandled()
     }, [nodeFocus, props.onNodeFocusHandled, onOpenCat])
@@ -739,11 +836,22 @@ export function makeContextBrowser(
       setOpenElem(null)
     }
 
-    // δ baselines against the PREVIOUS TURN's last request — one stable unit whatever step/live surface is shown (turn T reads against turn
-    // T−1's final step), avoiding the misleading 'change' a same-turn neighbour would imply.
+    // δ baseline per the picked mode. Picked steps: 'step' = the immediately preceding record, 'turn' =
+    // the previous turn's last step. Live: 'step' = the last served request (the next request's direct
+    // predecessor); 'turn' = the previous turn's last step — this turn's growth so far. A picked step or
+    // a live surface with no predecessor (the log's first step, a first turn) falls back to a ZERO
+    // baseline: the whole surface is change, so the pills show the full makeup. A request-less live
+    // surface has nothing to compare against at all: no baseline, no pills.
+    const prevRecordOf = (r: RequestRecord): RequestRecord | null => {
+      const i = requests.findIndex(x => x.seq === r.seq)
+      return i > 0 ? requests[i - 1] : null
+    }
+    const lastReq = requests.length > 0 ? requests[requests.length - 1] : null
+    const turnBaseOf = (r: RequestRecord): RequestRecord | null => lastOfTurn(requests, (r.turn ?? 0) - 1)
     const refReq = req === null
-      ? requests.length > 0 ? requests[requests.length - 1] : null
-      : lastOfTurn(requests, (req.turn ?? 0) - 1)
+      ? deltaBase === 'step' ? lastReq : lastReq === null ? null : turnBaseOf(lastReq)
+      : deltaBase === 'turn' ? turnBaseOf(req) : prevRecordOf(req)
+    const zeroBase = refReq === null && lastReq !== null
     const prevView = refReq !== null ? assemble(data, headers, refReq.seq) : null
     const prevByCat = prevView !== null ? byCatOf(prevView) : null
 
@@ -761,18 +869,9 @@ export function makeContextBrowser(
     const toolHitsOf = (tool: HeaderTool): number => toolHits.get(tool.name) ?? 0
 
     // DNA mode: per-item bands in prompt order (dna.ts). The band label names the item the way its accordion row would
-    // (skill name, tool name, injection form, else the category label), with the item's time appended.
+    // (the shared dnaBaseLabel — skill name, tool name, injection form, else the category label) with its time appended.
     const dnaLabel = (it: DnaItem): string => {
-      let base: string
-      if (!('node' in it)) {
-        base = it.cat === 'system' ? catLabel('system') : it.key.slice('tool:'.length)
-      } else {
-        const n = it.node
-        base = n.skill !== undefined ? t('node.skillTag', { name: n.skill })
-          : n.cat === 'tool' ? (n.tool ?? '?')
-            : n.cat === 'inject' ? t('form.' + (n.form || 'context'))
-              : catLabel(n.cat)
-      }
+      const base = dnaBaseLabel(it, t, catLabel)
       return it.time !== undefined ? base + ' · ' + fmtTime(it.time) : base
     }
     const dnaItems = dna ? dnaOf(view) : null
@@ -795,6 +894,7 @@ export function makeContextBrowser(
       if (it === undefined) return
       setCat(it.cat)
       setRowQuery('')
+      setRowKind(null)
       setOpenElem(key)
       focusScrollRef.current = true
     }
@@ -829,6 +929,7 @@ export function makeContextBrowser(
       setCat(c)
       // A different category opens unfiltered — the lens belongs to the open one.
       setRowQuery('')
+      setRowKind(null)
       setOpenElem(singleKeyOf(c))
     }
     const toggleElem = (key: string) => { setOpenElem(openElem === key ? null : key) }
@@ -848,7 +949,7 @@ export function makeContextBrowser(
           <button type="button" className="lc-br-elem-row hover:bg-(--dsw-alias-interactive-bg-hover)" onClick={() => { toggleElem(key) }}>
             <span className={'lc-br-chev' + (open ? ' lc-br-chev-on' : '')} />
             {err ? <span className="lc-br-err-dot" title={t('node.failed')} /> : null}
-            {tag !== null ? <span className="lc-br-tag">{tag}</span> : null}
+            {tag !== null ? <span className="lc-br-tags">{tag}</span> : null}
             <span className="lc-br-preview">{preview}</span>
             {trailing !== null ? trailing : null}
             {time !== undefined ? <span className="lc-br-time">{fmtTime(time)}</span> : null}
@@ -857,6 +958,18 @@ export function makeContextBrowser(
           {open ? <div className="lc-br-content">{body}</div> : null}
         </div>
       )
+    }
+
+    // The row's tag slot: plain tags render as one capsule; tool-named tags render one capsule per distinct call
+    // name, in first-appearance order, repeats folded into a ×N multiplier ('bash ×3').
+    const rowTagNode = (tag: string | null, names: readonly string[] | null): ReactNode => {
+      if (tag === null) return null
+      if (names === null) return <span className="lc-br-tag">{tag}</span>
+      const counts = new Map<string, number>()
+      for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1)
+      return [...counts.entries()].map(([name, count]) => (
+        <span key={name} className="lc-br-tag">{count > 1 ? name + ' ×' + String(count) : name}</span>
+      ))
     }
 
     const catBody = (c: string): ReactNode => {
@@ -980,9 +1093,10 @@ export function makeContextBrowser(
          which requires count > 0 ⟺ byCat[c] exists; defensive. */
       const nodes = (byCat[c as Category] ?? []).slice().reverse()
       // Derive each row's display facts first so the text filter scans exactly
-      // what the rows show (tag + preview) at zero extra derivation cost; the
-      // survivors render unchanged. Identity-labeled injection rows keep their
-      // folded content out of the preview, so the filter scans `text` too.
+      // what the rows show (tag + preview, plus the assistant join's reasoning)
+      // at derivation time, not per keystroke; the survivors render unchanged.
+      // Identity-labeled injection rows keep their folded content out of the
+      // preview, so the filter scans `text` too.
       const rows = nodes.map((n) => {
         const conv = bySeq.get(n.seq)
         // A `skill`-tool load reclassifies into the `skill` bucket (issue #66)
@@ -991,10 +1105,14 @@ export function makeContextBrowser(
         // Tag carries the compact fact (tool name, injection form) — one shared subtle chip style; the preview line carries the text — each
         // fact shown once.
         let tag: string | null = null
+        // The tool names the tag carries, when it names tools (tool rows, a call breadcrumb) — they render as one
+        // capsule per distinct name; every other tag stays a single capsule.
+        let tagNames: string[] | null = null
         let preview = nodeText(n)
         const id = nodeNameOf(n)
         if (n.cat === 'tool') {
           tag = n.tool ?? '?'
+          tagNames = n.tool !== undefined ? [n.tool] : null
           preview = callSummaryOf(conv) ?? t('node.toolResult')
         } else if (n.cat === 'skill') {
           // Skill content (issue #66): a load/invocation names itself, and a
@@ -1005,16 +1123,22 @@ export function makeContextBrowser(
           preview = (n.skill === undefined && id !== '' ? id : null)
             ?? (n.text !== undefined && n.text !== '' ? n.text : null)
             ?? callSummaryOf(conv) ?? preview
-        } else if (n.cat === 'assistant' && Array.isArray(n.calls) && n.calls.length > 0) {
-          // Call targets join as a breadcrumb (`bash › write`); the preview carries the reply text, else the first call's own summary for a
-          // text-less turn.
-          tag = n.calls.join(' › ')
-          preview = (n.text !== undefined && n.text !== '' ? n.text : null)
-            ?? blockSummaryOf(conv)
-            ?? t('node.empty')
-        } else if (n.cat === 'assistant' && (n.text === undefined || n.text === '')) {
-          // A text-less turn can still preview a self-summarizing call from the join even when the node carries no call list.
-          preview = blockSummaryOf(conv) ?? preview
+        } else if (n.cat === 'assistant') {
+          // The fold stamps `calls` only on TEXT-LESS replies; a reply carrying both text and calls recovers its breadcrumb through the
+          // conversation join — the same recovery the step brief applies. The call names join into the tag's scan
+          // text (the filter scans what the rows say) and render as one capsule per distinct name; the preview
+          // carries the reply text, else the first call's own summary for a text-less turn.
+          const names = Array.isArray(n.calls) && n.calls.length > 0 ? n.calls : callNamesOf(conv)
+          if (names.length > 0) {
+            tag = names.join(' › ')
+            tagNames = names
+            preview = (n.text !== undefined && n.text !== '' ? n.text : null)
+              ?? blockSummaryOf(conv)
+              ?? t('node.empty')
+          } else if (n.text === undefined || n.text === '') {
+            // A text-less turn can still preview a self-summarizing call from the join even when the node carries no call list.
+            preview = blockSummaryOf(conv) ?? preview
+          }
         } else if (n.cat === 'user') {
           // User messages with image uploads gain an Image chip on the collapsed row (detected via the conversation join, like the expanded
           // body); expanded, the grid shows anyway.
@@ -1024,33 +1148,71 @@ export function makeContextBrowser(
           if (imgCount > 0 && openElem !== `n${n.seq}`) {
             tag = t('attach.image') + (imgCount > 1 ? ' ×' + String(imgCount) : '')
           }
-        } else if (n.cat === 'inject') {
+        } else {
+          // The last category ('inject'): the form label tags the row; the
+          // source identity (when stamped) is more scannable than the raw
+          // content, which stays one expand away.
           tag = t('form.' + (n.form || 'context'))
           if (id !== '') {
-            // The source identity the events card names (plugin id, reconciled
-            // instruction files, durable kind) — more scannable than the raw
-            // content, which stays one expand away.
             preview = id
           } else if (n.text !== undefined && n.text !== '') {
             preview = n.form === 'snapshot' ? t('node.snapshot') + n.text : n.text
           }
         }
-        return { n, conv, rowErr, tag, preview }
+        return {
+          n,
+          conv,
+          rowErr,
+          tag,
+          tagNames,
+          preview,
+          // The join's reasoning texts feed the scan (assistant rows only — no other category carries them).
+          reasoning: n.cat === 'assistant' ? reasoningTextOf(conv) : '',
+          kinds: msgKindsOf(n, conv),
+        }
       })
       const q = rowQuery.trim().toLowerCase()
-      const shown = q === '' ? rows : rows.filter(r =>
-        (r.tag ?? '').toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)
-        || (typeof r.n.text === 'string' && r.n.text.toLowerCase().includes(q)))
+      // The assistant category's kind chips: per-kind message counts over ALL
+      // of the shown step's rows (the chips report the step's composition, not
+      // the text-lens survivors). A picked kind filters to the rows carrying
+      // it, intersected with the text query; picking it again clears.
+      const kindCounts = c === 'assistant'
+        ? ROW_KINDS.map(k => ({ k, n: rows.reduce((acc, r) => acc + (r.kinds[k] ? 1 : 0), 0) }))
+        : null
+      const shown = q === '' && rowKind === null
+        ? rows
+        : rows.filter(r =>
+          (rowKind === null || r.kinds[rowKind])
+          && (q === ''
+            || (r.tag ?? '').toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)
+            || (typeof r.n.text === 'string' && r.n.text.toLowerCase().includes(q))
+            || r.reasoning.toLowerCase().includes(q)))
       // The toolbar stays mounted on an empty match, or the filter could
       // never be cleared from the UI.
-      const rowctl = <RowToolbar value={rowQuery} placeholder={t('browser.search.' + c)} onChange={setRowQuery} />
+      const rowctl = kindCounts === null
+        ? <RowToolbar value={rowQuery} placeholder={t('browser.search.' + c)} onChange={setRowQuery} />
+        : (
+          <RowToolbar value={rowQuery} placeholder={t('browser.search.' + c)} tip={t('browser.kindTip')} onChange={setRowQuery}>
+            {kindCounts.map(({ k, n }) => (
+              <button
+                key={k}
+                type="button"
+                className={'lc-gran-btn' + (rowKind === k ? ' lc-gran-on' : '')}
+                onClick={() => { setRowKind(rowKind === k ? null : k) }}
+              >
+                {t('browser.kind.' + k)}
+                <span className="lc-kind-n">{fmt(n)}</span>
+              </button>
+            ))}
+          </RowToolbar>
+        )
       if (shown.length === 0) {
         return <div>{rowctl}<div className="lc-br-note">{t('browser.rowNoMatch')}</div></div>
       }
       return (
         <div>
           {rowctl}
-          {shown.map(({ n, conv, rowErr, tag, preview }) => elemRow(`n${n.seq}`, tag, preview, n.tokens, n.time,
+          {shown.map(({ n, conv, rowErr, tag, tagNames, preview }) => elemRow(`n${n.seq}`, rowTagNode(tag, tagNames), preview, n.tokens, n.time,
             <NodeContent
               node={n}
               conv={conv}
@@ -1092,12 +1254,27 @@ export function makeContextBrowser(
             <button
               type="button"
               className={'lc-gran-btn' + (dna ? ' lc-gran-on' : '')}
-              onClick={() => { setDna(on => !on) }}
+              onClick={() => { setDna(!dna) }}
             >
               {t('browser.dna')}
             </button>
           </span>
-          <span className="lc-br-hint">{t('browser.deltaHint')}</span>
+          <span className="lc-gran" role="group" title={t('browser.base.tip')}>
+            <button
+              type="button"
+              className={'lc-gran-btn' + (deltaBase === 'step' ? ' lc-gran-on' : '')}
+              onClick={() => { setDeltaBase('step') }}
+            >
+              {t('browser.base.step')}
+            </button>
+            <button
+              type="button"
+              className={'lc-gran-btn' + (deltaBase === 'turn' ? ' lc-gran-on' : '')}
+              onClick={() => { setDeltaBase('turn') }}
+            >
+              {t('browser.base.turn')}
+            </button>
+          </span>
           <select
             className="lc-br-pick"
             value={seq === null ? 'live' : String(seq)}
@@ -1106,7 +1283,7 @@ export function makeContextBrowser(
             <option value="live">{t('browser.live')}</option>
             {requests.slice().reverse().map(r => (
               <option key={r.seq} value={String(r.seq)}>
-                {t('detail.step', { t: r.turn ?? 0, s: r.step ?? 0, n: stepsOf(r.turn) }) + ' · ' + fmtTime(r.time)}
+                {t('detail.step', { t: r.turn ?? 0, s: r.step ?? 0, n: stepsOf(r.turn) })}
               </option>
             ))}
           </select>
@@ -1158,9 +1335,9 @@ export function makeContextBrowser(
           {CATS.map((c) => {
             const count = toolCount(c.key)
             const v = breakdown[c.key] || 0
-            const prevCount = prevView !== null && prevByCat !== null ? countOf(prevView, prevByCat, c.key) : null
+            const prevCount = zeroBase ? 0 : prevView !== null && prevByCat !== null ? countOf(prevView, prevByCat, c.key) : null
             const countDelta = prevCount !== null ? count - prevCount : null
-            const prevTokens = refReq !== null ? (refReq[c.key] || 0) : null
+            const prevTokens = zeroBase ? 0 : refReq !== null ? (refReq[c.key] || 0) : null
             const tokenDelta = prevTokens !== null ? v - prevTokens : null
             const openable = count > 0
               || ((c.key === 'system' || c.key === 'tools') && view.header === null)

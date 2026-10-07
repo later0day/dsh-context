@@ -102,8 +102,14 @@ describe('detailOf', () => {
     }))
     assert.equal(withOps?.fileOps?.length, 1, 'junk entries drop')
     assert.equal(withOps?.fileOpsFloor, 4)
+    // The timing strip's painted spans ride through, per-item guarded too.
+    const withSpans = detailOf(detail(1, {
+      spans: [{ kind: 'ttft', start: 0, end: 100 }, null],
+    }))
+    assert.equal(withSpans?.spans?.length, 1, 'junk span entries drop')
     // Absent stays absent (the legacy inline generation's marker).
     assert.equal(detailOf(detail(1))?.fileOps, undefined)
+    assert.equal(detailOf(detail(1))?.spans, undefined)
   })
 
   test('the slim head rides through sanitized; a malformed head drops alone', () => {
@@ -246,6 +252,65 @@ describe('DetailStore', () => {
     assert.equal(store.getSnapshot().detail?.rev, 5)
     store.request(2)
     await until(() => store.getSnapshot().detail?.rev === 2, 'the refold reset never refetched')
+  })
+
+  for (const outcome of ['detail', 'absent', 'failure'] as const) {
+    for (const timerFired of [false, true]) {
+      test(`a refold ignores an old ${outcome} before a new read (timer fired: ${String(timerFired)})`, async () => {
+        vi.useFakeTimers()
+        let resolve!: (value: ContextTimelineDetail | null) => void
+        let reject!: (reason: Error) => void
+        let calls = 0
+        const first = new Promise<ContextTimelineDetail | null>((res, rej) => {
+          resolve = res
+          reject = rej
+        })
+        const store = new DetailStore(() => {
+          calls++
+          return calls === 1 ? first : Promise.resolve(detail(2))
+        }, 10)
+        store.request(5)
+        await vi.advanceTimersByTimeAsync(10)
+        store.request(2)
+        if (timerFired) await vi.advanceTimersByTimeAsync(10)
+        assert.equal(calls, 1, 'the reset never stacks a concurrent read')
+
+        if (outcome === 'failure') reject(new Error('offline'))
+        else resolve(outcome === 'detail' ? detail(5) : null)
+        await vi.advanceTimersByTimeAsync(0)
+        assert.equal(store.getSnapshot().detail, null, 'old collections must not land under the new head')
+        assert.equal(store.getSnapshot().failed, false, 'old absence or failure must not fail the new generation')
+        assert.equal(store.getSnapshot().pending, true, 'the new generation still needs its read')
+
+        await vi.advanceTimersByTimeAsync(10)
+        assert.equal(calls, 2)
+        assert.equal(store.getSnapshot().detail?.rev, 2)
+        assert.equal(store.getSnapshot().failed, false)
+        assert.equal(store.getSnapshot().pending, false)
+      })
+    }
+  }
+
+  test('several refolds during one read converge to the latest generation', async () => {
+    vi.useFakeTimers()
+    let resolve!: (value: ContextTimelineDetail | null) => void
+    let calls = 0
+    const first = new Promise<ContextTimelineDetail | null>(res => { resolve = res })
+    const store = new DetailStore(() => {
+      calls++
+      return calls === 1 ? first : Promise.resolve(detail(1))
+    }, 10)
+    store.request(5)
+    await vi.advanceTimersByTimeAsync(10)
+    store.request(3)
+    store.request(1)
+    await vi.advanceTimersByTimeAsync(10)
+    resolve(detail(5))
+    await vi.advanceTimersByTimeAsync(0)
+    assert.equal(store.getSnapshot().detail, null)
+    await vi.advanceTimersByTimeAsync(10)
+    assert.equal(calls, 2)
+    assert.equal(store.getSnapshot().detail?.rev, 1)
   })
 
   test('a transport failure with no detail arms the failed state; the backoff trailing recovers on its own', async () => {
@@ -400,10 +465,11 @@ describe('detailStoreOf', () => {
 })
 
 /** A probe component rendering the source's observable surface as text. */
-function SourceProbe(props: { ctx: ClientCtx; sessionId: string; value: unknown }): ReactElement {
+function SourceProbe(props: { ctx: ClientCtx; sessionId: string; value?: unknown; useProjection?: (key: string) => unknown }): ReactElement {
+  const useProjection = props.useProjection ?? ((key: string) => (key === 'contextTimeline' ? props.value : undefined))
   const source = useTimelineSource(props.ctx, {
     sessionId: props.sessionId,
-    useProjection: (key: string) => (key === 'contextTimeline' ? props.value : undefined),
+    useProjection,
   })
   const data = source.data
   return h('div', null,
@@ -413,6 +479,7 @@ function SourceProbe(props: { ctx: ClientCtx; sessionId: string; value: unknown 
     h('span', { 'data-k': 'rev' }, String(data?.detailRev ?? 'x')),
     h('span', { 'data-k': 'floors' }, `${String(data?.surfaceFloor ?? 'x')}/${String(data?.archiveFloor ?? 'x')}`),
     h('span', { 'data-k': 'ops' }, String(data?.fileOps?.length ?? 'x')),
+    h('span', { 'data-k': 'spans' }, String(data?.spans?.length ?? 'x')),
     h('span', { 'data-k': 'model' }, data?.model ?? 'x'),
     h('button', { 'data-k': 'retry', onClick: source.retryDetail }, 'retry'))
 }
@@ -422,6 +489,38 @@ function probeRead(container: HTMLElement, key: string): string {
 }
 
 describe('useTimelineSource', () => {
+  test('a refold never merges the previous generation into the pushed head', async () => {
+    vi.useFakeTimers()
+    const response = (value: ContextTimelineDetail) => ({ ok: true, json: async () => ({ ok: true, value }) })
+    let resolve!: (value: ReturnType<typeof response>) => void
+    let calls = 0
+    const first = new Promise<ReturnType<typeof response>>(res => { resolve = res })
+    vi.stubGlobal('fetch', () => {
+      calls++
+      return calls === 1 ? first : Promise.resolve(response(detail(2)))
+    })
+    const ctx = asClientCtx(new TestClientCtx())
+    const m = await mount(h(SourceProbe, { ctx, sessionId: 's1', value: slimHead(5) }))
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+      await m.update(h(SourceProbe, { ctx, sessionId: 's1', value: slimHead(2) }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+      await act(async () => {
+        resolve(response(detail(5)))
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      assert.equal(probeRead(m.container, 'rev'), '2')
+      assert.equal(probeRead(m.container, 'state'), 'loading')
+      assert.equal(probeRead(m.container, 'steps'), '0', 'no rows from the discarded generation')
+      await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+      assert.equal(calls, 2)
+      assert.equal(probeRead(m.container, 'state'), 'ready')
+      assert.equal(detailStoreOf(ctx, 's1').getSnapshot().detail?.rev, 2)
+    } finally {
+      await m.unmount()
+    }
+  })
+
   test('the inline generation passes through untouched and never fetches', async () => {
     let calls = 0
     const ctx = ctxWithCall(() => {
@@ -451,10 +550,89 @@ describe('useTimelineSource', () => {
     await m.unmount()
   })
 
-  test('no projection value keeps the loading surface', async () => {
-    const m = await mount(h(SourceProbe, { ctx: ctxWithCall(() => ({ body: null })), sessionId: 's1', value: undefined }))
+  test('the cold start: no pushed value opens the channel itself and renders from the read', async () => {
+    let calls = 0
+    const ctx = ctxWithCall(() => {
+      calls++
+      return { body: { ok: true, value: detail(2, { head: slimHead(2) }) } }
+    })
+    const m = await mount(h(SourceProbe, { ctx, sessionId: 's1', value: undefined }))
+    // The first paint waits on the cold read — then the read's own slim head
+    // stands in for the never-pushed projection value.
     assert.equal(probeRead(m.container, 'state'), 'loading')
+    await until(() => probeRead(m.container, 'state') === 'ready', 'the cold read never landed')
+    assert.equal(probeRead(m.container, 'model'), 'm', 'the read head renders')
+    assert.equal(probeRead(m.container, 'rev'), '2')
+    assert.equal(probeRead(m.container, 'steps'), '1', 'the read collections merge')
+    assert.ok(calls >= 1)
+    await m.unmount()
+  })
+
+  test('a pushed head arriving after the cold read takes the channel back', async () => {
+    // The stub folds the served rev per the latest requested revision — the
+    // production route folds the requested session at its current watermark.
+    let servedRev = 1
+    vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, json: async () => ({ ok: true, value: detail(servedRev, { head: slimHead(servedRev, { model: servedRev === 1 ? 'cold-m' : 'pushed-m' }) }) }) }))
+    const ctx = asClientCtx(new TestClientCtx())
+    // The probe reads `useProjection` through a mutable capture so an update
+    // rerender sees the freshly pushed head (the real seat reads per render).
+    let pushed: unknown = undefined
+    function PushProbe(): ReactElement {
+      return h(SourceProbe, {
+        ctx,
+        sessionId: 's1',
+        useProjection: (key: string) => (key === 'contextTimeline' ? pushed : undefined),
+      })
+    }
+    const m = await mount(h(PushProbe, null))
+    await until(() => probeRead(m.container, 'state') === 'ready', 'the cold read never landed')
+    assert.equal(probeRead(m.container, 'model'), 'cold-m')
+    // The pushed head outruns the cold read's revision: same per-session
+    // store, one trailing refetch, the pushed value renders.
+    servedRev = 2
+    pushed = slimHead(2, { model: 'pushed-m' })
+    await m.update(h(PushProbe, null))
+    assert.equal(probeRead(m.container, 'model'), 'pushed-m', 'the pushed head wins at once')
+    assert.equal(probeRead(m.container, 'rev'), '2', 'the pushed revision renders')
+    await until(() => detailStoreOf(ctx, 's1').getSnapshot().detail?.rev === 2, 'the pushed head never trailed the channel')
+    await m.unmount()
+  })
+
+  test('the cold read failing arms the retry affordance instead of stalling', async () => {
+    let online = false
+    const ctx = ctxWithCall(() => {
+      if (!online) throw new Error('offline')
+      return { body: { ok: true, value: detail(1, { head: slimHead(1) }) } }
+    })
+    const m = await mount(h(SourceProbe, { ctx, sessionId: 's1', value: undefined }))
+    await until(() => probeRead(m.container, 'state') === 'failed', 'the cold failure never surfaced')
     assert.equal(probeRead(m.container, 'steps'), 'null')
+    online = true
+    await act(async () => {
+      ;(m.container.querySelector('[data-k="retry"]') as HTMLElement).click()
+    })
+    await until(() => probeRead(m.container, 'state') === 'ready', 'the retry never recovered')
+    await m.unmount()
+  })
+
+  test('a cold payload without its head types the failure (nothing renderable, no stall)', async () => {
+    const ctx = ctxWithCall(() => ({ body: { ok: true, value: detail(1) } }))
+    const m = await mount(h(SourceProbe, { ctx, sessionId: 's1', value: undefined }))
+    await until(() => probeRead(m.container, 'state') === 'failed', 'the headless payload never surfaced')
+    await m.unmount()
+  })
+
+  test('an absent cold answer (the session left the live set) surfaces the failed note', async () => {
+    const ctx = ctxWithCall(() => ({ body: { ok: true, value: null } }))
+    const m = await mount(h(SourceProbe, { ctx, sessionId: 's1', value: undefined }))
+    await until(() => probeRead(m.container, 'state') === 'failed', 'absence never surfaced')
+    await m.unmount()
+  })
+
+  test('no session id to read for: the cold start types the failure, not an eternal spinner', async () => {
+    const ctx = ctxWithCall(() => ({ body: { ok: true, value: detail(1, { head: slimHead(1) }) } }))
+    const m = await mount(h(SourceProbe, { ctx, sessionId: '', value: undefined }))
+    await until(() => probeRead(m.container, 'state') === 'failed', 'the empty-id cold start never surfaced')
     await m.unmount()
   })
 
@@ -470,6 +648,7 @@ describe('useTimelineSource', () => {
             archiveFloor: 5,
             fileOps: [{ seq: 2, path: 'a.ts', kind: 'read', tool: 'read', err: false, added: 0, removed: 0 }],
             fileOpsFloor: 4,
+            spans: [{ kind: 'ttft', start: 0, end: 100 }, { kind: 'other', start: 100, end: 1_400 }],
           }),
         },
       }
@@ -485,6 +664,7 @@ describe('useTimelineSource', () => {
     assert.equal(probeRead(m.container, 'rev'), '3')
     assert.equal(probeRead(m.container, 'floors'), '2/5', 'the detail floors merge')
     assert.equal(probeRead(m.container, 'ops'), '1', 'the op log merges')
+    assert.equal(probeRead(m.container, 'spans'), '2', 'the strip spans merge')
     assert.ok(calls >= 1)
     await m.unmount()
   })
@@ -530,4 +710,3 @@ describe('useTimelineSource', () => {
     await m.unmount()
   })
 })
-

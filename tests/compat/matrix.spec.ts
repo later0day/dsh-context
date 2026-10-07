@@ -76,6 +76,14 @@ describe.skipIf(reasons.length > 0)('compat matrix — real dsh sources per base
       assert.equal(report.coldMatches, true)
     })
 
+    if (baseline.foldEventTypes.includes('developer/message')) {
+      test('host: developer messages contribute to requests and survive warm restore and v24 cache rebuild', () => {
+        assert.equal(report.developerTokens, 35)
+        assert.equal(report.developerRequestTokens, 35)
+        assert.equal(report.developerRestoreMatches, true)
+      })
+    }
+
     test('host: hostile gateway usage keeps the served view schema-valid (issue #44)', () => {
       // Negative uncached input (cached_tokens > prompt_tokens), fractional
       // counts, string buckets, and a hostile NaN must all survive the REAL
@@ -113,6 +121,33 @@ describe.skipIf(reasons.length > 0)('compat matrix — real dsh sources per base
       const pattern = staging.namespacePatternOf(baseline, settings.patternFile)
       assert.ok(pattern !== null, 'the tag source carries NAMESPACE_PATTERN')
       assert.equal(pattern.test('dsh-context'), true)
+    })
+
+    test('balance: the settings face and the DeepSeek provider row the facts fold reads', () => {
+      // The balance route resolves the provider's settings row through the
+      // face this generation serves — the `get(ns)` section read through V3,
+      // the Config-form `describe()` projection on V4+ (the row matched by
+      // its own apiKeyEnv-bearing section shape). Presence asserted both
+      // ways, so a moved seam names itself instead of silently hiding the
+      // capsule.
+      const balance = baseline.balance
+      assert.equal(
+        staging.dshHasString(baseline.tag, balance.settingsGetNeedle, balance.settingsFile),
+        balance.settingsGetPresent,
+        'the settings service get face',
+      )
+      if (balance.settingsDescribeNeedle !== undefined) {
+        assert.equal(
+          staging.dshHasString(baseline.tag, balance.settingsDescribeNeedle, balance.settingsFile),
+          true,
+          'the settings service describe face',
+        )
+      }
+      for (const provider of balance.providerFiles) {
+        for (const needle of provider.needles) {
+          assert.equal(staging.dshHasString(baseline.tag, needle, provider.file), true, `provider seam: ${needle}`)
+        }
+      }
     })
 
     for (const slot of staging.SLOT_SEAMS) {
@@ -200,6 +235,12 @@ describe.skipIf(reasons.length > 0)('compat matrix — real dsh sources per base
         nav.sessionsOpen,
         'the retired sessions-service selection verb',
       )
+    })
+
+    test('client: the first-level insight page seam (keyed main panel + sidebar panel list)', () => {
+      const page = baseline.client.insightPage
+      assert.equal(staging.dshHasString(baseline.tag, page.panellistNeedle, page.panellistFile), true, 'the sidebar panel-list seat')
+      assert.equal(staging.dshHasString(baseline.tag, page.mainNeedle, page.mainFile), true, 'the layout\'s keyed main panel seat')
     })
 
     test('client: MarkdownText chrome prop', () => {

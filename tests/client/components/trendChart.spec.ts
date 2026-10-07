@@ -17,7 +17,8 @@ import assert from 'node:assert/strict'
 import { afterAll, beforeAll, describe, test } from 'vitest'
 import { aggregateByTurn, attachMarkers, jumpTargetOf, makeTrendChart, turnStepsOf, type TrendChartProps } from '../../../src/client/components/trendChart'
 import { CATS } from '../../../src/client/categories'
-import type { ContextEventRecord, RequestRecord } from '../../../src/shared/types'
+import type { TrendBand } from '../../../src/client/dna'
+import type { ContextEventRecord, RequestRecord, SurfaceNode } from '../../../src/shared/types'
 import { click, flush, hover, makeKit, mount, query, queryAll, unhover, wheel } from '../helpers/kit'
 
 const kit = makeKit()
@@ -690,6 +691,104 @@ describe('TrendChart adaptive scale (the title-adjacent toggle)', () => {
   })
 })
 
+describe('TrendChart duration overlay (durationCurve)', () => {
+  /** The overlay's y for a duration at the whole-log scale (the component's own rounding). */
+  const activeMsY = (activeMs: number, maxActiveMs: number): number => Math.round((CHART_H - activeMs * (CHART_H / Math.max(1, maxActiveMs))) * 100) / 100
+
+  test('off by default: no curve, no right-hand axis', async () => {
+    const m = await mount(h(TrendChart, propsOf([req(1, { activeMs: 1000 }), req(2, { activeMs: 2000 })])))
+    assert.equal(queryAll(m.container, '.lc-duration').length, 0)
+    assert.equal(queryAll(m.container, '.lc-axis-r').length, 0)
+    await m.unmount()
+  })
+
+  test('on: the curve rides the bar columns and the right axis carries duration quartiles', async () => {
+    const reqs = [req(1, { activeMs: 1000 }), req(2, { activeMs: 2000 }), req(3, { activeMs: 4000 })]
+    const m = await mount(h(TrendChart, propsOf(reqs, { durationCurve: true })))
+    const svg = query(m.container, '.lc-duration')
+    assert.equal(svg.getAttribute('width'), String(3 * BAR_CELL - 2))
+    assert.equal(svg.getAttribute('height'), String(CHART_H))
+    const lines = queryAll(svg, 'polyline')
+    assert.equal(lines.length, 1, 'one contiguous run of stamped bars')
+    assert.equal(
+      lines[0].getAttribute('points'),
+      `7,${activeMsY(1000, 4000)} 23,${activeMsY(2000, 4000)} 39,${activeMsY(4000, 4000)}`,
+    )
+    assert.equal(queryAll(svg, 'circle').length, 0)
+    // The right-hand axis: max, ¾, ½, ¼, 0 — formatted as durations.
+    const axis = query(m.container, '.lc-axis-r')
+    assert.equal(query(axis, '.lc-axis-top').textContent, '4.0s')
+    assert.equal(query(axis, '.lc-axis-q3').textContent, '3.0s')
+    assert.equal(query(axis, '.lc-axis-mid').textContent, '2.0s')
+    assert.equal(query(axis, '.lc-axis-q1').textContent, '1.0s')
+    assert.equal(query(axis, '.lc-axis-bot').textContent, '0')
+    await m.unmount()
+  })
+
+  test('a bar without ms breaks the line; an isolated single point draws a dot', async () => {
+    const reqs = [req(1, { activeMs: 1000 }), req(2), req(3, { activeMs: 2000 }), req(4, { activeMs: 4000 })]
+    const m = await mount(h(TrendChart, propsOf(reqs, { durationCurve: true })))
+    const svg = query(m.container, '.lc-duration')
+    const lines = queryAll(svg, 'polyline')
+    assert.equal(lines.length, 1, 'the trailing pair re-joins after the gap')
+    assert.equal(lines[0].getAttribute('points'), `39,${activeMsY(2000, 4000)} 55,${activeMsY(4000, 4000)}`)
+    const dots = queryAll(svg, 'circle')
+    assert.equal(dots.length, 1, 'a one-point run would be an invisible polyline')
+    assert.equal(dots[0].getAttribute('cx'), '7')
+    assert.equal(dots[0].getAttribute('cy'), String(activeMsY(1000, 4000)))
+    await m.unmount()
+  })
+
+  test('turn granularity plots each turn\'s summed active time', async () => {
+    const agg = aggregateByTurn([
+      req(1, { turn: 1, step: 0, activeMs: 1000 }),
+      req(2, { turn: 1, step: 1, activeMs: 500 }),
+      req(3, { turn: 2, step: 0, activeMs: 2000 }),
+    ])
+    const m = await mount(h(TrendChart, propsOf(agg, { granularity: 'turn', durationCurve: true })))
+    const lines = queryAll(query(m.container, '.lc-duration'), 'polyline')
+    assert.equal(lines[0].getAttribute('points'), `7,${activeMsY(1500, 2000)} 23,${activeMsY(2000, 2000)}`)
+    assert.equal(query(m.container, '.lc-axis-r .lc-axis-top').textContent, '2.0s')
+    await m.unmount()
+  })
+
+  test('delta mode keeps the floor-anchored duration axis; the hover tip appends the duration row', async () => {
+    const reqs = [req(1, { activeMs: 1000 }), req(2, { activeMs: 2000 })]
+    const m = await mount(h(TrendChart, propsOf(reqs, { mode: 'delta', durationCurve: true, hoveredSeq: 1 })))
+    assert.equal(query(m.container, '.lc-axis-r .lc-axis-top').textContent, '2.0s')
+    assert.equal(queryAll(query(m.container, '.lc-duration'), 'polyline').length, 1)
+    const rows = queryAll(query(m.container, '.lc-chart-tip'), 'span').map(r => r.textContent)
+    assert.equal(rows.length, 3)
+    assert.equal(rows[2], kit.t('tip.duration', { n: '1.0s' }))
+    // Off again: the tip drops the duration row.
+    await m.update(h(TrendChart, propsOf(reqs, { mode: 'delta', hoveredSeq: 1 })))
+    assert.equal(queryAll(query(m.container, '.lc-chart-tip'), 'span').length, 2)
+    await m.unmount()
+  })
+
+  test('adaptive scale rescales the curve to the visible window like the bars', async () => {
+    const reqs: RequestRecord[] = []
+    for (let i = 0; i < 30; i++) reqs.push(req(i + 1, { turn: 1, step: i, activeMs: i === 0 ? 9000 : 1000 }))
+    const m = await mount(h(TrendChart, propsOf(reqs, { adaptive: true, durationCurve: true })))
+    await flush()
+    const scroll = query<LayoutEl>(m.container, '.lc-chart-scroll')
+    // Anchored at the newest bars (scrollLeft 80): the 9s spike at bar 0 is off screen.
+    assert.equal(query(m.container, '.lc-axis-r .lc-axis-top').textContent, '1.0s')
+    await scrollTo(scroll, 0)
+    assert.equal(query(m.container, '.lc-axis-r .lc-axis-top').textContent, '9.0s')
+    await m.unmount()
+  })
+
+  test('no stamped durations at all: the axis shows the scale floor, the curve draws nothing', async () => {
+    const m = await mount(h(TrendChart, propsOf([req(1), req(2)], { durationCurve: true })))
+    assert.equal(queryAll(m.container, '.lc-duration').length, 0)
+    const axis = query(m.container, '.lc-axis-r')
+    assert.equal(query(axis, '.lc-axis-top').textContent, '—')
+    assert.equal(query(axis, '.lc-axis-bot').textContent, '0')
+    await m.unmount()
+  })
+})
+
 describe('TrendChart markers', () => {
   test('compaction/prune markers render the ✂ glyph with a positioned or bare title', async () => {
     const reqs = [req(1, { turn: 1, step: 0 }), req(2, { turn: 1, step: 1 }), req(3, { turn: 2, step: 0 })]
@@ -710,6 +809,34 @@ describe('TrendChart markers', () => {
     // No host-stamped position → bare label title.
     assert.equal(glyph[1].getAttribute('title'), '✂ ' + kit.t('ev.prune'))
     await m.unmount()
+  })
+})
+
+describe('TrendChart step flags', () => {
+  test('every 5th step bar plants a flag labeled with its cumulative step number', async () => {
+    const reqs = Array.from({ length: 12 }, (_, i) => req(i + 1, { turn: 1, step: i }))
+    const m = await mount(h(TrendChart, propsOf(reqs)))
+    const flags = queryAll(m.container, '.lc-step-flag')
+    assert.equal(flags.length, 2)
+    // Single- and multi-digit labels alike; the flag rides its bar (5th and 10th columns).
+    assert.deepEqual(flags.map(f => f.textContent), ['5', '10'])
+    const bs = bars(m.container)
+    assert.equal(queryAll(bs[0], '.lc-step-flag').length, 0)
+    assert.ok(query(bs[4], '.lc-step-flag'))
+    assert.ok(query(bs[9], '.lc-step-flag'))
+    await m.unmount()
+  })
+
+  test('delta mode keeps the flags; turn granularity plants none (the turn strip numbers that grid)', async () => {
+    const reqs = Array.from({ length: 6 }, (_, i) => req(i + 1, { turn: 1, step: i }))
+    const m = await mount(h(TrendChart, propsOf(reqs, { mode: 'delta' })))
+    assert.deepEqual(queryAll(m.container, '.lc-step-flag').map(f => f.textContent), ['5'])
+    await m.unmount()
+
+    const turns = Array.from({ length: 6 }, (_, i) => req(i + 1, { turn: i + 1, step: 0 }))
+    const m2 = await mount(h(TrendChart, propsOf(aggregateByTurn(turns), { granularity: 'turn' })))
+    assert.equal(queryAll(m2.container, '.lc-step-flag').length, 0)
+    await m2.unmount()
   })
 })
 
@@ -1070,6 +1197,22 @@ describe('aggregateByTurn', () => {
   test('an empty history aggregates to nothing', () => {
     assert.deepEqual(aggregateByTurn([]), [])
   })
+
+  test('the duration overlay\'s ms sums across a turn\'s steps; absent only when no step carried one', () => {
+    const agg = aggregateByTurn([
+      req(1, { turn: 1, step: 0, activeMs: 1000 }),
+      req(2, { turn: 1, step: 1, activeMs: 2500 }),
+      req(3, { turn: 2, step: 0, activeMs: 800 }),
+    ])
+    assert.equal(agg[0].activeMs, 3500, 'the turn bar carries its steps\' summed active time')
+    assert.equal(agg[1].activeMs, 800, 'a single-step turn keeps its own figure')
+
+    // A step without a stamp contributes nothing but does not hide the run's known share.
+    const partial = aggregateByTurn([req(1, { turn: 1, activeMs: 1000 }), req(2, { turn: 1 })])
+    assert.equal(partial[0].activeMs, 1000)
+    const none = aggregateByTurn([req(1, { turn: 1 }), req(2, { turn: 1 })])
+    assert.ok(!('ms' in none[0]), 'no fabricated zero when no step reported')
+  })
 })
 
 describe('turnStepsOf', () => {
@@ -1180,5 +1323,288 @@ describe('attachMarkers', () => {
     const markers = attachMarkers(reqs, [first, second])
     assert.equal(markers[0], first)
     assert.equal(markers[1], undefined)
+  })
+})
+
+describe('TrendChart DNA mode', () => {
+  const COLORS = Object.fromEntries(CATS.map(c => [c.key, c.color])) as Record<string, string>
+
+  /** Trend-band fixture builder: cumulative offsets accumulate exactly like trendBandsOf. */
+  function dnaBands(spec: [string, string, number, SurfaceNode?][]): TrendBand[] {
+    let off = 0
+    return spec.map(([key, cat, tokens, node]) => {
+      const band = (node !== undefined
+        ? { key, cat, tokens, off, color: COLORS[cat], node }
+        : { key, cat, tokens, off, color: COLORS[cat] }) as TrendBand
+      off += tokens
+      return band
+    })
+  }
+
+  /** jsdom has no layout: give a bar interior the 112px stack area so pointer fractions read real. */
+  function stubBarRect(el: HTMLElement): void {
+    el.getBoundingClientRect = () => ({ top: 0, left: 0, right: 14, bottom: CHART_H, width: 14, height: CHART_H, x: 0, y: 0, toJSON: () => null }) as DOMRect
+  }
+
+  async function move(el: HTMLElement, clientY: number): Promise<void> {
+    await act(async () => { el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY })) })
+  }
+
+  test('paints one coalesced gradient per bar — read order, proportional heights, zero bands dropped', async () => {
+    const r1 = req(1, { turn: 1, step: 0, total: 300 })
+    const r2 = req(2, { turn: 1, step: 1, total: 600 })
+    const d1 = dnaBands([
+      ['sys', 'system', 100],
+      ['tool:bash', 'tools', 50],
+      ['n1', 'assistant', 80, { seq: 1, cat: 'assistant', tokens: 80 }],
+      ['n2', 'assistant', 70, { seq: 2, cat: 'assistant', tokens: 70 }],
+    ])
+    const d2 = dnaBands([
+      ['sys', 'system', 200],
+      ['n1', 'assistant', 80, { seq: 1, cat: 'assistant', tokens: 80 }],
+      ['n3', 'user', 100, { seq: 3, cat: 'user', tokens: 100 }],
+      ['n4', 'user', 0, { seq: 4, cat: 'user', tokens: 0 }],
+      ['n5', 'tool', 220, { seq: 5, cat: 'tool', tokens: 220 }],
+    ])
+    const m = await mount(h(TrendChart, propsOf([r1, r2], { dna: [d1, d2] })))
+    const dnaDivs = queryAll(m.container, '.lc-bar-dna')
+    assert.equal(dnaDivs.length, 2)
+    assert.equal(dnaDivs[0].style.height, `${Math.round(300 / 600 * CHART_H)}px`)
+    assert.equal(dnaDivs[1].style.height, `${CHART_H}px`)
+    // d1: the two adjacent assistant bands coalesce into ONE blue run (50% → 100%).
+    const g1 = dnaDivs[0].style.background
+    assert.ok(g1.startsWith('linear-gradient(to top, '), g1)
+    assert.ok(g1.includes('var(--color-indigo-500) 0%, var(--color-indigo-500) 33.33%'), g1)
+    assert.ok(g1.includes('var(--color-amber-500) 33.33%, var(--color-amber-500) 50%'), g1)
+    assert.ok(g1.includes('var(--color-blue-500) 50%, var(--color-blue-500) 100%'), g1)
+    // d2: the zero-token user band leaves no run of its own; the teal run starts at its offset.
+    const g2 = dnaDivs[1].style.background
+    assert.ok(g2.includes('var(--color-blue-500) 33.33%, var(--color-blue-500) 46.67%'), g2)
+    assert.ok(g2.includes('var(--color-green-500) 46.67%, var(--color-green-500) 63.33%'), g2)
+    assert.ok(g2.includes('var(--color-teal-500) 63.33%, var(--color-teal-500) 100%'), g2)
+    // No segmented stacks, and the total-mode axis stays.
+    assert.equal(queryAll(m.container, '.lc-bar-stack').length, 0)
+    assert.equal(query(m.container, '.lc-axis-top').textContent, '600')
+    // Without an onPickBand handler a band click is a quiet no-op (the pick guard's undefined arm).
+    await act(async () => { dnaDivs[0].dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await m.unmount()
+  })
+
+  test('a band click reports the picked item with the bar seq, for the Context browser reveal', async () => {
+    const r1 = req(1, { turn: 1, step: 0, total: 300 })
+    const d1 = dnaBands([['sys', 'system', 100], ['n1', 'user', 200, { seq: 1, cat: 'user', tokens: 200 }]])
+    const picks: [number, string][] = []
+    const m = await mount(h(TrendChart, propsOf([r1], {
+      dna: [d1],
+      onPickBand: (seq, band) => { picks.push([seq, band.key]) },
+    })))
+    // jsdom's zero-height rect resolves the click to the bottom band; the pick carries the bar's seq.
+    const dnaDiv = query(m.container, '.lc-bar-dna')
+    await act(async () => { dnaDiv.dispatchEvent(new MouseEvent('click', { bubbles: true, clientY: 30 })) })
+    assert.deepEqual(picks, [[1, 'sys']])
+    await m.unmount()
+  })
+
+  test('hit-tests the pointer into a band; the same item lights its lifetime slice in every bar', async () => {
+    const r1 = req(1, { turn: 1, step: 0, total: 300 })
+    const r2 = req(2, { turn: 1, step: 1, total: 600 })
+    const n1: SurfaceNode = { seq: 1, cat: 'user', tokens: 100, text: 'hello' }
+    const d1 = dnaBands([['n1', 'user', 100, n1], ['n2', 'assistant', 200, { seq: 2, cat: 'assistant', tokens: 200 }]])
+    const d2 = dnaBands([
+      ['n1', 'user', 100, n1],
+      ['n3', 'tool', 400, { seq: 3, cat: 'tool', tokens: 400, tool: 'bash' }],
+      ['n4', 'user', 0, { seq: 4, cat: 'user', tokens: 0 }],
+      ['n5', 'tool', 100, { seq: 5, cat: 'tool', tokens: 100, tool: 'write' }],
+    ])
+    const m = await mount(h(TrendChart, propsOf([r1, r2], { dna: [d1, d2], hoveredSeq: 1 })))
+    const dnaDivs = queryAll(m.container, '.lc-bar-dna')
+    assert.equal(dnaDivs.length, 2)
+    const tipText = () => query(m.container, '.lc-chart-tip').textContent ?? ''
+
+    // Before the rect stub the zero-height fallback resolves to the bottom band (frac 0), which
+    // lives in BOTH bars: the lifetime highlight paints one slice per bar at its axis position.
+    await move(dnaDivs[0], 40)
+    let slices = queryAll(m.container, '.lc-dna-slice')
+    assert.equal(slices.length, 2)
+    assert.equal(slices[0].style.bottom, '0px')
+    assert.equal(slices[0].style.height, `${Math.round(100 / 600 * CHART_H)}px`)
+    assert.ok(tipText().includes(kit.t('trend.dnaItem', { label: kit.catLabel('user'), n: '100' })))
+
+    // Real 112px bars: the pointer walks the strip — below the bar clamps to the bottom band…
+    stubBarRect(dnaDivs[0])
+    stubBarRect(dnaDivs[1])
+    await move(dnaDivs[0], CHART_H + 20)
+    assert.ok(tipText().includes(kit.t('trend.dnaItem', { label: kit.catLabel('user'), n: '100' })))
+    // …the very top resolves to the LAST band (n2 lives only in the first bar)…
+    await move(dnaDivs[0], 0)
+    slices = queryAll(m.container, '.lc-dna-slice')
+    assert.equal(slices.length, 1)
+    assert.ok(tipText().includes(kit.t('trend.dnaItem', { label: kit.catLabel('assistant'), n: '200' })))
+    // …and above the second bar clamps to its top band (the zero-token n4 is invisible and skipped).
+    // The hover seq is a controlled prop, so the tip only follows after it moves to the second bar.
+    await m.update(h(TrendChart, propsOf([r1, r2], { dna: [d1, d2], hoveredSeq: 2 })))
+    await move(dnaDivs[1], -10)
+    assert.ok(tipText().includes(kit.t('trend.dnaItem', { label: 'write', n: '100' })))
+
+    // Leaving the band (not the bar) drops the highlight and restores the plain total row.
+    await unhover(dnaDivs[1])
+    assert.equal(queryAll(m.container, '.lc-dna-slice').length, 0)
+    assert.ok(tipText().includes(kit.t('tip.total', { n: '600' })))
+
+    // Leaving the whole chart clears the item hover too.
+    await move(dnaDivs[0], 100)
+    assert.equal(queryAll(m.container, '.lc-dna-slice').length, 2)
+    await unhover(query(m.container, '.lc-chart'))
+    assert.equal(queryAll(m.container, '.lc-dna-slice').length, 0)
+    await m.unmount()
+  })
+
+  test('DNA + delta diffs each item against the previous bar — new items rise, removed items hang', async () => {
+    const rs = [
+      req(1, { turn: 1, step: 0, total: 300 }),
+      req(2, { turn: 1, step: 1, total: 300 }),
+      req(3, { turn: 1, step: 2, total: 600 }),
+      req(4, { turn: 2, step: 0, total: 500 }),
+      req(5, { turn: 2, step: 1, total: 300 }),
+    ]
+    const ds = [
+      dnaBands([['sys', 'system', 100], ['n1', 'user', 100, { seq: 1, cat: 'user', tokens: 100 }]]),
+      dnaBands([['sys', 'system', 100], ['n1', 'user', 100, { seq: 1, cat: 'user', tokens: 100 }], ['a1', 'assistant', 60, { seq: 2, cat: 'assistant', tokens: 60 }]]),
+      dnaBands([['sys', 'system', 100], ['n1', 'user', 100, { seq: 1, cat: 'user', tokens: 100 }], ['a1', 'assistant', 90, { seq: 2, cat: 'assistant', tokens: 90 }], ['t1', 'tool', 120, { seq: 3, cat: 'tool', tokens: 120, tool: 'bash' }]]),
+      dnaBands([['sys', 'system', 100], ['n1', 'user', 100, { seq: 1, cat: 'user', tokens: 100 }], ['u1', 'user', 40, { seq: 4, cat: 'user', tokens: 40 }], ['u2', 'user', 40, { seq: 5, cat: 'user', tokens: 40 }]]),
+      dnaBands([['sys', 'system', 100], ['n1', 'user', 100, { seq: 1, cat: 'user', tokens: 100 }]]),
+    ]
+    const picks: [number, string][] = []
+    const m = await mount(h(TrendChart, propsOf(rs, {
+      dna: ds,
+      mode: 'delta',
+      hoveredSeq: 4,
+      adaptive: true,
+      onPickBand: (seq, band) => { picks.push([seq, band.key]) },
+    })))
+    // maxUp = 150 (bar 3's growth + newcomers), maxDown = 210 (bar 4's removals); the zero line
+    // splits the floor plan at downPx = 112 − round(150·112/360) = 65.
+    const dnaDivs = queryAll(m.container, '.lc-bar-dna')
+    assert.equal(dnaDivs.length, 4, 'the first bar has no baseline and carries no strip')
+    assert.equal(query(m.container, '.lc-axis-top').textContent, '+150')
+    assert.equal(query(m.container, '.lc-axis-mid').textContent, '0')
+    assert.equal(query(m.container, '.lc-axis-bot').textContent, '-210')
+
+    // Bar 2 (idx 0): one up item, no down — the div rides the zero line (bottom 65), one blue run.
+    assert.equal(dnaDivs[0].style.height, '19px')
+    assert.equal(dnaDivs[0].style.bottom, '65px')
+    assert.ok(dnaDivs[0].style.background.includes('var(--color-blue-500) 0%, var(--color-blue-500) 100%'))
+
+    // Bar 3 (idx 1): up arm in read order (a1 grew +30, t1 joined +120) — still nothing below the line.
+    assert.equal(dnaDivs[1].style.height, '47px')
+    const g3 = dnaDivs[1].style.background
+    assert.ok(g3.includes('var(--color-blue-500) 0%, var(--color-blue-500) 20%'), g3)
+    assert.ok(g3.includes('var(--color-teal-500) 20%, var(--color-teal-500) 100%'), g3)
+
+    // Bar 4 (idx 2): the removals hang BELOW the line (bottom 0 — the div spans both arms) and the
+    // gradient reads bottom-up: the down arm REVERSED (t1, then a1), then the up arm — the two
+    // adjacent user newcomers coalesce into ONE green run.
+    assert.equal(dnaDivs[2].style.height, '90px')
+    assert.equal(dnaDivs[2].style.bottom, '0px')
+    assert.equal(dnaDivs[2].style.transformOrigin, '50% 72.41%')
+    const g4 = dnaDivs[2].style.background
+    assert.ok(g4.includes('var(--color-teal-500) 0%, var(--color-teal-500) 41.38%'), g4)
+    assert.ok(g4.includes('var(--color-blue-500) 41.38%, var(--color-blue-500) 72.41%'), g4)
+    assert.ok(g4.includes('var(--color-green-500) 72.41%, var(--color-green-500) 100%'), g4)
+
+    // Bar 5 (idx 3): a pure removal (both user messages left, coalesced) hanging under the line.
+    assert.equal(dnaDivs[3].style.height, '25px')
+    assert.equal(dnaDivs[3].style.bottom, '40px')
+
+    // The zero-height rect fallback resolves to the bottom band before any stub (t1, the last
+    // down item); stub 112px and walk bar 4's arms: u1 (+40) at the top, then a1 (−90) and t1
+    // (−120) below the line in read order.
+    await move(dnaDivs[2], 40)
+    const tipText = () => query(m.container, '.lc-chart-tip').textContent ?? ''
+    assert.ok(tipText().includes(kit.t('trend.dnaItem', { label: 'bash', n: '-120' })))
+    stubBarRect(dnaDivs[2])
+    await move(dnaDivs[2], 0)
+    assert.ok(tipText().includes(kit.t('trend.dnaItem', { label: kit.catLabel('user'), n: '+40' })), 'the very top is the last up band')
+    await move(dnaDivs[2], 55)
+    assert.ok(tipText().includes(kit.t('trend.dnaItem', { label: kit.catLabel('assistant'), n: '-90' })), 'the down arm walks read order from the zero line')
+    // A band click picks through to the reveal bridge with the bar's seq.
+    await act(async () => { dnaDivs[2].dispatchEvent(new MouseEvent('click', { bubbles: true, clientY: 55 })) })
+    assert.deepEqual(picks, [[4, 'a1']])
+
+    // Hovering t1 lights its delta slices across the bars: above the line where it joined
+    // (bar 3), below where it was removed (bar 4), nothing where it never existed.
+    stubBarRect(dnaDivs[1])
+    await move(dnaDivs[1], 0)
+    const slices = queryAll(m.container, '.lc-dna-slice')
+    assert.equal(slices.length, 2)
+    // Bar 3's up arm: t1 joined at off 30 (after a1's +30).
+    assert.equal(slices[0].style.bottom, `${Math.round(65 + 30 * 112 / 360)}px`)
+    assert.equal(slices[0].style.height, `${Math.max(1, Math.round(120 * 112 / 360))}px`)
+    // Bar 4's down arm: a1 (90) then t1 (120) stack from the zero line — t1 hugs the floor.
+    assert.equal(slices[1].style.bottom, `${Math.round(65 - 210 * 112 / 360)}px`)
+    assert.equal(slices[1].style.height, `${Math.max(1, Math.round(120 * 112 / 360))}px`)
+    // Leaving the band (not the bar) drops the highlight.
+    await unhover(dnaDivs[1])
+    assert.equal(queryAll(m.container, '.lc-dna-slice').length, 0)
+    await m.unmount()
+  })
+
+  test('a down-only DNA+delta bar resolves the zero-line edge into its first removed item', async () => {
+    const rs = [
+      req(1, { turn: 1, step: 0, total: 300 }),
+      req(2, { turn: 1, step: 1, total: 260 }),
+    ]
+    const ds = [
+      dnaBands([['sys', 'system', 100], ['n1', 'user', 200, { seq: 1, cat: 'user', tokens: 200 }]]),
+      dnaBands([['sys', 'system', 100]]),
+    ]
+    const m = await mount(h(TrendChart, propsOf(rs, { dna: ds, mode: 'delta', hoveredSeq: 2 })))
+    const dnaDiv = query(m.container, '.lc-bar-dna')
+    stubBarRect(dnaDiv)
+    // No onPickBand handler: the pick guard's undefined arm is a quiet no-op.
+    await act(async () => { dnaDiv.dispatchEvent(new MouseEvent('click', { bubbles: true, clientY: 0 })) })
+    // The very top of a down-only bar IS the zero line: it resolves to the first removed item.
+    await move(dnaDiv, 0)
+    const tipText = () => query(m.container, '.lc-chart-tip').textContent ?? ''
+    assert.ok(tipText().includes(kit.t('trend.dnaItem', { label: kit.catLabel('user'), n: '-200' })))
+    await m.unmount()
+  })
+
+  test('combo hover off the arms keeps the delta row — the churn is never labeled a total (#96)', async () => {
+    const rs = [
+      req(1, { turn: 1, step: 0, total: 300 }),
+      req(2, { turn: 1, step: 1, total: 260, tool: 20 }),
+    ]
+    const ds = [
+      dnaBands([['sys', 'system', 100], ['n1', 'user', 200, { seq: 1, cat: 'user', tokens: 200 }]]),
+      dnaBands([['sys', 'system', 100]]),
+    ]
+    const m = await mount(h(TrendChart, propsOf(rs, { dna: ds, mode: 'delta', hoveredSeq: 2 })))
+    const tipText = () => query(m.container, '.lc-chart-tip').textContent ?? ''
+    // No band under the pointer (dnaHit untouched): the fallback speaks the bar's NET — the same
+    // row plain delta mode shows — never the churn under the total label.
+    assert.ok(tipText().includes(kit.t('tip.delta', { n: '-40' })))
+    assert.ok(!tipText().includes(kit.t('tip.total', { n: '40' })))
+    await m.unmount()
+  })
+
+  test('the browser category focus is ignored — the bands already are the full composition', async () => {
+    const r1 = req(1, { turn: 1, step: 0, total: 300 })
+    const d1 = dnaBands([['sys', 'system', 100], ['n1', 'user', 200, { seq: 1, cat: 'user', tokens: 200 }]])
+    const m = await mount(h(TrendChart, propsOf([r1], { dna: [d1], focusCat: 'user' })))
+    const dnaDiv = query(m.container, '.lc-bar-dna')
+    assert.equal(dnaDiv.style.height, `${CHART_H}px`, 'full height, not the focused category share')
+    assert.ok(dnaDiv.style.background.includes('var(--color-indigo-500)'), 'the system band is still painted')
+    await m.unmount()
+  })
+
+  test('a bar whose bands carry no tokens paints no DNA strip', async () => {
+    const r1 = req(1, { turn: 1, step: 0, total: 0 })
+    const r2 = req(2, { turn: 1, step: 1, total: 600 })
+    const d1 = dnaBands([['n1', 'user', 0, { seq: 1, cat: 'user', tokens: 0 }]])
+    const d2 = dnaBands([['n2', 'user', 600, { seq: 2, cat: 'user', tokens: 600 }]])
+    const m = await mount(h(TrendChart, propsOf([r1, r2], { dna: [d1, d2] })))
+    assert.equal(queryAll(m.container, '.lc-bar-dna').length, 1)
+    await m.unmount()
   })
 })

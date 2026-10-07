@@ -74,11 +74,16 @@
 .lc-trend-ctl .lc-gran, .lc-heat-ctl .lc-gran { margin-left: 0; }
 /* The heat title's hint text loses its own auto margin inside the wrapper. */
 .lc-heat-ctl .lc-card-sub { margin-left: 0; }
-/* The trend card's adaptive switch rides the title text's right — a single-button group whose auto margin is
-   neutralized so it stays adjacent (the browser card's DNA toggle idiom). */
-.lc-trend-adaptive { margin-left: 0; flex: none; }
+/* The trend title's modifier group (DNA / adaptive / duration as one multi-toggle segmented group)
+   rides the title text's right — its auto margin is neutralized so the group hugs the title and the
+   control cluster's own auto margin remains the row's single right push (the browser card's DNA
+   toggle idiom). */
+.lc-trend-mods { margin-left: 0; flex: none; }
 .lc-gran-btn { border: 0; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1; padding: 3px 8px; border-radius: 5px; cursor: pointer; font-family: inherit; transition: color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
 .lc-gran-btn:hover { color: var(--dsw-alias-label-primary); }
+/* Disabled chips: inert and visually receded, keeping the group's layout so the row does not reflow. */
+.lc-gran-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.lc-gran-btn:disabled:hover { color: var(--dsw-alias-label-secondary); }
 .lc-gran-on, .lc-gran-on:hover { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
 /* The events card's kind filters carry their per-kind event tally: a tabular
    count set off from the label, dimmed while the chip is off and inherited
@@ -120,10 +125,9 @@
  drops the context stats / plugin info row — see contextView.tsx); the same
  wrap then stacks the pair in the narrow pane.
  */
-/* The context card's cell grid stretches to the plugin card's height, so the row reads as one level band. */
+/* The context card's flow diagram stretches to the plugin card's height, so the row reads as one level band. */
 .lc-head > .lc-card:has(.lc-stats) { display: flex; flex-direction: column; }
-.lc-head .lc-stats { flex: 1; align-content: stretch; }
-.lc-head .lc-stat { justify-content: center; }
+.lc-head .lc-stats { flex: 1; }
 .lc-empty { color: var(--dsw-alias-label-secondary); padding: 18px 0; text-align: center; }
 .lc-error { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 16px; }
 .lc-error-msg { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; padding: 4px 8px; max-width: 100%; overflow-wrap: anywhere; }

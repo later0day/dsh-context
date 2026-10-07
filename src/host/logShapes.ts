@@ -97,6 +97,47 @@ export function decodeTallyOfStream(stream: unknown, endTime: number): DecodeTal
   return tally
 }
 
+/** One ordered decode span of a stream's block sequence (see {@link decodeSpansOfStream}). */
+export interface DecodeSpan {
+  kind: DecodeKind
+  start: number
+  end: number
+}
+
+/**
+ * The ORDERED decode spans of one embedded assistant stream — the same
+ * ownership rule as {@link decodeTallyOfStream} (each `block-start` marker
+ * owns the interval up to the next one, the last one up to `endTime`), but
+ * keeping the sequence: the timing strip paints the decode window in stream
+ * order. Total over untrusted input, mirroring the tally: a malformed record
+ * is skipped whole, an unknown `blockType` leaves its interval unspanned
+ * (the caller's residue fill owns it), a zero/negative-length span drops
+ * out, and a stream with no marker (or not an array) yields none.
+ */
+export function decodeSpansOfStream(stream: unknown, endTime: number): DecodeSpan[] {
+  const spans: DecodeSpan[] = []
+  if (!Array.isArray(stream) || !Number.isFinite(endTime)) return spans
+  let kind: DecodeKind | undefined
+  let since = 0
+  const close = (to: number): void => {
+    if (kind !== undefined && to > since) spans.push({ kind, start: since, end: to })
+  }
+  for (const record of stream) {
+    if (record === null || typeof record !== 'object') continue
+    const r = record as Record<string, unknown>
+    if (r.type !== 'chunk' || r.chunk === null || typeof r.chunk !== 'object') continue
+    const chunk = r.chunk as { type?: unknown; blockType?: unknown }
+    if (chunk.type !== 'block-start') continue
+    const time = r.time
+    if (typeof time !== 'number' || !Number.isFinite(time)) continue
+    close(time)
+    kind = decodeKindOfBlock(chunk.blockType)
+    since = time
+  }
+  close(endTime)
+  return spans
+}
+
 /**
  * The first token's instant inside one PACKED delta run (`text-chunks` /
  * `reasoning-chunks` / `tool-call-chunks`): the run's base time plus the

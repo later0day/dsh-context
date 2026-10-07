@@ -7,6 +7,7 @@ import { act, createElement as h, useSyncExternalStore } from 'react'
 import assert from 'node:assert/strict'
 import { afterEach, describe, test, vi } from 'vitest'
 import { makeContextModal } from '../../../src/client/components/contextModal'
+import { resetTimelineDetailStores } from '../../../src/client/timelineSource'
 import { modalStoreOf, setPendingConsume, takePendingConsume } from '../../../src/client/modalStore'
 import { watchHistoryFaces } from '../../../src/client/historyPage'
 import { createContextSettings } from '../../../src/client/settings'
@@ -44,6 +45,10 @@ const OPEN = (): boolean => true
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  // The cold-start share (timelineSource.ts) is page-lifetime per session:
+  // drop it so one test's cold read never leaks its state into a later test
+  // that reuses the same session id.
+  resetTimelineDetailStores()
 })
 
 describe('ContextModal', () => {
@@ -80,6 +85,25 @@ describe('ContextModal', () => {
     }))
     assert.ok(text(m2.container).includes(DICT_EN.loading))
     await m2.unmount()
+  })
+
+  test('a cold read that settles without data surfaces the retryable failure, not a stall', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: false, status: 500, json: async () => null } as Response))
+    const ctx = new TestClientCtx({ services: { sessions: new TestSessions() } })
+    const ContextModal = makeContextModal(asClientCtx(ctx), kit, settings)
+    const m = await mount(h(ContextModal, {
+      sessionId: 'sm-cold-fail',
+      useContextModal: OPEN,
+      useProjection: () => undefined,
+    }))
+    await until(() => text(m.container).includes(DICT_EN['detail.loadFailed']), 'the failure note never surfaced')
+    assert.ok(!text(m.container).includes(DICT_EN.loading), 'no spinner remains once failed')
+    await act(async () => {
+      const hit = queryAll(m.container, 'button').find(b => text(b) === DICT_EN['detail.loadFailed'])
+      if (hit === undefined) throw new Error('retry button not found')
+      hit.click()
+    })
+    await m.unmount()
   })
 
   test('a corrupt timeline projection is sanitized and still renders the composition', async () => {

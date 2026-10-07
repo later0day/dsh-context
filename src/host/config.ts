@@ -17,7 +17,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
-import type { DefaultFileSort, DefaultGranularity, DefaultPlacement, DefaultTrendMode, DefaultToolSort, InsightsEntry } from '../shared/types'
+import type { DefaultFileSort, DefaultGranularity, DefaultDurationCurve, DefaultPlacement, DefaultTrendMode, DefaultToolSort, InsightsEntry } from '../shared/types'
 
 export interface Config {
   /** Cap on kept per-step request records (the hard step backstop). */
@@ -47,6 +47,8 @@ export interface Config {
   defaultFileSort?: DefaultFileSort
   /** Whether the Context Insights panel's sidebar entry is offered. */
   insightsEntry?: InsightsEntry
+  /** Whether the trend chart mounts with the duration curve overlaid. */
+  defaultDurationCurve?: DefaultDurationCurve
 }
 
 /** The fold's retention/slice bounds, as the schema resolves them. */
@@ -96,9 +98,11 @@ export const Config = z.object({
   defaultPlacement: volatileField(z.union(['all', 'tab', 'sidebar']).default('all').loose()),
   defaultGranularity: volatileField(z.union(['step', 'turn']).default('step').loose()),
   defaultTrendMode: volatileField(z.union(['total', 'delta']).default('total').loose()),
+  defaultDeltaBase: volatileField(z.union(['step', 'turn']).default('step').loose()),
   defaultToolSort: volatileField(z.union(['size', 'count', 'name']).default('count').loose()),
   defaultFileSort: volatileField(z.union(['count', 'latest', 'path']).default('count').loose()),
   insightsEntry: volatileField(z.union(['show', 'hide']).default('show').loose()),
+  defaultDurationCurve: volatileField(z.union(['show', 'hide']).default('show').loose()),
 })
 
 /** Resolve the fold's retention bounds (the schema fills every default). */

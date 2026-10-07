@@ -15,12 +15,12 @@
  */
 
 import { workspaceTitleOf } from '@deepseek-ai/dsh-util-workspace-path'
+import { billedParts } from './categories'
 import { cacheHitPercent } from './format'
-import type { CostCurrency } from './cost'
 import { estimateSessionCost, mergeCostUsage } from './cost'
-import type { ModelPrices } from './cost'
+import type { CostCurrency, ModelBook } from './cost'
 import { activityOf, asRecord, timelineOf, type ClientCtx, type SessionsFace } from './services'
-import type { ContextActivity, ContextTimeline, SessionCostUsage } from '../shared/types'
+import type { ContextActivity, ContextTimeline, SessionCostUsage, TimingTotals, TokenUsage, ToolTimingTotals } from '../shared/types'
 
 /** One session-list row joined with its (sanitized) projection values. */
 export interface OverviewRow {
@@ -365,6 +365,111 @@ export function usageTotalsOf(usage: SessionCostUsage | null | undefined): Usage
   return totals
 }
 
+/**
+ * The range's summed timing totals — the aggregate Timing Stats card's
+ * source, folded from the rows' host-folded whole-session totals exactly as
+ * the KPI band folds the scalar figures. Null when no row carries timing.
+ * The additive-optional fields (the decode split, the throughput seat) sum
+ * their carriers only: a row cached before a field existed contributes
+ * nothing to it, and a field no row carries stays absent — the card keeps
+ * its un-split shape / no-chip fallback instead of materialized zeros.
+ */
+export function timingSumOf(rows: readonly OverviewRow[]): TimingTotals | null {
+  let out: TimingTotals | null = null
+  for (const row of rows) {
+    const t = row.timeline?.timing
+    if (t === undefined) continue
+    if (out === null) {
+      out = { ...t, tools: { ...t.tools } }
+      continue
+    }
+    out.wallMs += t.wallMs
+    out.ttftMs += t.ttftMs
+    out.genMs += t.genMs
+    out.calls += t.calls
+    out.toolsMs += t.toolsMs
+    out.toolCalls += t.toolCalls
+    addOptionalOf(out, t, 'reasoningMs')
+    addOptionalOf(out, t, 'reasoningBlocks')
+    addOptionalOf(out, t, 'textMs')
+    addOptionalOf(out, t, 'textBlocks')
+    addOptionalOf(out, t, 'toolArgMs')
+    addOptionalOf(out, t, 'toolArgBlocks')
+    addOptionalOf(out, t, 'speedTokens')
+    addOptionalOf(out, t, 'speedMs')
+    for (const name of Object.keys(t.tools)) {
+      const tool = t.tools[name]
+      // Widened honestly: a Record index read can miss at runtime.
+      const outTools: Record<string, ToolTimingTotals | undefined> = out.tools
+      const prev = outTools[name]
+      out.tools[name] = prev === undefined ? { ...tool } : { calls: prev.calls + tool.calls, ms: prev.ms + tool.ms }
+    }
+  }
+  return out
+}
+
+/** One additive-optional timing field's in-place merge: absent on both sides stays absent (never a materialized undefined). */
+function addOptionalOf(target: TimingTotals, source: TimingTotals, key: OptionalTimingKey): void {
+  const a = target[key]
+  const b = source[key]
+  if (a !== undefined || b !== undefined) target[key] = (a ?? 0) + (b ?? 0)
+}
+
+type OptionalTimingKey = 'reasoningMs' | 'reasoningBlocks' | 'textMs' | 'textBlocks'
+  | 'toolArgMs' | 'toolArgBlocks' | 'speedTokens' | 'speedMs'
+
+/**
+ * One aggregate slice of the Token Stats card: a composition category (or
+ * `output`) with its summed billed estimate.
+ */
+export interface TokenPartTotal {
+  key: string
+  color: string
+  value: number
+}
+
+/**
+ * The range's billed tokens split by WHAT they are — the Context tab's Token
+ * card categorization, folded across sessions: each session's
+ * `billedParts` estimate (the composition ratios proportioning that
+ * session's provider-reported prompt total, output exact) sums by category,
+ * and every session's parts total its own billed figure, so the aggregate's
+ * total stays the exact merged billed volume while the split inherits the
+ * per-session card's `≈` estimate convention. Null when no session billed
+ * anything. A non-finite part estimate (a hostile fast-path composition)
+ * drops whole instead of poisoning the sums.
+ */
+export function tokenPartsOf(rows: readonly OverviewRow[]): { parts: TokenPartTotal[]; total: number } | null {
+  const sums = new Map<string, TokenPartTotal>()
+  let total = 0
+  let any = false
+  for (const row of rows) {
+    const timeline = row.timeline
+    if (timeline === null) continue
+    const totals = usageTotalsOf(timeline.cost)
+    if (totals === null) continue
+    any = true
+    const usage: TokenUsage = {
+      uncachedInputTokens: totals.input,
+      cacheReadTokens: totals.cacheRead,
+      cacheWriteTokens: totals.cacheWrite,
+      outputTokens: totals.output,
+    }
+    for (const part of billedParts(timeline.current, null, usage)) {
+      if (!Number.isFinite(part.value) || part.value <= 0) continue
+      total += part.value
+      // Widened honestly: a Map get can miss at runtime.
+      const sumsGet: Map<string, TokenPartTotal | undefined> = sums
+      const prev = sumsGet.get(part.key)
+      sums.set(part.key, prev === undefined
+        ? { key: part.key, color: part.color, value: part.value }
+        : { ...prev, value: prev.value + part.value })
+    }
+  }
+  if (!any) return null
+  return { parts: [...sums.values()], total }
+}
+
 /** The KPI band's figures, priced from the models.dev book (null cost until the book lands). */
 export interface OverviewKpis {
   /** Sessions in the current range filter. */
@@ -391,12 +496,16 @@ export interface OverviewKpis {
   calls: number
   /** Their summed wall time (the sessions' active time). */
   wallMs: number
+  /** The range's billed tokens split by composition category (null: nothing billed) — the Token Stats card's slices. */
+  tokenParts: { parts: TokenPartTotal[]; total: number } | null
+  /** The range's summed timing totals (null: no timed session) — the Timing Stats card's source. */
+  timing: TimingTotals | null
 }
 
 export function kpisOf(
   rows: readonly OverviewRow[],
   listed: number,
-  prices: ModelPrices | null | undefined,
+  book: ModelBook | null | undefined,
   currency: CostCurrency,
 ): OverviewKpis {
   const usage = mergeCostUsage(...rows.map(row => row.timeline?.cost))
@@ -413,7 +522,7 @@ export function kpisOf(
     // Each qualifying sub-line counts the sessions its own figure covers: a
     // session with usage but no book rates feeds the cache-hit rate while
     // pricing to nothing.
-    if (estimateSessionCost(cost, prices, currency) !== null) costSessions++
+    if (estimateSessionCost(cost, book, currency) !== null) costSessions++
     if (usageTotalsOf(cost) !== null) usageSessions++
     turns += turnsOf(row.timeline)
     const timing = row.timeline?.timing
@@ -427,7 +536,7 @@ export function kpisOf(
     listed,
     tokens: totals?.total ?? 0,
     turns,
-    cost: estimateSessionCost(usage, prices, currency),
+    cost: estimateSessionCost(usage, book, currency),
     costSessions,
     cacheHit: totals === null ? null : cacheHitPercent(totals.cacheRead, totals.input + totals.cacheRead + totals.cacheWrite),
     usageSessions,
@@ -435,39 +544,71 @@ export function kpisOf(
     toolsMs,
     calls,
     wallMs,
+    tokenParts: tokenPartsOf(rows),
+    timing: timingSumOf(rows),
   }
 }
 
-/** One merged day of the daily ledgers: billed tokens, model requests, and the sessions active that day. */
+/** One merged day of the daily ledgers: billed tokens, model requests, the sessions active that day, and the day's priced fee. */
 export interface DayTotals {
   tokens: number
   requests: number
   sessions: number
+  /**
+   * The day's estimated spend in the display currency (null: nothing priced —
+   * no pricing record folded, no book yet, or no model the book prices).
+   */
+  cost: number | null
 }
 
 /**
- * Merge every row's daily ledger into one — the heatmap's data. A session
- * counts toward a day only when its own entry carries activity, mirroring
- * the day filter's predicate, so the cell's tooltip previews the click; a
- * zeroed entry is skipped whole. The merged record stays small even over
- * long histories.
+ * Merge every row's daily ledger into one — the heatmap's and the usage
+ * chart's data. A session counts toward a day only when its own entry
+ * carries activity, mirroring the day filter's predicate, so the cell's
+ * tooltip previews the click; a zeroed entry is skipped whole. Each day's
+ * pricing records merge into one SessionCostUsage and price off the SAME
+ * book/estimator the KPI band's cost cell rides (null fee on anything
+ * unpriced). The merged record stays small even over long histories.
  */
-export function aggregateDays(rows: readonly OverviewRow[]): Record<string, DayTotals> {
-  const days: Record<string, DayTotals> = {}
-  // Widened honestly: a Record index read can miss at runtime.
-  const byKey: Record<string, DayTotals | undefined> = days
+export function aggregateDays(
+  rows: readonly OverviewRow[],
+  book: ModelBook | null | undefined,
+  currency: CostCurrency,
+): Record<string, DayTotals> {
+  // The walk merges into a richer record (each day's fee raw material rides
+  // along), then every merged day prices once — no second lookup pass.
+  const merged: Record<string, { tokens: number; requests: number; sessions: number; fees: SessionCostUsage[] }> = {}
+  const byKey: Record<string, { tokens: number; requests: number; sessions: number; fees: SessionCostUsage[] } | undefined> = merged
   for (const row of rows) {
     if (row.activity === null) continue
     for (const key of Object.keys(row.activity.days)) {
       const entry = row.activity.days[key]
       if (entry.tokens <= 0 && entry.requests <= 0) continue
       const prev = byKey[key]
-      if (prev === undefined) days[key] = { tokens: entry.tokens, requests: entry.requests, sessions: 1 }
-      else {
+      if (prev === undefined) {
+        merged[key] = {
+          tokens: entry.tokens,
+          requests: entry.requests,
+          sessions: 1,
+          fees: entry.cost !== undefined ? [entry.cost] : [],
+        }
+      } else {
         prev.tokens += entry.tokens
         prev.requests += entry.requests
         prev.sessions++
+        if (entry.cost !== undefined) prev.fees.push(entry.cost)
       }
+    }
+  }
+  const days: Record<string, DayTotals> = {}
+  for (const [key, day] of Object.entries(merged)) {
+    // No fee records merge to null (nothing priced); records that merge but
+    // match no book price null the same way.
+    days[key] = {
+      tokens: day.tokens,
+      requests: day.requests,
+      sessions: day.sessions,
+      cost: estimateSessionCost(mergeCostUsage(...day.fees), book, currency),
     }
   }
   return days

@@ -94,7 +94,10 @@ function safeResize(height: number, width: number, paddedHeight: number, paddedW
   const pad = COMPRESS_PAD_TO - 1
   const budget = MAX_TOKENS - pad
   let result: ResizeSolution = {
-    nLlmH, nLlmW, bestHeight: paddedHeight, bestWidth: paddedWidth,
+    nLlmH,
+    nLlmW,
+    bestHeight: paddedHeight,
+    bestWidth: paddedWidth,
     numTokens: gridTokens(nLlmH, nLlmW),
   }
   if (result.numTokens > budget) {

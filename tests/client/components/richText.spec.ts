@@ -139,3 +139,209 @@ describe('RichCopy', () => {
     await m.unmount()
   })
 })
+
+describe('useRichFind', () => {
+  const { useRichFind } = makeRichText(kit)
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Harness wiring the hook the way TextSection does: toggle + bar + the keyed, ref'd body. */
+  function FindHarness(props: { text: string; mode?: RichMode }) {
+    const find = useRichFind(props.text, props.mode ?? 'raw')
+    return h('div', {},
+      find.button,
+      find.bar,
+      h('div', { key: find.bodyKey, ref: find.bodyRef },
+        h(RichText, { text: props.text, mode: props.mode ?? 'raw' })))
+  }
+
+  /** Type into the find input the way React's onChange sees it. */
+  async function type(input: HTMLInputElement, value: string): Promise<void> {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      setter?.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+
+  async function openFind(container: HTMLElement): Promise<HTMLInputElement> {
+    await click(query(container, '.lc-find-btn'))
+    return query<HTMLInputElement>(container, '.lc-find-input')
+  }
+
+  /** Settle the debounce window inside act. */
+  async function settle(): Promise<void> {
+    await act(async () => { await vi.advanceTimersByTimeAsync(150) })
+  }
+
+  function barButtons(container: HTMLElement): HTMLElement[] {
+    return queryAll(query(container, '.lc-find'), '.lc-find-btn')
+  }
+
+  test('the toggle opens the bar with the input focused; the close button folds it back', async () => {
+    const m = await mount(h(FindHarness, { text: SAMPLE }))
+    const toggle = query(m.container, '.lc-find-btn')
+    assert.equal(toggle.getAttribute('title'), 'Find in Text')
+    assert.equal(queryAll(m.container, '.lc-find').length, 0)
+    await click(toggle)
+    const input = query<HTMLInputElement>(m.container, '.lc-find-input')
+    assert.equal(document.activeElement, input, 'the input takes focus on open')
+    assert.equal(input.placeholder, 'Find…')
+    assert.ok(toggle.className.includes('lc-find-btn-on'))
+    const close = barButtons(m.container)[2]
+    assert.equal(close.getAttribute('title'), 'Close Find')
+    await click(close)
+    assert.equal(queryAll(m.container, '.lc-find').length, 0)
+    assert.ok(!query(m.container, '.lc-find-btn').className.includes('lc-find-btn-on'))
+    await m.unmount()
+  })
+
+  test('a settled query highlights case-insensitive matches and counts the active one', async () => {
+    vi.useFakeTimers()
+    const m = await mount(h(FindHarness, { text: 'Alpha beta ALPHA other' }))
+    const input = await openFind(m.container)
+    await type(input, 'alpha')
+    assert.equal(queryAll(m.container, '.lc-find-mark').length, 0, 'no scan before the debounce settles')
+    await settle()
+    const marks = queryAll(m.container, '.lc-find-mark')
+    assert.deepEqual(marks.map(x => x.textContent), ['Alpha', 'ALPHA'])
+    assert.equal(query(m.container, '.lc-find-count').textContent, '1/2')
+    assert.ok(marks[0].className.includes('lc-find-mark-on'))
+    assert.equal(queryAll(m.container, '.lc-find-mark-on').length, 1)
+    await m.unmount()
+  })
+
+  test('rapid typing rescans once, on the final query only', async () => {
+    vi.useFakeTimers()
+    const m = await mount(h(FindHarness, { text: 'alpha alphabet beta' }))
+    const input = await openFind(m.container)
+    await type(input, 'a')
+    await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+    await type(input, 'al')
+    await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+    assert.equal(queryAll(m.container, '.lc-find-mark').length, 0, 'keystrokes inside the window never scanned')
+    await type(input, 'alp')
+    await settle()
+    assert.deepEqual(queryAll(m.container, '.lc-find-mark').map(x => x.textContent), ['alp', 'alp'])
+    await m.unmount()
+  })
+
+  test('Enter and Shift+Enter cycle the active match with wraparound; the chevrons do the same', async () => {
+    vi.useFakeTimers()
+    const m = await mount(h(FindHarness, { text: 'one two one two one' }))
+    const input = await openFind(m.container)
+    await type(input, 'one')
+    await settle()
+    assert.equal(query(m.container, '.lc-find-count').textContent, '1/3')
+    const enter = (shift: boolean) => act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: shift, bubbles: true, cancelable: true }))
+    })
+    await enter(false)
+    assert.equal(query(m.container, '.lc-find-count').textContent, '2/3')
+    await enter(false)
+    await enter(false)
+    assert.equal(query(m.container, '.lc-find-count').textContent, '1/3', 'Enter wraps past the last match')
+    await enter(true)
+    assert.equal(query(m.container, '.lc-find-count').textContent, '3/3', 'Shift+Enter walks backwards')
+    const [prev, next] = barButtons(m.container)
+    assert.equal(prev.getAttribute('title'), 'Previous Match')
+    assert.equal(next.getAttribute('title'), 'Next Match')
+    await click(next)
+    assert.equal(query(m.container, '.lc-find-count').textContent, '1/3')
+    await click(prev)
+    assert.equal(query(m.container, '.lc-find-count').textContent, '3/3')
+    assert.ok(queryAll(m.container, '.lc-find-mark')[2].className.includes('lc-find-mark-on'))
+    await m.unmount()
+  })
+
+  test('Escape folds the bar and clears the marks; the body text is byte-identical afterwards', async () => {
+    vi.useFakeTimers()
+    const source = 'Alpha beta ALPHA other'
+    const m = await mount(h(FindHarness, { text: source }))
+    const input = await openFind(m.container)
+    await type(input, 'alpha')
+    await settle()
+    assert.equal(queryAll(m.container, '.lc-find-mark').length, 2)
+    assert.equal(rawText(m.container), source, 'marks never alter the copyable source text')
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    assert.equal(queryAll(m.container, '.lc-find').length, 0)
+    assert.equal(queryAll(m.container, '.lc-find-mark').length, 0)
+    assert.equal(rawText(m.container), source, 'the restore rebuilt the exact original text nodes')
+    await m.unmount()
+  })
+
+  test('deleting the whole query clears the marks at once, without the debounce', async () => {
+    vi.useFakeTimers()
+    const m = await mount(h(FindHarness, { text: 'alpha beta' }))
+    const input = await openFind(m.container)
+    await type(input, 'alpha')
+    await settle()
+    assert.equal(queryAll(m.container, '.lc-find-mark').length, 1)
+    await type(input, '')
+    assert.equal(queryAll(m.container, '.lc-find-mark').length, 0, 'an empty query applies immediately')
+    assert.equal(queryAll(m.container, '.lc-find-count').length, 0)
+    await m.unmount()
+  })
+
+  test('zero matches shows 0/0 and disables the chevrons; stray keys and Enter are harmless', async () => {
+    vi.useFakeTimers()
+    const m = await mount(h(FindHarness, { text: 'alpha beta' }))
+    const input = await openFind(m.container)
+    await type(input, 'zzz')
+    await settle()
+    assert.equal(query(m.container, '.lc-find-count').textContent, '0/0')
+    const [prev, next] = barButtons(m.container)
+    assert.ok((prev as HTMLButtonElement).disabled)
+    assert.ok((next as HTMLButtonElement).disabled)
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true }))
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.equal(query(m.container, '.lc-find-count').textContent, '0/0')
+    await m.unmount()
+  })
+
+  test('a body swap under a live lens clamps the active index onto the shorter match list', async () => {
+    vi.useFakeTimers()
+    const m = await mount(h(FindHarness, { text: 'one one one' }))
+    const input = await openFind(m.container)
+    await type(input, 'one')
+    await settle()
+    const [, next] = barButtons(m.container)
+    await click(next)
+    await click(next)
+    assert.equal(query(m.container, '.lc-find-count').textContent, '3/3')
+    await m.update(h(FindHarness, { text: 'one two' }))
+    assert.equal(query(m.container, '.lc-find-count').textContent, '1/1', 'the active match fell back onto the last survivor')
+    assert.equal(queryAll(m.container, '.lc-find-mark-on').length, 1)
+    assert.equal(rawText(m.container), 'one two', 'the new body renders its exact source')
+    await m.unmount()
+  })
+
+  test('matches beyond the cap stop at 500 rendered marks and the counter admits it', async () => {
+    vi.useFakeTimers()
+    const m = await mount(h(FindHarness, { text: Array(600).fill('x').join(' ') }))
+    const input = await openFind(m.container)
+    await type(input, 'x')
+    await settle()
+    assert.equal(queryAll(m.container, '.lc-find-mark').length, 500)
+    assert.equal(query(m.container, '.lc-find-count').textContent, '1/500+')
+    await m.unmount()
+  })
+
+  test('markdown mode marks the rendered body too', async () => {
+    vi.useFakeTimers()
+    const m = await mount(h(FindHarness, { text: SAMPLE, mode: 'md' }))
+    const input = await openFind(m.container)
+    await type(input, 'bold')
+    await settle()
+    const marks = queryAll(query(m.container, '.lc-ts-desc-md'), '.lc-find-mark')
+    assert.deepEqual(marks.map(x => x.textContent), ['bold'])
+    assert.equal(query(m.container, '.lc-find-count').textContent, '1/1')
+    await m.unmount()
+  })
+})

@@ -274,8 +274,12 @@ function aggregateOps(ops: readonly FileOp[], before: number | null): FileActivi
       entry = {
         path: op.path,
         form: formOf(op.tool, op.path),
-        reads: 0, writes: 0, searches: 0,
-        added: 0, removed: 0, errs: 0,
+        reads: 0,
+        writes: 0,
+        searches: 0,
+        added: 0,
+        removed: 0,
+        errs: 0,
         ops: [],
         ...(op.pattern === true ? { pattern: true as const } : {}),
       }

@@ -5,6 +5,7 @@
 //
 //   dsh-v0.1.5-rc.1  packages/session/session-projection/src/index.ts
 //   dsh-v0.1.7-rc.2  packages/session/session-projection/src/index.ts
+//   dsh-v0.2.0-rc.2  packages/session/session-projection/src/index.ts
 //
 // The real-code matrix (tests/compat/matrix.spec.ts) runs the ACTUAL registry
 // sources per tag; this driver exists so `pnpm test` alone still detects a

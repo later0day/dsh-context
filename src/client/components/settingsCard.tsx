@@ -1,5 +1,5 @@
 /**
- * The dsh-context preference cards — two seats over the same six rows. The
+ * The dsh-context preference cards — two seats over the same eight rows. The
  * settings-section card (`settings.plugin.item`, the older harness lines)
  * renders a collapsible list item in Settings → Plugins → Plugin
  * configuration; the Plugins-page card (`plugins.bundle.config`, the
@@ -67,7 +67,7 @@ function PrefRow(props: PrefRowProps): ReactElement {
 /** Translate over the plugin's dictionary, as the view kit binds it. */
 type Translate = ViewKit['t']
 
-/** The six preference rows shared by both seats. */
+/** The seven preference rows shared by both seats. */
 function PreferenceRows(props: { t: Translate; state: SettingsState; set?: SettingsCardProps['set'] }): ReactElement {
   const { t, state, set } = props
   const disabled = state.status !== 'ready' || !state.writable
@@ -113,6 +113,26 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
           { id: 'delta', label: t('gran.delta') },
         ]}
         onPick={(id) => { set?.('defaultTrendMode', id) }}
+      />
+      <PrefRow
+        label={t('settings.durationCurve')}
+        value={state.durationCurve}
+        disabled={disabled}
+        options={[
+          { id: 'show', label: t('insightsEntry.show') },
+          { id: 'hide', label: t('insightsEntry.hide') },
+        ]}
+        onPick={(id) => { set?.('defaultDurationCurve', id) }}
+      />
+      <PrefRow
+        label={t('settings.deltaBase')}
+        value={state.deltaBase}
+        disabled={disabled}
+        options={[
+          { id: 'step', label: t('browser.base.step') },
+          { id: 'turn', label: t('browser.base.turn') },
+        ]}
+        onPick={(id) => { set?.('defaultDeltaBase', id) }}
       />
       <PrefRow
         label={t('settings.toolSort')}

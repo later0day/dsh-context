@@ -51,3 +51,5 @@ export const IconCopy = resolveIcon('IconCopyOutlineRegular', 'IconCopyOutline16
 export const IconClose = resolveIcon('IconCloseOutlineRegular', 'IconCloseOutline16')
 export const IconSettings = resolveIcon('IconSettingsOutlineMedium', 'IconSettingsOutline14')
 export const IconChevronDown = resolveIcon('IconChevronDownOutlineMedium', 'IconChevronDownOutline14')
+export const IconChevronUp = resolveIcon('IconChevronUpOutlineMedium', 'IconChevronUpOutline14')
+export const IconSearch = resolveIcon('IconSearchOutlineRegular', 'IconSearchOutline16')

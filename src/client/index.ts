@@ -26,9 +26,9 @@ import { createElement as h } from 'react'
 import { DICT_EN, DICT_ZH } from './i18n'
 import { registerContextCommand } from './command'
 import { makeContextModal } from './components/contextModal'
-import { makeOverviewButton } from './components/overviewButton'
 import { makeOverviewPanel } from './components/overviewPanel'
 import { makeSettingsCard, makePluginConfigCard } from './components/settingsCard'
+import { watchInsightPage } from './insightPage'
 import { modalStoreOf } from './modalStore'
 import type { ClientCtx } from './services'
 import { createContextSettings, type ConfigFormsFace, type SettingsField, type SettingsScopeBinderFace } from './settings'
@@ -122,33 +122,31 @@ function apply(ctx: ClientCtx): void {
   const ContextModal = makeContextModal(ctx, kit, settings)
   ctx.slots.inject('conversation.input.overlay', () => {
     return ctx.slots.register(
-      { name: 'conversation.input.overlay', id: 'context-modal', order: 10, locale: NS,
+      { name: 'conversation.input.overlay',
+        id: 'context-modal',
+        order: 10,
+        locale: NS,
         inject: (sessionId = '') => ({ hooks: { contextModal: modalStoreOf(sessionId) } }) },
       props => h(ContextModal, props),
     )
   })
 
-  // The Context Dashboard (see components/overviewPanel.tsx): the cross-session
-  // insight surface. The entry is a footer action — the harness stacks those
-  // directly above Settings on the sidebar foot; the overlay it opens renders
-  // from the frame-wide shell.overlay seat, and the module store
-  // (overviewStore.ts) carries the open flag between the two registrations.
-  // Both seats are root-scope list slots present since the supported baseline.
-  const OverviewButton = makeOverviewButton(kit, settings)
-  ctx.slots.inject('sidebar.footer.action', () => {
-    return ctx.slots.register(
-      { name: 'sidebar.footer.action', id: 'context-overview', order: 10, locale: NS },
-      // Root-scope seats: the owner props (wide, the standard kit) arrive untyped.
-      props => h(OverviewButton, props as unknown as Parameters<typeof OverviewButton>[0]),
-    )
-  })
+  // The Context Insights page (see components/overviewPanel.tsx): the
+  // cross-session insight surface as a first-level panel, a sibling of the
+  // shipped Plugins and Automation tasks pages. The page registers on the
+  // layout's keyed `main` slot and the sidebar entry on `sidebar.panellist`,
+  // both under one id (insightPage.ts); the shell owns the entry row and the
+  // panel switching, so no plugin-side open state exists. The `insightsEntry`
+  // preference mounts or unwinds the pair.
   const OverviewPanel = makeOverviewPanel(ctx, kit)
-  ctx.slots.inject('shell.overlay', () => {
-    return ctx.slots.register(
-      { name: 'shell.overlay', id: 'context-overview', order: 10, locale: NS },
-      props => h(OverviewPanel, props as unknown as Parameters<typeof OverviewPanel>[0]),
-    )
-  })
+  ctx.effect(() => watchInsightPage(
+    ctx,
+    settings,
+    // Root-scope seats: the owner props (the standard kit) arrive untyped.
+    props => h(OverviewPanel, props as unknown as Parameters<typeof OverviewPanel>[0]),
+    t,
+    NS,
+  ), 'dsh-context: insight page')
 
   /** The injected face both preference cards ride: the settings store as the
    *  framework's hooks-compartment `useContextSettings` seat, plus the set verb. */

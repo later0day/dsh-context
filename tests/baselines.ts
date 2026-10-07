@@ -16,7 +16,7 @@
  */
 
 /** The supported dsh tags, in lockstep with the BASELINES entries below. */
-export type BaselineId = 'v0.1.5-rc.1' | 'v0.1.7-rc.2'
+export type BaselineId = 'v0.1.5-rc.1' | 'v0.1.7-rc.2' | 'v0.2.0-rc.2'
 
 /** The harness web half's client faces, as far as the compat probes consume them. */
 export interface ClientSeam {
@@ -61,6 +61,22 @@ export interface ClientSeam {
     /** The sessions contract source, plus whether this line still declares `open(id: SessionId)`. */
     sessionsFile: string
     sessionsOpen: boolean
+  }
+  /**
+   * The Context Insights page's first-level panel seam: the layout's keyed
+   * `main` slot (the page's seat — also the conversation panel's own) and
+   * the sidebar's `sidebar.panellist` list (the entry's seat), addressed by
+   * one shared id. Both spellings shipped with the sidebar/layout split and
+   * are present on every supported line; probed presence-as-declared so a
+   * rename names the seam instead of silently orphaning the page.
+   */
+  insightPage: {
+    /** The panellist contract's declaring source, plus the slot's spelling in it. */
+    panellistFile: string
+    panellistNeedle: string
+    /** The layout's main-slot declaring source, plus the keyed declaration's spelling. */
+    mainFile: string
+    mainNeedle: string
   }
   /**
    * The right Sidebar's tab seam — every supported generation ships it
@@ -170,6 +186,26 @@ export interface Baseline {
     transportFile: string
     transportPresent: boolean
   }
+  /**
+   * The balance capsule's host seam (src/host/balance.ts). The facts fold
+   * reads the DeepSeek API-key provider's settings row through whichever face
+   * the line serves: the `get(ns)` registered-section read through V3, the
+   * Config-form `describe()` projection on V4+ — where the provider row is
+   * the entry whose served value declares the top-level `apiKeyEnv`
+   * credential ref, preferred under the settings ids the generations have
+   * served it as. Each face is probed against the tag's real sources.
+   */
+  balance: {
+    /** The settings service source the face needles are asserted in. */
+    settingsFile: string
+    /** The `get(ns)` section read — served through V3, retired on V4+. */
+    settingsGetNeedle: string
+    settingsGetPresent: boolean
+    /** The Config-form projection needle, when this line serves one the fold reads. */
+    settingsDescribeNeedle: string | undefined
+    /** The provider sources carrying the plugin id and the section shape the fold matches. */
+    providerFiles: readonly { file: string; needles: readonly string[] }[]
+  }
 }
 
 export const BASELINES: readonly Baseline[] = [
@@ -234,6 +270,12 @@ export const BASELINES: readonly Baseline[] = [
         sessionsFile: 'packages/api/session-controller/src/client/contract/sessions.ts',
         sessionsOpen: true,
       },
+      insightPage: {
+        panellistFile: 'packages/client/ui-sidebar/src/client/contract/slots.ts',
+        panellistNeedle: "'sidebar.panellist'",
+        mainFile: 'packages/client/ui-layout/src/client/index.ts',
+        mainNeedle: "'main': { kind: 'keyed'",
+      },
     },
     settings: {
       serviceFile: 'packages/settings/settings/src/index.ts',
@@ -244,6 +286,18 @@ export const BASELINES: readonly Baseline[] = [
       transport: 'settingsScope',
       transportFile: 'packages/client/ui-settings/src/client/settings-scope.ts',
       transportPresent: true,
+    },
+    balance: {
+      settingsFile: 'packages/settings/settings/src/index.ts',
+      settingsGetNeedle: 'get<const Namespace extends string>(ns:',
+      settingsGetPresent: true,
+      settingsDescribeNeedle: undefined,
+      providerFiles: [
+        {
+          file: 'packages/llm/llm-deepseek/src/index.ts',
+          needles: ["export const name = 'llm-deepseek'", "apiKeyEnv: z.string().role('credential-ref')"],
+        },
+      ],
     },
     stepGuard: {
       loopFile: 'packages/core/agent-loop/src/agent.ts',
@@ -263,7 +317,8 @@ export const BASELINES: readonly Baseline[] = [
     // (the fold reads both spellings). The baseline pins `0.1.7-rc.2`, the
     // first release of the line with a complete npm dependency closure; rc.2
     // adds `startsSeries` to the first `request/header` and the
-    // `developer/message` tool-registry events, both inert to the fold.
+    // `developer/message` tool-registry events. startsSeries is inert to the
+    // fold; registry messages contribute to injected context.
     // 0.1.7 enforces plugin dsh-peer compatibility at startup and install
     // (evaluatePluginCompatibility); this plugin's `>=0.1.5-rc.1` dsh peers
     // satisfy every supported line under the gate's includePrerelease check.
@@ -273,7 +328,7 @@ export const BASELINES: readonly Baseline[] = [
     session: '0.1.7-rc.2',
     foldEventTypes: [
       'request/header', 'request/context', 'step/start', 'step/end',
-      'user/message', 'tool/call', 'tool/result', 'assistant/message', 'assistant/attempt',
+      'user/message', 'developer/message', 'tool/call', 'tool/result', 'assistant/message', 'assistant/attempt',
       'tool/ptc-dispatch',
       'plan/mode', 'compaction/summary', 'compaction/prune', 'system/message',
     ],
@@ -321,6 +376,12 @@ export const BASELINES: readonly Baseline[] = [
         sessionsFile: 'packages/api/session-controller/src/client/contract/sessions.ts',
         sessionsOpen: false,
       },
+      insightPage: {
+        panellistFile: 'packages/client/ui-sidebar/src/client/contract/slots.ts',
+        panellistNeedle: "'sidebar.panellist'",
+        mainFile: 'packages/client/ui-layout/src/client/index.ts',
+        mainNeedle: "'main': { kind: 'keyed'",
+      },
     },
     settings: {
       serviceFile: 'packages/settings/settings/src/index.ts',
@@ -330,6 +391,137 @@ export const BASELINES: readonly Baseline[] = [
       transport: 'configForms',
       transportFile: 'packages/client/ui-settings/src/client/config-form.ts',
       transportPresent: true,
+    },
+    balance: {
+      settingsFile: 'packages/settings/settings/src/index.ts',
+      settingsGetNeedle: 'get<const Namespace extends string>(ns:',
+      settingsGetPresent: false,
+      settingsDescribeNeedle: 'describe(options?: SettingsDescribeOptions)',
+      providerFiles: [
+        {
+          file: 'packages/llm/llm-deepseek-api-key/src/index.ts',
+          needles: ["export const name = 'llm-deepseek-api-key'"],
+        },
+        {
+          file: 'packages/llm/llm-deepseek-api-key/src/config.ts',
+          needles: ["apiKeyEnv: z.string().role('credential-ref').default('DEEPSEEK_API_KEY').volatile()"],
+        },
+        {
+          file: 'packages/llm/llm-deepseek/src/config.ts',
+          needles: ['baseURL: z.string().volatile()'],
+        },
+      ],
+    },
+    stepGuard: {
+      loopFile: 'packages/core/agent-loop/src/agent.ts',
+      loopNeedles: ["'agent/pre-step'", "append('user/message'"],
+      prependProofFile: 'packages/context/time-context/src/index.ts',
+    },
+  },
+  {
+    // The 0.2.0 line continues the V4 Config-form generation: every seam the
+    // plugin rides is spelled exactly as at `0.1.7-rc.2` — the projection
+    // registry's register/snapshot/checkpoint/restore contract (drive,
+    // stateVersion, wire views), the platform module table, the right
+    // Sidebar's tab + chip-title seats and guide-entry contract, the
+    // session-jump verb pair, the detail channel's Connection RPC faces, the
+    // Plugins page's keyed `plugins.bundle.config` card slot over the
+    // `configForms` transport, the balance settings faces, the step-boundary
+    // guard, and the durable event vocabulary (still the V4 generation — the
+    // session-format tree carries no v4-to-v5 migration). The pre-0.1.6 icon
+    // spellings stay absent exactly as on 0.1.7 (either-spelling resolution
+    // covers the range). Cordis stays 4.0.4, and the line continues to
+    // enforce the plugin dsh-peer gate this plugin's `>=0.1.5-rc.1` peers
+    // satisfy.
+    id: 'v0.2.0-rc.2',
+    tag: 'dsh-v0.2.0-rc.2',
+    cordis: '4.0.4',
+    session: '0.2.0-rc.2',
+    foldEventTypes: [
+      'request/header', 'request/context', 'step/start', 'step/end',
+      'user/message', 'developer/message', 'tool/call', 'tool/result', 'assistant/message', 'assistant/attempt',
+      'tool/ptc-dispatch',
+      'plan/mode', 'compaction/summary', 'compaction/prune', 'system/message',
+    ],
+    client: {
+      imageFaceMethod: 'imageUrl',
+      markdownChrome: 'labels',
+      platformModules: [
+        'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
+        '@deepseek-ai/dsh-client-store',
+        '@deepseek-ai/dsh-client-ui-slots',
+        '@deepseek-ai/dsh-client-ui-primitives',
+        '@deepseek-ai/dsh-client-ui-dockkit',
+      ],
+      detailChannel: {
+        hostRpcFile: 'packages/client/connection/src/rpc.ts',
+        hostRpcNeedle: 'HostConnectionRpc',
+        clientRpcFile: 'packages/client/connection/src/client/rpc.ts',
+        clientRpcNeedle: 'call(channel, endpoint, payload',
+        registryFile: 'packages/session/session-projection/src/index.ts',
+        registryNeedle: 'stateOf<',
+      },
+      sidebar: {
+        serviceFile: 'packages/client/ui-sidebar-right/src/client/index.ts',
+        serviceNeedle: 'sidebarRightTabs',
+        slotFile: 'packages/client/ui-sidebar-right/src/client/contract/slots.ts',
+        slotNeedle: 'sidebar.right.pane.tab',
+        titleSlotNeedle: 'sidebar.right.pane.tab.title',
+        nav: {
+          file: 'packages/client/ui-sidebar-right/src/client/service.ts',
+          needle: 'openResource(address',
+        },
+        guideEntry: {
+          file: 'packages/client/ui-sidebar-right/src/client/tab-registry.ts',
+          fields: [
+            'readonly order: number',
+            'readonly title: () => string',
+            'readonly description?: () => string',
+            'readonly icon?: ComponentType<IconProps>',
+          ],
+        },
+      },
+      sessionNav: {
+        workspaceFile: 'packages/client/ui-workspace/src/client/navigation.ts',
+        workspaceNeedle: 'openSession(target: SessionTarget): void',
+        sessionsFile: 'packages/api/session-controller/src/client/contract/sessions.ts',
+        sessionsOpen: false,
+      },
+      insightPage: {
+        panellistFile: 'packages/client/ui-sidebar/src/client/contract/slots.ts',
+        panellistNeedle: "'sidebar.panellist'",
+        mainFile: 'packages/client/ui-layout/src/client/index.ts',
+        mainNeedle: "'main': { kind: 'keyed'",
+      },
+    },
+    settings: {
+      serviceFile: 'packages/settings/settings/src/index.ts',
+      register: false,
+      cardSlot: 'plugins.bundle.config',
+      cardSlotFiles: ['packages/client/ui-plugin-manager/src/**'],
+      transport: 'configForms',
+      transportFile: 'packages/client/ui-settings/src/client/config-form.ts',
+      transportPresent: true,
+    },
+    balance: {
+      settingsFile: 'packages/settings/settings/src/index.ts',
+      settingsGetNeedle: 'get<const Namespace extends string>(ns:',
+      settingsGetPresent: false,
+      settingsDescribeNeedle: 'describe(options?: SettingsDescribeOptions)',
+      providerFiles: [
+        {
+          file: 'packages/llm/llm-deepseek-api-key/src/index.ts',
+          needles: ["export const name = 'llm-deepseek-api-key'"],
+        },
+        {
+          file: 'packages/llm/llm-deepseek-api-key/src/config.ts',
+          needles: ["apiKeyEnv: z.string().role('credential-ref').default('DEEPSEEK_API_KEY').volatile()"],
+        },
+        {
+          file: 'packages/llm/llm-deepseek/src/config.ts',
+          needles: ['baseURL: z.string().volatile()'],
+        },
+      ],
     },
     stepGuard: {
       loopFile: 'packages/core/agent-loop/src/agent.ts',

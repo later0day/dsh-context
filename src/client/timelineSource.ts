@@ -17,13 +17,22 @@
  * The no-stale-content guarantees: the store is per session and shared by
  * the tab and the modal; a refetch is single-flight with a trailing edge
  * (a rev bumped mid-flight re-reads after settle); responses race-safe by
- * revision (latest wins, with the refold exception — a host that refolded
- * restarts the revision, and a response matching the requested rev is
- * accepted regardless of order); a transport failure keeps the last good
+ * generation and revision (a host refold invalidates reads started before
+ * its revisions restarted, and latest wins within a generation); a
+ * transport failure keeps the last good
  * detail and backs off; an absent answer (the session left the live set)
  * stops the trailing until the head moves again. With no detail at all,
  * failure surfaces as a retryable note on the detail cards instead of an
  * empty chart.
+ *
+ * The cold start: a session can sit with NO pushed `contextTimeline` value
+ * at all — the enable recomposition raced its open baseline (and the
+ * projection store clears a key its baseline omits), or its checkpoint row
+ * is missing or version-stale on a cold-observed session. Waiting for a
+ * push that never comes would stall the view on "loading" forever, so the
+ * source opens the detail channel on its own (rev 0): the route folds the
+ * durable log on demand and serves the slim head beside the collections,
+ * and the next pushed head takes the channel back per its own revision.
  */
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
@@ -63,6 +72,7 @@ export function detailOf(value: unknown): ContextTimelineDetail | null {
     ...(typeof data.archiveFloor === 'number' ? { archiveFloor: data.archiveFloor } : {}),
     ...(data.fileOps !== undefined ? { fileOps: objectsOf(data.fileOps) } : {}),
     ...(typeof data.fileOpsFloor === 'number' ? { fileOpsFloor: data.fileOpsFloor } : {}),
+    ...(data.spans !== undefined ? { spans: objectsOf(data.spans) } : {}),
   }
 }
 
@@ -124,6 +134,7 @@ export class DetailStore {
   private targetRev = -1
   /** The head rev seen last — a DECREASE means the host refolded (revisions restart). */
   private lastHeadRev = -1
+  private generation = 0
   private failed = false
   private inFlight = false
   private timer: ReturnType<typeof setTimeout> | null = null
@@ -151,6 +162,7 @@ export class DetailStore {
    */
   request(rev: number): void {
     if (rev < this.lastHeadRev) {
+      this.generation++
       this.acceptedRev = -1
       this.wantedRev = -1
       this.detail = null
@@ -196,13 +208,13 @@ export class DetailStore {
     }
     this.inFlight = true
     this.targetRev = this.wantedRev
+    const generation = this.generation
     this.emit()
     try {
       const d = await this.fetcher()
+      if (generation !== this.generation) return
       if (d !== null) {
-        // Latest-wins, with the refold exception: a response matching the
-        // requested rev is the current truth even when its number trails a
-        // pre-refold landing.
+        // Compare revisions only within the generation that started this read.
         if (d.rev >= this.acceptedRev || d.rev === this.targetRev) {
           this.detail = d
           this.acceptedRev = d.rev
@@ -218,14 +230,16 @@ export class DetailStore {
         this.failures++
       }
     } catch {
-      this.failed = this.detail === null
-      this.failures++
+      if (generation === this.generation) {
+        this.failed = this.detail === null
+        this.failures++
+      }
+    } finally {
+      this.inFlight = false
+      // The head moved or refolded while the read settled: trail once more.
+      if (this.wantedRev > this.acceptedRev) this.schedule()
+      this.emit()
     }
-    this.inFlight = false
-    // The head moved while the read settled (or an earlier read lost the
-    // race): trail once more, debounced.
-    if (this.wantedRev > this.acceptedRev) this.schedule()
-    this.emit()
   }
 
   private emit(): void {
@@ -283,38 +297,64 @@ export function useTimelineSource(ctx: ClientCtx, props: SessionStandardProps): 
   // inline generation — `headRev` null means no detail channel work at all.
   const headRev = head !== null && typeof head.detailRev === 'number' ? head.detailRev : null
   const slim = headRev !== null
+  // The cold start arms whenever no value has been pushed: the channel is
+  // opened by the source itself (rev 0) instead of waiting on a push that
+  // may never come (the enable recomposition raced the baseline, a cleared
+  // or stale checkpoint row). The store is per session, so the cold read's
+  // result carries straight into the pushed generation's later refetches.
+  const cold = head === null
   const store = useMemo(
-    () => (slim ? detailStoreOf(ctx, sessionId) : null),
-    [ctx, sessionId, slim],
+    () => (slim || cold ? detailStoreOf(ctx, sessionId) : null),
+    [ctx, sessionId, slim, cold],
   )
   const snap = useSyncExternalStore(
     store !== null ? store.subscribe : noopSubscribe,
     store !== null ? store.getSnapshot : () => EMPTY_SNAP,
   )
   useEffect(() => {
-    if (store !== null && headRev !== null) store.request(headRev)
+    // The pushed head's revision drives the trailing refetch; the cold start
+    // requests rev 0 — acceptance is rev-safe, and a head that arrives later
+    // trails per its own revision.
+    if (store !== null) store.request(headRev ?? 0)
   }, [store, headRev])
 
   return useMemo<TimelineSource>(() => {
-    if (head === null) return { data: null, detailState: 'loading', retryDetail: noopRetry }
-    if (!slim || store === null) return { data: head, detailState: 'legacy', retryDetail: noopRetry }
     const detail = snap.detail
-    const data: ContextTimeline = detail === null
-      ? head
-      : {
-        ...head,
-        requests: detail.requests,
-        events: detail.events,
-        nodes: detail.nodes,
-        droppedNodes: detail.droppedNodes,
-        archive: detail.archive,
-        // Slim heads serve no floors; the detail's pair lands whole here.
-        ...(detail.surfaceFloor !== undefined ? { surfaceFloor: detail.surfaceFloor } : {}),
-        ...(detail.archiveFloor !== undefined ? { archiveFloor: detail.archiveFloor } : {}),
-        ...(detail.fileOps !== undefined ? { fileOps: detail.fileOps } : {}),
-        ...(detail.fileOpsFloor !== undefined ? { fileOpsFloor: detail.fileOpsFloor } : {}),
-      }
-    const detailState: DetailState = detail !== null ? 'ready' : snap.failed ? 'failed' : 'loading'
-    return { data, detailState, retryDetail: store.retry }
+    // A head-with-detail can only exist through a live channel store — the
+    // fallback covers TS's narrowing loss, never a real state.
+    const retry = store !== null ? store.retry : noopRetry
+    // The inline generation passes through untouched — no store exists, the
+    // collections never ride the channel.
+    if (head !== null && !slim) return { data: head, detailState: 'legacy', retryDetail: noopRetry }
+    // The render head: the pushed value, or — while nothing has been pushed —
+    // the detail read's own slim head.
+    const base = head !== null ? head : detail !== null ? detail.head ?? null : null
+    if (base === null) {
+      // Nothing renderable: the cold read still pending, or settled without
+      // a usable value (transport failure, absence, a headless payload) —
+      // the retryable failure, never a spinner that never resolves.
+      const failed = store !== null && (snap.failed || detail !== null)
+      return { data: null, detailState: failed ? 'failed' : 'loading', retryDetail: retry }
+    }
+    if (detail === null) {
+      // The head's own counters render while the first read is in flight (or
+      // once it settled without data — the failure note rides beside).
+      return { data: base, detailState: snap.failed ? 'failed' : 'loading', retryDetail: retry }
+    }
+    const data: ContextTimeline = {
+      ...base,
+      requests: detail.requests,
+      events: detail.events,
+      nodes: detail.nodes,
+      droppedNodes: detail.droppedNodes,
+      archive: detail.archive,
+      // Slim heads serve no floors; the detail's pair lands whole here.
+      ...(detail.surfaceFloor !== undefined ? { surfaceFloor: detail.surfaceFloor } : {}),
+      ...(detail.archiveFloor !== undefined ? { archiveFloor: detail.archiveFloor } : {}),
+      ...(detail.fileOps !== undefined ? { fileOps: detail.fileOps } : {}),
+      ...(detail.fileOpsFloor !== undefined ? { fileOpsFloor: detail.fileOpsFloor } : {}),
+      ...(detail.spans !== undefined ? { spans: detail.spans } : {}),
+    }
+    return { data, detailState: 'ready', retryDetail: retry }
   }, [head, slim, store, snap])
 }

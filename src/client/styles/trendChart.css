@@ -2,6 +2,11 @@
 .lc-chartrow { display: flex; gap: 6px; align-items: stretch; }
 .lc-axis { position: relative; width: 40px; height: 150px; padding-top: 18px; box-sizing: border-box; color: var(--dsw-alias-label-secondary); font-size: 11px; }
 .lc-axis span { position: absolute; right: 0; line-height: 1; }
+/* The duration overlay's right-hand axis: same fixed marks as the left, anchored to the LEFT edge of its
+   column instead (labels stream rightward away from the plot), and kept narrow — duration labels
+   (fmtDuration: "850ms" / "3.2s" / "1m5s") stay short. */
+.lc-axis-r { width: 34px; flex: none; }
+.lc-axis-r span { left: 0; right: auto; }
 .lc-axis-top { top: 13px; }
 /* Quarter-mark labels (chart top 18 + ¼ / ¾ of the 112px bar area, minus half the 11px label box);
    tops are mirrored as Q3_TOP/Q1_TOP in trendChart.tsx for the delta mode's overlap check. */
@@ -21,7 +26,10 @@
    navigation (back at the left edge, forward at the right) — the same guard dsh's own horizontal scrollers
    carry (WebKit ignores it for history, so overscroll.ts cancels the wheel there too). */
 .lc-chart-scroll { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-gutter: stable; padding-bottom: var(--dsh-scrollbar-width, 8px); }
-.lc-chart { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 130px; padding-top: 18px; box-sizing: border-box; width: max-content; min-width: 100%; }
+/* Horizontal padding reserves the hover outline's ink (1px offset + 1px line) beyond the edge bars — the
+   scroller would otherwise clip the dashed frame's outer line at either scroll end. The turn strip mirrors
+   the same padding to keep its blocks aligned with the bar columns. */
+.lc-chart { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 130px; padding: 18px 2px 0; box-sizing: border-box; width: max-content; min-width: 100%; }
 .lc-grid { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--dsw-alias-border-l2); pointer-events: none; }
 .lc-grid-top { top: 18px; }
 /* Quarter-mark guides (chart top 18 + ¼ / ¾ of the 112px bar area); their axis labels sit 5px above each line. */
@@ -57,13 +65,17 @@
 .lc-bar-in-turn { background: color-mix(in srgb, var(--color-neutral-500) 14%, transparent); }
 .lc-bar-stack { display: flex; flex-direction: column-reverse; width: 100%; }
 .lc-bar-stack > div { width: 100%; }
+/* DNA mode's bar interior (trendChart.tsx DnaBar): ONE gradient div paints the whole per-item
+   fingerprint in read order — the px height rides the same total/maxTotal scale as the segmented
+   stack, so the total-mode axis stays honest. */
+.lc-bar-dna { width: 100%; border-radius: 2px; }
 /*
  Entrance rise: each bar's stack scaleY-opens from the baseline (total mode: the chart floor; delta arms:
  the zero line — the down-arm's origin is its top edge), staggered left to right with the cascade capped in
  the component so a long log still settles in about a second. The sweep rides the `animate-lc-bar-in`
  utility (theme token, `motion-reduce:animate-none` for the reduced-motion guard).
  */
-.lc-bar-stack, .lc-bar-up, .lc-bar-down { transform-origin: 50% 100%; }
+.lc-bar-stack, .lc-bar-up, .lc-bar-down, .lc-bar-dna { transform-origin: 50% 100%; }
 .lc-bar-down { transform-origin: 50% 0; }
 /* Rounded ends on each bar's outer corners only (the idiom radius, .lc-bar's 2px): the topmost segment
    carries the two top corners, the bottommost the two bottom, and an only segment all four — inner
@@ -84,10 +96,12 @@
  Category hover-link (overview/browser → trend card): the chart container carries the hovered
  category key (`data-catdim`), so CSS alone lights that key's segment in EVERY bar and recedes
  the rest — the memoized bars never re-render on a cross-card hover. Same idiom as the stacked
- bars' dim+brightness pairing. The re-light list below must track the Category vocabulary —
- a bucket missing here dims EVERY bar with nothing lit (the #66 skill regression).
+ bars' dim pairing. OPACITY ONLY: a `filter` on the lit segments forced per-segment layerization
+ on every toggle (the Layerize storm of issue #116). The re-light list below must track the
+ Category vocabulary — a bucket missing here dims EVERY bar with nothing lit (the #66 skill
+ regression).
  */
-.lc-cat-seg { transition: filter var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out), opacity var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
+.lc-cat-seg { transition: opacity var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
 .lc-chart[data-catdim] .lc-cat-seg { opacity: 0.35; }
 .lc-chart[data-catdim='system'] .lc-cat-seg[data-cat='system'],
 .lc-chart[data-catdim='tools'] .lc-cat-seg[data-cat='tools'],
@@ -95,15 +109,46 @@
 .lc-chart[data-catdim='inject'] .lc-cat-seg[data-cat='inject'],
 .lc-chart[data-catdim='skill'] .lc-cat-seg[data-cat='skill'],
 .lc-chart[data-catdim='assistant'] .lc-cat-seg[data-cat='assistant'],
-.lc-chart[data-catdim='tool'] .lc-cat-seg[data-cat='tool'] { opacity: 1; filter: brightness(1.18); }
-.lc-bar-marker { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--dsw-alias-state-warn-primary); }
+.lc-chart[data-catdim='tool'] .lc-cat-seg[data-cat='tool'] { opacity: 1; }
+/*
+ DNA mode's cross-bar lifetime highlight (trendChart.tsx DnaHighlights): a flex row mirroring the bar
+ grid — same 18px top band, 2px gap and 14px columns, so no per-bar x math — painting one translucent
+ brand slice over every bar that still holds the hovered item. Pointer-transparent; z-index 1 keeps it
+ above the bars but below the ✂ markers and step flags (z-index 2), which a crossing slice must not hide.
+*/
+.lc-dna-hl { position: absolute; top: 18px; right: 2px; bottom: 0; left: 2px; z-index: 1; display: flex; gap: 2px; align-items: stretch; pointer-events: none; }
+.lc-dna-cell { position: relative; width: 14px; flex: none; }
+.lc-dna-slice { position: absolute; left: 0; width: 100%; box-sizing: border-box; border: 1px solid var(--dsw-alias-brand-primary); border-radius: 1px; background: color-mix(in srgb, var(--dsw-alias-brand-primary) 26%, transparent); }
+/*
+ The duration overlay (trendChart.tsx durationCurve): one svg absolutely positioned over the bar area (the 18px
+ top band and 2px side padding mirrored from .lc-chart), sized in content px so it scrolls with the bars.
+ Pointer-transparent; z-index 1 with DOM order after .lc-dna-hl keeps the curve above the bars and the
+ highlight slices, below the ✂ markers and step flags (z-index 2). `overflow: visible` lets an adaptive-mode
+ spike off the visible window poke above the plot exactly like an off-window bar's stack does.
+*/
+.lc-duration { position: absolute; top: 18px; left: 2px; z-index: 1; overflow: visible; pointer-events: none; }
+.lc-duration polyline, .lc-duration circle { fill: none; stroke: var(--dsw-alias-brand-primary); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.lc-duration circle { fill: var(--dsw-alias-brand-primary); }
+.lc-chart-dim .lc-duration { opacity: 0.35; }
+.lc-bar-marker { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); z-index: 2; font-size: 11px; color: var(--dsw-alias-state-warn-primary); }
+/*
+ Step flags (step granularity only): every 5th bar plants a flag at its RIGHT edge — a 1px pole rising from
+ the baseline into the chart's 18px top padding band, the cumulative step number boxed at the pole's top,
+ extending LEFT (a left-streaming banner over its own bar; the opaque background covers the pole's upper
+ end, so the pair reads as one flag). Decorative and pointer-transparent, and outside the animated stacks
+ so the entrance rise leaves it standing. The banner never contributes to scrollable overflow: rightward it
+ ends AT the pole, and the first flag lands 4 columns in (pole at 81px), wider than any label's reach
+ leftward. Renders BEFORE the ✂ marker so the event glyph paints on top on a same-bar collision.
+ */
+.lc-step-flag { position: absolute; right: -1px; top: -17px; bottom: 0; z-index: 2; width: 1px; background: color-mix(in srgb, var(--color-neutral-500) 45%, transparent); pointer-events: none; }
+.lc-step-flag-label { position: absolute; top: 0; right: 0; box-sizing: border-box; padding: 1px 3px; border: 1px solid color-mix(in srgb, var(--color-neutral-500) 45%, transparent); border-radius: 3px; background: var(--dsw-alias-bg-layer-1); font-size: 9px; line-height: 1; font-weight: 600; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
 /*
  Turn strip: NEUTRAL zebra fills (inline, see TURN_FILLS) — never the category palette, or the strip reads as a detached bottom segment of the bars.
  */
 /* Same sizing as .lc-chart: as an in-flow child of the scroller the strip would otherwise cap at the
    viewport width (clientWidth) and overflow:hidden would clip every block past the first screen — the
    strip must span the full scrollable column grid instead. */
-.lc-turns { display: flex; gap: 2px; overflow: hidden; margin-top: 4px; width: max-content; min-width: 100%; }
+.lc-turns { display: flex; gap: 2px; overflow: hidden; margin-top: 4px; padding: 0 2px; box-sizing: border-box; width: max-content; min-width: 100%; }
 .lc-turn { flex: none; box-sizing: border-box; text-align: center; font-size: 10px; line-height: 14px; font-weight: 600; color: var(--dsw-alias-label-secondary); border-radius: 3px; height: 14px; white-space: nowrap; cursor: pointer; transition: filter var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out), opacity var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
 .lc-turn-on { filter: brightness(1.35); color: var(--dsw-alias-label-primary); }
 /* Labels render at natural width, centered over their block — a 2-digit "12" over a 14px turn bar overflows the

@@ -21,7 +21,7 @@
 import type { PartsPart } from './categories'
 import type { ContextTimeline, SessionCostUsage } from '../shared/types'
 import { mergeCostUsage } from './cost'
-import { headlineOf, type Headline } from './headline'
+import { headlineOf, occupancyPercent, type Headline } from './headline'
 import { asRecord, contextBreakdownOf, contextPressureOf, numOf, timelineOf, tokenUsageOf } from './services'
 
 /**
@@ -191,7 +191,7 @@ export function agentStatsOf(values: Record<string, unknown> | undefined): Agent
       head = {
         tokens,
         window,
-        pct: window !== undefined ? Math.min(100, Math.round(tokens / window * 100)) : null,
+        pct: window !== undefined ? occupancyPercent(tokens, window) : null,
         parts: [],
       }
     }
@@ -342,6 +342,8 @@ export interface SubagentCostFold {
   usage: SessionCostUsage | null
   /** Descendants with no timeline row and no landed head — the slim-head fetch targets. */
   cold: string[]
+  /** Descendant sessions discovered in the list snapshot (blank placeholders are not agents). */
+  count: number
 }
 
 /**
@@ -351,7 +353,8 @@ export interface SubagentCostFold {
  * standing in for rows that carry no timeline value. Blank placeholder rows
  * are not agents (the family forest's rule); a lineage cycle cannot loop the
  * walk (seen-set). The current session itself is never counted — the caller
- * already holds its own usage.
+ * already holds its own usage. `count` is the discovered descendant tally
+ * (cold ones included — a subagent is one whether or not its usage priced).
  */
 export function subagentCostFoldOf(
   snapshot: unknown,
@@ -359,7 +362,7 @@ export function subagentCostFoldOf(
   landed?: ReadonlyMap<string, ContextTimeline>,
 ): SubagentCostFold {
   const byId = asRecord(asRecord(snapshot)?.byId)
-  if (byId === null || currentId === undefined || currentId === '') return { usage: null, cold: [] }
+  if (byId === null || currentId === undefined || currentId === '') return { usage: null, cold: [], count: 0 }
   const childrenOf = new Map<string, string[]>()
   for (const key of Object.keys(byId)) {
     const row = agentRowOf(byId[key])
@@ -392,7 +395,7 @@ export function subagentCostFoldOf(
       queue.push(kid)
     }
   }
-  return { usage: parts.length > 0 ? mergeCostUsage(...parts) : null, cold }
+  return { usage: parts.length > 0 ? mergeCostUsage(...parts) : null, cold, count: seen.size - 1 }
 }
 
 export interface AgentPoint {

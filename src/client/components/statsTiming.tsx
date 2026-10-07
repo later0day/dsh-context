@@ -15,15 +15,19 @@
  * read as "no time, many calls". The donut and the rows sit side by side so
  * the head row stays half-height. Parallel tool calls each count, so the tools
  * figure can overlap — the ring clamps it into the post-model window while the
- * row numbers stay true.
+ * row numbers stay true. Below them the session-time strip packs every
+ * completed step's slices gapless in occurrence order (the DNA idiom applied
+ * to time consumed — each band's width is its share of the cumulative active
+ * time, idle time takes no track), joining the same hover link by KIND.
  */
 
 import { useState, type ReactElement } from 'react'
-import type { TimingTotals } from '../../shared/types'
+import type { TimingSpan, TimingTotals } from '../../shared/types'
 import type { ViewKit } from '../viewkit'
 
 import { makeSliceList } from './sliceList'
 import type { SliceRow } from './sliceList'
+import { makeTimingStrip, TIMING_COLOR } from './timingStrip'
 import type { DonutProps, DonutSegment } from './donut'
 
 /** One ring/legend entry before the shares are computed. */
@@ -37,14 +41,8 @@ interface Slice {
   times?: string
 }
 
-const COLOR = {
-  ttft: 'var(--color-blue-500)',
-  reasoning: 'var(--color-violet-500)',
-  text: 'var(--color-pink-500)',
-  toolarg: 'var(--color-amber-500)',
-  tools: 'var(--color-teal-500)',
-  other: 'var(--color-slate-400)',
-} as const
+/** The card's slice palette (timingStrip.tsx owns it — the strip paints the same kinds). */
+const COLOR = TIMING_COLOR
 
 /**
  * The decode-throughput figure, formatted exactly as the harness's own
@@ -57,18 +55,25 @@ function formatTokensPerSecond(tps: number): string {
 
 export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => ReactElement): (props: {
   timing: TimingTotals | null
+  /**
+   * The timing strip's painted spans (the detail channel's per-step time
+   * slices). Absent on the overview's cross-session aggregate card and on
+   * rows folded before the collection existed — the card then shows no strip.
+   */
+  spans?: TimingSpan[]
 }) => ReactElement {
   const { t, fmt, fmtDuration, fmtShare } = kit
   const SliceList = makeSliceList(kit)
-  return function StatsTiming(props: { timing: TimingTotals | null }): ReactElement {
+  const TimingStrip = makeTimingStrip(kit)
+  return function StatsTiming(props: { timing: TimingTotals | null; spans?: TimingSpan[] }): ReactElement {
     // The legend row ↔ donut segment hover link (shared key, set from either side).
     const [hoverKey, setHoverKey] = useState<string | null>(null)
     const timing = props.timing
     const wall = timing !== null && Number.isFinite(timing.wallMs) && timing.wallMs > 0 ? timing.wallMs : 0
-    // The throughput chip: the host paired provider output tokens with decode
-    // windows exactly as the harness session-stats fold does, so the two
-    // figures can never disagree. An unreadable or absent pairing (an older
-    // cached row) renders no chip.
+    // The throughput figure: the host paired provider output tokens with
+    // decode windows exactly as the harness session-stats fold does, so the
+    // two figures can never disagree. An unreadable or absent pairing (an
+    // older cached row) renders no figure.
     const tps = timing !== null
       && typeof timing.speedMs === 'number' && Number.isFinite(timing.speedMs) && timing.speedMs > 0
       && typeof timing.speedTokens === 'number' && Number.isFinite(timing.speedTokens) && timing.speedTokens >= 0
@@ -145,7 +150,10 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
         key: slice.key, color: slice.color, value: share(modelRings[index]),
       }))
       const toolSlice: Slice = {
-        key: 'tools', color: COLOR.tools, label: t('timing.tools'), ms: timing.toolsMs,
+        key: 'tools',
+        color: COLOR.tools,
+        label: t('timing.tools'),
+        ms: timing.toolsMs,
         times: t('timing.toolTimes', { n: fmt(timing.toolCalls) }),
       }
       const otherSlice: Slice = { key: 'other', color: COLOR.other, label: t('timing.other'), ms: other }
@@ -155,7 +163,10 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
         { key: 'other', color: COLOR.other, value: share(other) },
       ]
       const toRow = (slice: Slice): SliceRow => ({
-        key: slice.key, color: slice.color, label: slice.label, dim: slice.ms === 0,
+        key: slice.key,
+        color: slice.color,
+        label: slice.label,
+        dim: slice.ms === 0,
         pct: fmtShare(slice.ms, wall),
         count: countOf(slice.ms, slice.times),
       })
@@ -176,27 +187,35 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
         <div className="lc-card-title">
           <span className="lc-card-title-text">{t('timing.title')}</span>
           {tps !== null && (
-            <span className="lc-timing-tps" title={t('timing.tpsTip')}>{t('timing.tps', { tps })}</span>
+            <span className="lc-card-rate" title={t('timing.tpsTip')}>{t('timing.tps', { tps })}</span>
           )}
         </div>
         {rows.length === 0
           ? <div className="lc-empty">{t('timing.empty')}</div>
           : (
-            <div
-              className="lc-donut-row flex items-center justify-start gap-3 min-w-0 @max-[320px]/lc-card:gap-2 @max-[240px]/lc-card:flex-wrap"
-            >
-              {/* donut + legend row: the gap folds at a 320px card, below 240px the row wraps
-                  and the ring centers over the full-width legend (keyed to the lc-card container). */}
-              <Donut
-                segments={segments}
-                size={96}
-                centerTop={wall > 0 ? fmtDuration(wall) : '—'}
-                centerSub={t('timing.total')}
-                hoverKey={hoverKey}
-                onHoverKey={setHoverKey}
-              />
-              <SliceList rows={rows} hoverKey={hoverKey} onHoverKey={setHoverKey} />
-            </div>
+            <>
+              <div
+                className="lc-donut-row flex items-center justify-start gap-3 min-w-0 @max-[320px]/lc-card:gap-2 @max-[240px]/lc-card:flex-wrap"
+              >
+                {/* donut + legend row: the gap folds at a 320px card, below 240px the row wraps
+                    and the ring centers over the full-width legend (keyed to the lc-card container). */}
+                <Donut
+                  segments={segments}
+                  size={96}
+                  centerTop={wall > 0 ? fmtDuration(wall) : '—'}
+                  centerSub={t('timing.total')}
+                  hoverKey={hoverKey}
+                  onHoverKey={setHoverKey}
+                />
+                <SliceList rows={rows} hoverKey={hoverKey} onHoverKey={setHoverKey} />
+              </div>
+              {/* The session-time strip joins the hover link: a span hover lights
+                  every span of its KIND plus the donut arc and the legend row,
+                  and a legend/donut hover lights the strip's matching spans. */}
+              {props.spans !== undefined && props.spans.length > 0
+                ? <TimingStrip spans={props.spans} hoverKey={hoverKey} onHoverKey={setHoverKey} />
+                : null}
+            </>
           )}
       </div>
     )

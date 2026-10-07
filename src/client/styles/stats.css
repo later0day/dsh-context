@@ -5,9 +5,11 @@
  * — section heading, donut, slice list, plugin-info rows.
  */
 .lc-stat { background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; padding: 6px 6px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-/* The 5-cell stats grid shares a half-width head-row card with a sibling, so its cells are moderate: tighter padding plus a corner-pinned '?' (out of the label's line) keep the longest labels on one line. */
-.lc-stats .lc-stat { padding: 6px 3px; }
-.lc-stats .lc-stat-q { position: absolute; top: 3px; right: 4px; margin: 0; }
+/* The clickable cost cell: the same framed cell as an anchor opening the
+   models.dev listing in a new tab — reset the link chrome so it reads as the
+   card it visually is, with the pointer as the only affordance. */
+a.lc-stat { color: inherit; text-decoration: none; cursor: pointer; }
+a.lc-stat:hover { border-color: var(--dsw-alias-label-secondary); }
 .lc-stat-label { color: var(--dsw-alias-label-secondary); font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lc-stat-value { color: var(--dsw-alias-label-primary); font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
 .lc-stat-sub { color: var(--dsw-alias-label-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -19,15 +21,25 @@
 .lc-stat-tip { top: calc(100% + 6px); left: 0; max-width: 280px; line-height: 1.5; font-weight: 400; }
 .lc-stat-tip-prices { display: block; margin-top: 5px; border-top: 1px dashed var(--dsw-alias-border-l1); padding-top: 5px; }
 .lc-stat-tip-head { display: block; font-weight: 600; }
-/* The timing card's throughput chip (statsTiming.tsx): a quiet figure pinned
-   to the title row's right end — the same harness session-stats pairing, so
-   the two figures never disagree. `margin-left: auto` parks it at the row's
-   end; the title row's own wrap carries it below the title under pressure. */
-.lc-timing-tps { flex: none; margin-left: auto; padding: 1px 8px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l2); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; cursor: default; }
+/* The donut cards' right-corner rate figure (statsTiming.tsx's decode TPS,
+   statsTokens.tsx's session cache hit): plain text pinned to the title row's
+   right end, regular weight against the 600 title — no pill chrome; the
+   native `title` tooltip explains it on hover. `margin-left: auto` parks it
+   at the row's end; the title row's own wrap carries it below the title
+   under pressure. */
+.lc-card-rate { flex: none; margin-left: auto; font-weight: 400; font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; cursor: default; }
 .lc-stat-tip-row { display: block; margin-top: 2px; }
-.lc-stat-tip-model { color: var(--dsw-alias-label-primary); }
+/* One billed model's block: the four bucket rates as label/price rows, the
+   listing line beneath naming the registry face the rates resolved from. */
+.lc-stat-tip-band { display: flex; justify-content: space-between; gap: 2rem; }
+.lc-stat-tip-band i { font-style: normal; }
+.lc-stat-tip-by { display: block; margin-top: 3px; color: var(--dsw-alias-label-secondary); }
 .lc-card-sub { font-weight: 400; color: var(--dsw-alias-label-secondary); font-size: 12px; margin-left: auto; }
-.lc-overview-num { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; }
+/* The occupancy reading row: the one-decimal percent (currentComposition.tsx)
+   is wider than the integer it replaced, so the row wraps — the percent block
+   drops to its own right-aligned line below the width floor instead of
+   spilling past the card edge. */
+.lc-overview-num { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .lc-overview-num > b { font-size: 20px; }
 .lc-overview-num span { color: var(--dsw-alias-label-secondary); }
 .lc-overview-pct { margin-left: auto; font-size: 11px; }
@@ -64,14 +76,17 @@
  closing a fixed right column, and the secondary line drops the absolute
  quantity (plus a qualifier like the call count) under the name in muted
  small print. The name takes the whole primary line and only ellipsizes as
- a last resort; a zero-figure row dims — the ring already carries the share.
- The rows flow into as many ≥160px columns as the card offers (the
- composition legend's own auto-fill idiom): one in a narrow pane, two on a
- classic 1280px viewport where the row halves are ~456px, more on ultrawide
- — so the classic size reads in the same paired order as the composition
- card below.
+ a last resort (the full text stays on the row's `title`); a zero-figure row
+ dims — the ring already carries the share.
+ The rows flow into as many ≥150px columns as the card offers (the
+ composition legend's own auto-fill idiom, floored at the container itself
+ so a narrower legend never clips its share column): one in a narrow pane,
+ two once the legend reaches 308px (the Insights page's ~440px stats cards
+ ride this), more on ultrawide or the page's folded single-column row — so
+ the classic size reads in the same paired order as the composition card
+ below.
  */
-.lc-sl { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 4px 20px; min-width: 0; overflow: hidden; }
+.lc-sl { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 4px 8px; min-width: 0; overflow: hidden; }
 /* The pill tint spreads 6px past the text column (negative margins) so the
    hovered row reads as one lit surface without shifting the columns. */
 .lc-sl-row { display: flex; flex-direction: column; gap: 1px; font-size: 12px; min-width: 0; border-radius: 6px; padding: 1px 6px; margin: 0 -6px; transition: background-color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
@@ -80,7 +95,7 @@
 .lc-sl-main { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .lc-sl-dot { flex: none; width: 8px; height: 8px; border-radius: 2px; }
 .lc-sl-label { flex: 1 1 auto; min-width: 0; line-height: 1.25; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lc-sl-pct { flex: none; min-width: 34px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lc-sl-pct { flex: none; min-width: 30px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
 .lc-sl-sub { margin-left: 14px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.3; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lc-pi-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
 /* The settings-entry row is a button wearing the link-row chrome — reset the button chrome the shared row style doesn't cover. */
@@ -96,6 +111,101 @@
  an ellipsis; without it a narrow card pushes the value over the label.
  */
 .lc-pi-value { min-width: 0; color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
-/* The stats grid's cell count is intrinsic (`repeat(auto-fit, minmax(108px,1fr))` on the element, see
-   statsContext.tsx); the donut row's 320px gap fold and 240px stack still ride
-   `@max-[…]/lc-card` utilities — statsTokens.tsx / statsTiming.tsx / sliceList.tsx / donut.tsx. */
+/*
+ ---- Context stats flow (statsContext.tsx): the session as a flow diagram.
+ The two source nodes (left) feed the session node, which drains into the two
+ effect nodes (right); measured bezier ribbons connect them — the component
+ measures the node boxes and flips the geometry at the same width the
+ container query below folds the three zones into a top→bottom stack. ----
+ */
+.lc-flow { position: relative; display: flex; align-items: stretch; }
+.lc-flow-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+/* Two layers per link: a wide, near-transparent ribbon carries the Sankey
+   mass, and a dashed hairline of the same hue travels along it — the agent
+   network's flow pulse (`animate-lc-agent-flow`; the element sets
+   `motion-reduce:animate-none`) — so the direction of travel reads without
+   arrowheads. The link color rides the `stroke` attribute per element. */
+.lc-flow-ribbon { fill: none; stroke-width: 14px; stroke-opacity: 0.13; stroke-linecap: round; }
+.lc-flow-dash { fill: none; stroke-width: 1.5px; stroke-opacity: 0.55; stroke-linecap: round; stroke-dasharray: 2 7; }
+/* The three zones sit above the connector overlay; the mid zone's side
+   margins are the horizontal gutters the ribbons travel through. */
+.lc-flow-col { position: relative; z-index: 1; display: flex; flex-direction: column; justify-content: center; gap: 8px; flex: 1 1 0; min-width: 0; }
+.lc-flow-mid { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; margin: 0 30px; }
+.lc-flow-node { background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; padding: 6px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* A corner card's header: the title left, the bold total right (tabular so a
+   ticking count never jiggles the row). */
+.lc-flow-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+/* The clickable cost header: the same row as an anchor opening the models.dev
+   listing in a new tab — reset the link chrome so it reads as the text it
+   visually is; the label's brighten is the only affordance. */
+a.lc-flow-head { color: inherit; text-decoration: none; cursor: pointer; }
+a.lc-flow-head:hover .lc-flow-label { color: var(--dsw-alias-label-primary); }
+.lc-flow-label { color: var(--dsw-alias-label-secondary); font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-flow-total { margin-left: auto; flex: none; color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* The pills: a wrapping breadcrumb of rounded chips under the header, each a
+   muted label with a bold tally. A zero pill dims (the card's total already
+   reads); a tinted pill (the events card's kind colors) keeps its tally on
+   the tint's own hue. */
+.lc-flow-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.lc-flow-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lc-flow-pill-label { min-width: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.lc-flow-pill b { font-weight: 700; color: var(--dsw-alias-label-primary); }
+.lc-flow-pill-tint b { color: inherit; }
+.lc-flow-pill-dim { opacity: 0.45; }
+/* The Agent Team ledger's rows: the agent scope's name left, its
+   tokens/cost pair pinned right — one row per scope under the family header. */
+.lc-flow-rows { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
+.lc-flow-row { display: flex; align-items: baseline; gap: 6px; font-size: 11px; color: var(--dsw-alias-label-secondary); min-width: 0; }
+.lc-flow-row-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-flow-pair { margin-left: auto; flex: none; display: inline-flex; align-items: baseline; gap: 5px; font-variant-numeric: tabular-nums; }
+.lc-flow-pair b { font-weight: 700; color: var(--dsw-alias-label-primary); }
+.lc-flow-pair i { font-style: normal; opacity: 0.55; }
+/* The session node: the diagram's pivot — raised surface, brand-tinted edge
+   and halo, the two shape figures centered under the label. */
+.lc-flow-self { background: var(--dsw-alias-bg-layer-1); border-color: color-mix(in srgb, var(--dsw-alias-brand-primary) 40%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 8%, transparent); padding: 8px 14px; align-items: center; gap: 4px; }
+.lc-flow-self-stats { display: flex; gap: 18px; }
+.lc-flow-kv { display: flex; flex-direction: column; align-items: center; }
+.lc-flow-kv b { font-size: 17px; font-weight: 700; line-height: 1.2; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+.lc-flow-kv i { font-style: normal; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+/* Right-column tips open leftward so the wide bubble never spills past the card edge. */
+.lc-flow .lc-flow-col-r .lc-stat-tip { left: auto; right: 0; }
+/* The narrow fold — paired with the component's FLOW_FOLD_PX (the container's
+   content box is exactly the flow root's width): the zones stack sources →
+   session → effects and the ribbons run top to bottom; the side nodes pair up
+   on one row and the session node centers between the two ribbon gutters. */
+@container lc-card (max-width: 559px) {
+  .lc-flow { flex-direction: column; }
+  .lc-flow-col { flex-direction: row; align-items: stretch; }
+  .lc-flow-col > .lc-flow-node { flex: 1 1 0; }
+  .lc-flow-mid { margin: 26px 0; }
+}
+/*
+ The donut row's 320px gap fold and 240px stack still ride `@max-[…]/lc-card`
+ utilities — statsTokens.tsx / statsTiming.tsx / sliceList.tsx / donut.tsx.
+ */
+/*
+ ---- Timing card's session-time strip (timingStrip.tsx): the fold's painted
+ spans packed gapless in occurrence order — each band's width is its share of
+ the cumulative active time, idle time takes no track. The bands sit
+ absolutely positioned at their cumulative percent offsets; the neutral track
+ only reads through sub-pixel rounding seams and during the grow-in. Hover
+ chrome mirrors the stacked bar: staggered grow-in, dim rest.
+ */
+.lc-tstrip { margin-top: 10px; }
+.lc-tstrip-wrap { position: relative; }
+.lc-tstrip-bar { position: relative; width: 100%; height: 12px; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--color-neutral-500) 18%, transparent); }
+.lc-tstrip-seg { position: absolute; top: 0; height: 100%; transform-origin: 0 50%; transition: opacity var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out), filter var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
+.lc-tstrip-seg-on { filter: brightness(1.18); }
+.lc-tstrip-dim .lc-tstrip-seg { opacity: 0.35; }
+.lc-tstrip-dim .lc-tstrip-seg-on { opacity: 1; }
+/*
+ The axis: tick labels centered under hairline marks at the fixed quartiles,
+ the ends pinned outward — 0 hugs the left edge, the final active time the
+ right — so width pressure squeezes the interior labels, never the endpoints. */
+.lc-tstrip-axis { position: relative; height: 13px; margin-top: 5px; font-size: 10px; line-height: 13px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.lc-tstrip-tick { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.lc-tstrip-tick::before { content: ''; position: absolute; left: 50%; top: -4px; width: 1px; height: 3px; background: var(--dsw-alias-border-l1); }
+.lc-tstrip-tick-first { transform: none; }
+.lc-tstrip-tick-first::before { left: 0; }
+.lc-tstrip-tick-last { transform: translateX(-100%); }
+.lc-tstrip-tick-last::before { left: auto; right: 0; }

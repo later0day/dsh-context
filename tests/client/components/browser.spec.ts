@@ -79,6 +79,13 @@ async function pickStep(m: Mounted, value: string): Promise<void> {
   })
 }
 
+/** Click the delta-baseline toggle button ('prev step'/'prev turn') in the card title. */
+async function clickDeltaBase(m: Mounted, label: 'prev step' | 'prev turn'): Promise<void> {
+  const btn = queryAll(m.container, '.lc-card-title .lc-gran-btn').find(b => text(b) === label)
+  assert.ok(btn !== undefined, `toggle button ${label} exists`)
+  await click(btn)
+}
+
 function props(over: Partial<ContextBrowserProps>): ContextBrowserProps {
   return { data: tl({}), headers: null, ...over }
 }
@@ -96,6 +103,19 @@ function withEpochContent(
 }
 
 describe('ContextBrowser live surface', () => {
+  test('the settings card default wins as the baseline toggle mount state', async () => {
+    const prefs = createContextSettings()
+    prefs.set('defaultDeltaBase', 'turn')
+    const PrefBrowser = makeContextBrowser(kit, makeStackedBar(kit), prefs)
+    const m = await mount(h(PrefBrowser, props({ data: tl({}) })))
+    const baseBtns = queryAll(m.container, '.lc-card-title .lc-gran-btn')
+    const turnBtn = baseBtns.find(b => text(b) === 'prev turn')
+    assert.ok(turnBtn !== undefined && turnBtn.className.includes('lc-gran-on'), 'the persisted baseline is active at mount')
+    const stepBtn = baseBtns.find(b => text(b) === 'prev step')
+    assert.ok(stepBtn !== undefined && !stepBtn.className.includes('lc-gran-on'))
+    await m.unmount()
+  })
+
   test('title, picker, live meta, category rows; empty categories stay shut', async () => {
     const data = tl({
       current: { system: 100, tools: 200, user: 50, inject: 0, skill: 0, assistant: 0, tool: 0, total: 350 },
@@ -108,17 +128,28 @@ describe('ContextBrowser live surface', () => {
     })
     const m = await mount(h(Browser, props({ data })))
     assert.ok(text(query(m.container, '.lc-card-title-text')).includes('Context Browser'))
-    assert.ok(text(query(m.container, '.lc-br-hint')).includes('vs previous turn'))
+    const baseBtns = queryAll(m.container, '.lc-card-title .lc-gran-btn')
+    const stepBtn = baseBtns.find(b => text(b) === 'prev step')
+    assert.ok(stepBtn !== undefined && stepBtn.className.includes('lc-gran-on'), 'step baseline is the default')
+    assert.ok(baseBtns.some(b => text(b) === 'prev turn' && !b.className.includes('lc-gran-on')))
     const sel = query<HTMLSelectElement>(m.container, 'select.lc-br-pick')
     assert.equal(sel.value, 'live')
     const options = queryAll(sel, 'option').map(o => text(o))
     assert.equal(options.length, 4, 'live + one option per request')
     assert.equal(options[0], 'Live (Next Request)')
+    assert.equal(options[3], 'Turn 1 · Step 0 of 2', 'options carry the step label without a time suffix')
     assert.ok(options.some(o => o.includes('Turn 0 · Step 0')), 'requests without turn/step degrade to zeroes')
     const meta = text(query(m.container, '.lc-br-meta'))
     assert.ok(meta.includes('Live · Next Request'))
     assert.ok(meta.includes('Estimated ≈ 350'))
     assert.ok(meta.includes('Actual 800'), 'live pairs the estimate with the freshest actual')
+    // Live in 'prev turn' mode: the freshest request is turn-less (degrades to turn 0), so no previous
+    // turn exists — the zero baseline shows the whole live makeup as change.
+    await clickDeltaBase(m, 'prev turn')
+    const liveUserCat = queryAll(m.container, '.lc-br-cat')[ROW.user]
+    assert.equal(text(query(liveUserCat, '.lc-br-delta')), '+1')
+    assert.equal(text(query(liveUserCat, '.lc-br-tdelta')), '+50')
+    await clickDeltaBase(m, 'prev step')
     assert.equal(queryAll(m.container, '.lc-br-cat-row').length, 7)
     assert.ok(text(catRow(m, 'user')).includes('1 Items'))
     assert.ok(queryAll(m.container, '.lc-br-cat')[ROW.inject].className.includes('lc-br-cat-empty'), 'empty category is marked')
@@ -127,7 +158,11 @@ describe('ContextBrowser live surface', () => {
     const meta2 = text(query(m.container, '.lc-br-meta'))
     assert.ok(meta2.includes('Turn 0 · Step 0'))
     assert.ok(!meta2.includes('Actual'), 'this freshest request reported no usage')
-    assert.equal(queryAll(m.container, '.lc-br-delta').length, 0, 'no previous turn to compare against')
+    assert.equal(queryAll(m.container, '.lc-br-delta').length, 0, 'the seq-7 view and its seq-20 baseline hold the same single node')
+    // Turn mode on a turn-less record: 'turn − 1' degrades to −1, no baseline turn exists —
+    // the zero baseline shows the step's single node as pure change.
+    await clickDeltaBase(m, 'prev turn')
+    assert.equal(text(query(m.container, '.lc-br-delta')), '+1')
     await pickStep(m, 'live')
     await click(catRow(m, 'inject'))
     assert.equal(queryAll(m.container, '.lc-br-body').length, 0)
@@ -138,6 +173,10 @@ describe('ContextBrowser live surface', () => {
   test('zero-total surface renders no percentages; no requests means no delta pills', async () => {
     const m = await mount(h(Browser, props({ data: tl({}) })))
     assert.ok(queryAll(m.container, '.lc-br-pct').every(el => text(el) === ''))
+    assert.equal(queryAll(m.container, '.lc-br-delta').length, 0)
+    assert.equal(queryAll(m.container, '.lc-br-tdelta').length, 0)
+    // 'prev turn' on a request-less live surface: no baseline exists at all, still no pills.
+    await clickDeltaBase(m, 'prev turn')
     assert.equal(queryAll(m.container, '.lc-br-delta').length, 0)
     assert.equal(queryAll(m.container, '.lc-br-tdelta').length, 0)
     const meta = text(query(m.container, '.lc-br-meta'))
@@ -196,7 +235,7 @@ describe('ContextBrowser live surface', () => {
     await m.unmount()
   })
 
-  test('delta pills read against the previous turn’s last step; live reads the last request', async () => {
+  test('delta pills follow the picked baseline; a predecessor-less step diffs against zero', async () => {
     const data = tl({
       current: { system: 1, tools: 2, user: 99, inject: 0, skill: 0, assistant: 0, tool: 0, total: 102 },
       requests: [
@@ -206,25 +245,46 @@ describe('ContextBrowser live surface', () => {
         req({ seq: 4, turn: 2, step: 1, system: 1, tools: 2, user: 40, total: 43 }),
         req({ seq: 5, turn: 3, step: 0, system: 1, tools: 2, user: 50, total: 53 }),
       ],
-      nodes: [1, 2, 3, 4, 5].map(seq => node({ seq, tokens: seq })),
+      nodes: [0, 1, 2, 3, 4, 5].map(seq => node({ seq, tokens: seq })),
     })
     const m = await mount(h(Browser, props({ data })))
+    const userRow = (): HTMLElement => queryAll(m.container, '.lc-br-cat')[ROW.user]
+    // Default 'prev step': step 4 reads against step 3, its immediate predecessor.
     await pickStep(m, '4')
-    const countPills = queryAll(m.container, '.lc-br-delta')
+    const countPills = queryAll(userRow(), '.lc-br-delta')
     assert.equal(countPills.length, 1, 'only the user count changed')
-    assert.equal(text(countPills[0]), '+2')
+    assert.equal(text(countPills[0]), '+1')
     assert.ok(countPills[0].className.includes('lc-br-delta-up'))
-    const tokenPills = queryAll(m.container, '.lc-br-tdelta')
+    const tokenPills = queryAll(userRow(), '.lc-br-tdelta')
     assert.equal(tokenPills.length, 1)
-    assert.equal(text(tokenPills[0]), '+20')
-    // First turn: no previous-turn baseline → no pills at all.
+    assert.equal(text(tokenPills[0]), '+10')
+    // The log's first step has no predecessor: the zero baseline shows the full makeup as change,
+    // EVERY category included (system +1, tools +2, user +10).
     await pickStep(m, '1')
-    assert.equal(queryAll(m.container, '.lc-br-delta').length, 0)
-    assert.equal(queryAll(m.container, '.lc-br-tdelta').length, 0)
-    // Live: baseline is the most recent request.
+    assert.equal(queryAll(m.container, '.lc-br-tdelta').length, 3)
+    assert.equal(text(query(userRow(), '.lc-br-delta')), '+1')
+    assert.equal(text(query(userRow(), '.lc-br-tdelta')), '+10')
+    // 'prev turn': step 4 reads against turn 1's last step (seq 2).
+    await pickStep(m, '4')
+    await clickDeltaBase(m, 'prev turn')
+    assert.equal(text(query(userRow(), '.lc-br-delta')), '+2')
+    assert.equal(text(query(userRow(), '.lc-br-tdelta')), '+20')
+    // A first-turn step in 'prev turn' mode has no baseline either: zero again.
+    await pickStep(m, '1')
+    assert.equal(queryAll(m.container, '.lc-br-tdelta').length, 3)
+    assert.equal(text(query(userRow(), '.lc-br-delta')), '+1')
+    assert.equal(text(query(userRow(), '.lc-br-tdelta')), '+10')
+    // Live: 'prev step' reads the last request; 'prev turn' reads the previous turn's last step (seq 4).
     await pickStep(m, 'live')
-    assert.equal(text(query(m.container, '.lc-br-delta')), '+1')
-    assert.equal(text(query(m.container, '.lc-br-tdelta')), '+49')
+    await clickDeltaBase(m, 'prev step')
+    assert.equal(text(query(userRow(), '.lc-br-delta')), '+1')
+    assert.equal(text(query(userRow(), '.lc-br-tdelta')), '+49')
+    await clickDeltaBase(m, 'prev turn')
+    assert.equal(text(query(userRow(), '.lc-br-delta')), '+2')
+    assert.equal(text(query(userRow(), '.lc-br-tdelta')), '+59')
+    await clickDeltaBase(m, 'prev step')
+    assert.equal(text(query(userRow(), '.lc-br-delta')), '+1')
+    assert.equal(text(query(userRow(), '.lc-br-tdelta')), '+49')
     await m.unmount()
   })
 
@@ -1069,6 +1129,7 @@ describe('ContextBrowser message categories', () => {
       { kind: 'image', attachment: { attachmentId: 'b2', name: 'pic.png', bytes: 4096, width: 640, height: 480 } },
       { type: 'mystery', foo: 1 },
       { type: 'text', text: 42 },
+      { kind: 'reasoning', text: 42 },
       'plain string block',
       { foo: 'bar' },
     ] },
@@ -1211,11 +1272,119 @@ describe('ContextBrowser message categories', () => {
     await typeToolSearch(m, '')
     assert.equal(elemRows(m).length, 8)
 
-    // The call-breadcrumb tag matches too (an assistant row's 'bash › write').
+    // The call-breadcrumb tag matches too — both the fold's stamp ('bash › write')
+    // and the join-recovered breadcrumb on a mixed text+calls reply.
     await click(catRow(m, 'assistant'))
     assert.equal(query<HTMLInputElement>(m.container, '.lc-br-tool-search').value, '', 'another category opens unfiltered')
     await typeToolSearch(m, 'bash')
+    assert.deepEqual(previews(), ['full cascade', 'done all'])
+    await m.unmount()
+  })
+
+  test('assistant kind chips: per-kind counts, click filters, re-click clears, switch resets', async () => {
+    const m = await mountBrowser()
+    await click(catRow(m, 'assistant'))
+    const toolctl = query(m.container, '.lc-br-toolctl')
+    assert.equal(queryAll(m.container, '.lc-br-toolctl .lc-gran').length, 1, 'only the assistant toolbar carries the kind group')
+    assert.equal(query(toolctl, '.lc-gran').getAttribute('title'), kit.t('browser.kindTip'))
+    assert.equal(query<HTMLInputElement>(toolctl, '.lc-br-tool-search').placeholder, 'Filter by reply, calls, or thinking…')
+    const chips = () => queryAll<HTMLButtonElement>(m.container, '.lc-br-toolctl .lc-gran-btn')
+    // Counts over ALL of the shown step's rows: thinking rides the join's
+    // reasoning block (seq 68), tools the joined calls (62/63/64/68) plus the
+    // unjoined node's `calls` stamp (61), answers the joined text blocks plus
+    // the nodes' own text (61/66/67/68).
+    assert.deepEqual(chips().map(c => text(c)), ['Thinking1', 'Tools5', 'Answer4'])
+    const previews = () => elemRows(m).map(r => text(query(r, '.lc-br-preview')))
+    assert.equal(elemRows(m).length, 8)
+
+    // Tools: the joined tool-call blocks plus the unjoined `calls` stamp.
+    await click(chips()[1])
+    assert.ok(chips()[1].className.includes('lc-gran-on'))
+    assert.deepEqual(previews(), ['full cascade', 'b.ts', '(empty reply)', 'a.ts', 'done all'])
+    // The counts report the step's composition — the text lens narrows on top of them.
+    await typeToolSearch(m, 'done')
     assert.deepEqual(previews(), ['done all'])
+    assert.deepEqual(chips().map(c => text(c)), ['Thinking1', 'Tools5', 'Answer4'])
+    await typeToolSearch(m, 'zzz')
+    assert.equal(elemRows(m).length, 0)
+    assert.ok(text(query(m.container, '.lc-br-body')).includes('No rows match the current filter'))
+    assert.equal(chips().length, 3, 'the chips stay mounted on an empty match')
+    await typeToolSearch(m, '')
+    assert.equal(elemRows(m).length, 5)
+
+    // Re-click clears; the other two kinds each keep only their own rows.
+    await click(chips()[1])
+    assert.equal(elemRows(m).length, 8)
+    await click(chips()[0])
+    assert.deepEqual(previews(), ['full cascade'])
+    await click(chips()[2])
+    assert.ok(chips()[2].className.includes('lc-gran-on'))
+    assert.ok(!chips()[0].className.includes('lc-gran-on'), 'the kinds are exclusive')
+    assert.deepEqual(previews(), ['full cascade', 'legacy', 'Calls ', 'done all'])
+
+    // A category switch resets the picked kind with the text lens.
+    await click(catRow(m, 'user'))
+    assert.equal(queryAll(m.container, '.lc-br-toolctl .lc-gran-btn').length, 0)
+    await click(catRow(m, 'assistant'))
+    assert.deepEqual(chips().map(c => text(c)), ['Thinking1', 'Tools5', 'Answer4'])
+    assert.ok(chips().every(c => !c.className.includes('lc-gran-on')))
+    assert.equal(elemRows(m).length, 8)
+    await m.unmount()
+  })
+
+  test('call-name capsules and heads are inert: a click never reveals the schema row', async () => {
+    const headers: ContextHeaders = { headers: [{ seq: 1, time: 1, systemTokens: 3, tools: [{ name: 'bash', tokens: 5 }, { name: 'write', tokens: 3 }] }] }
+    const m = await mountBrowser({ headers })
+    await click(catRow(m, 'assistant'))
+    // The breadcrumb capsule is plain text on the row button: a click bubbles to the row's own toggle —
+    // the row opens and nothing navigates to Tool Schemas.
+    const crumbRow = elemRows(m).find(r => text(r).includes('done all')) as HTMLElement
+    await click(query(crumbRow, '.lc-br-tag'))
+    assert.ok(!text(query(m.container, '.lc-br-cat-open')).includes('Tool Schemas'), 'no category jump')
+    const open = queryAll(m.container, '.lc-br-elem-on')
+    assert.equal(open.length, 1)
+    assert.ok(text(open[0]).includes('done all'), 'the row toggle fired')
+    // The expanded body's call head is inert too: a click stays on the open row.
+    const cascade = elemRows(m).find(r => text(r).includes('full cascade')) as HTMLElement
+    await click(cascade)
+    const head = queryAll(m.container, '.lc-ts-card-head b').find(el => text(el) === '→ bash') as HTMLElement
+    await click(head)
+    assert.ok(!text(query(m.container, '.lc-br-cat-open')).includes('Tool Schemas'), 'no category jump')
+    const on = queryAll(m.container, '.lc-br-elem-on')
+    assert.equal(on.length, 1)
+    assert.ok(text(on[0]).includes('full cascade'), 'the open row never moved')
+    await m.unmount()
+  })
+
+  test('repeated call names fold into ×N capsules in first-appearance order', async () => {
+    const headers: ContextHeaders = { headers: [{ seq: 1, time: 1, systemTokens: 3, tools: [{ name: 'bash', tokens: 5 }, { name: 'write', tokens: 3 }] }] }
+    const data = tl({
+      current: { system: 0, tools: 0, user: 0, inject: 0, skill: 0, assistant: 8, tool: 0, total: 8 },
+      nodes: [node({ seq: 2, cat: 'assistant', tokens: 8, calls: ['bash', 'write', 'bash', 'bash'] })],
+    })
+    const m = await mount(h(Browser, props({ data, headers })))
+    await click(catRow(m, 'assistant'))
+    // 'bash › write › bash › bash' groups into two capsules: the repeat multiplier keeps the first-appearance order.
+    const row = elemRows(m)[0]
+    const caps = queryAll(row, '.lc-br-tag')
+    assert.deepEqual(caps.map(c => text(c)), ['bash ×3', 'write'])
+    await m.unmount()
+  })
+
+  test('the assistant text filter scans the join’s reasoning blocks', async () => {
+    const m = await mountBrowser()
+    await click(catRow(m, 'assistant'))
+    // 'thinking hard' rides seq 68's reasoning block — no tag, preview, or node text carries it.
+    await typeToolSearch(m, 'thinking hard')
+    const rows = elemRows(m)
+    assert.equal(rows.length, 1)
+    assert.ok(text(rows[0]).includes('full cascade'))
+    // A malformed reasoning block (non-string text) drops from the scan whole — its value matches nothing.
+    await typeToolSearch(m, '42')
+    assert.equal(elemRows(m).length, 0)
+    assert.ok(text(query(m.container, '.lc-br-body')).includes('No rows match the current filter'))
+    await typeToolSearch(m, '')
+    assert.equal(elemRows(m).length, 8)
     await m.unmount()
   })
 
@@ -1232,29 +1401,31 @@ describe('ContextBrowser message categories', () => {
     await click(catRow(m, 'assistant'))
     const rows = elemRows(m)
     const rowOf = (preview: string) => rows.find(r => text(r).includes(preview)) as HTMLElement
-    assert.ok(text(rowOf('done all')).includes('bash › write'), 'call breadcrumb tag')
-    assert.ok(text(rowOf('a.ts')).includes('write'), 'block summary previews a textless turn')
+    const capsOf = (row: HTMLElement) => queryAll(row, '.lc-br-tag').map(c => text(c))
+    assert.deepEqual(capsOf(rowOf('done all')), ['bash', 'write'], 'call breadcrumb: one capsule per distinct call')
+    assert.ok(capsOf(rowOf('a.ts')).includes('write'), 'block summary previews a textless turn')
     const tags = rows.map(r => {
-      const tag = r.querySelector<HTMLElement>('.lc-br-tag')
+      const caps = capsOf(r)
       const preview = text(query(r, '.lc-br-preview'))
-      return `${tag === null ? '∅' : text(tag)}|${preview}`
+      return `${caps.length === 0 ? '∅' : caps.join(',')}$|${preview}`
     })
-    assert.ok(tags.includes('read|(empty reply)'), 'no self-summarizing call → empty marker')
-    assert.ok(tags.includes('∅|b.ts'), 'textless turn previews the joined call summary')
-    assert.ok(tags.includes('∅|(empty reply)'), 'no join, no calls → empty marker')
-    assert.ok(tags.includes('∅|Calls '), 'empty call list previews as a bare Calls label (nodeText)')
+    assert.ok(tags.includes('read$|(empty reply)'), 'no self-summarizing call → empty marker')
+    assert.ok(tags.includes('edit$|b.ts'), 'a textless turn tags the joined call name and previews its summary')
+    assert.ok(tags.includes('bash,broken,noargs$|full cascade'), 'a mixed reply tags one capsule per join-recovered call, in order')
+    assert.ok(tags.includes('∅$|(empty reply)'), 'no join, no calls → empty marker')
+    assert.ok(tags.includes('∅$|Calls '), 'empty call list previews as a bare Calls label (nodeText)')
 
     await click(rowOf('full cascade'))
     const content = query(m.container, '.lc-br-content')
     const heads = queryAll(content, '.lc-ts-card-head').map(el => text(el))
-    assert.ok(heads.some(s => s.includes('Response')))
+    assert.ok(heads.some(s => s.includes('Answer')))
     assert.ok(heads.some(s => s.includes('Reasoning')))
     assert.ok(heads.some(s => s.includes('→ bash')))
     assert.ok(heads.some(s => s.includes('→ broken')))
     assert.ok(heads.some(s => s.includes('→ ?')), 'nameless call card')
     assert.ok(heads.some(s => s.includes('→ noargs')))
     assert.ok(heads.some(s => s.includes('Result')), 'nested tool-result text section')
-    assert.ok(heads.filter(s => s.includes('Other content')).length === 5, 'unknown blocks render raw JSON')
+    assert.ok(heads.filter(s => s.includes('Other content')).length === 6, 'unknown blocks render raw JSON')
     assert.ok(heads.some(s => s.includes('Images')))
     // Call arg rows: string, number and object values.
     const argVals = queryAll(content, '.lc-ts-arg-row').map(el => text(el))
@@ -1670,7 +1841,7 @@ describe('ContextBrowser focus bridges', () => {
       const m = await mount(h(Browser, props({ data, headers, convNodes })))
       await m.update(h(Browser, props({
         data, headers, convNodes,
-        nodeFocus: { step: 'live', seq: 1, cat: 'user' },
+        nodeFocus: { step: 'live', key: 'n1', cat: 'user' },
         onNodeFocusHandled: () => { handled += 1 },
       })))
       assert.equal(handled, 1)
@@ -1681,7 +1852,7 @@ describe('ContextBrowser focus bridges', () => {
       // A step focus switches the assembled view.
       await m.update(h(Browser, props({
         data, headers, convNodes,
-        nodeFocus: { step: 20, seq: 1, cat: 'user' },
+        nodeFocus: { step: 20, key: 'n1', cat: 'user' },
         onNodeFocusHandled: () => { handled += 1 },
       })))
       assert.ok(text(query(m.container, '.lc-br-meta')).includes('Turn 1 · Step 1'))
@@ -1689,7 +1860,7 @@ describe('ContextBrowser focus bridges', () => {
       // A node outside the assembled surface leaves nothing to scroll to.
       await m.update(h(Browser, props({
         data, headers, convNodes,
-        nodeFocus: { step: 'live', seq: 999, cat: 'user' },
+        nodeFocus: { step: 'live', key: 'n999', cat: 'user' },
       })))
       assert.equal(queryAll(m.container, '.lc-br-elem-on').length, 0)
       await m.unmount()
@@ -1782,7 +1953,7 @@ describe('ContextBrowser open-category reporting', () => {
     assert.deepEqual(opens, [null, null], 'pinning resets the accordion')
     await m.update(h(Browser, props({
       data, onOpenCat, pinSeq: 10,
-      nodeFocus: { step: 'live', seq: 1, cat: 'tool' },
+      nodeFocus: { step: 'live', key: 'n1', cat: 'tool' },
       onNodeFocusHandled: () => {},
     })))
     assert.deepEqual(opens, [null, null, 'tool'], 'the reveal opens the node category')
@@ -1816,8 +1987,27 @@ describe('ContextBrowser DNA mode and the open-category bar pin', () => {
     return queryAll(m.container, '.lc-stacked-seg')
   }
 
-  test('the toggle redraws the composition bar as one band per item, in prompt order', async () => {
-    const m = await mount(h(Browser, props({ data: dnaData, headers: dnaHeaders })))
+  test('the DNA toggle is parent-linked when both props arrive; a lone prop is ignored', async () => {
+    // Linked on: the bar redraws and the button reflects the parent's state without a click.
+    const m = await mount(h(Browser, props({ data: dnaData, headers: dnaHeaders, dna: true, onDnaChange: () => {} })))
+    assert.equal(bands(m).length, 7)
+    assert.ok(dnaButton(m).className.includes('lc-gran-on'))
+    // A lone `dna` prop without the handler does NOT link: the mount-local toggle still rules.
+    await m.update(h(Browser, props({ data: dnaData, headers: dnaHeaders, dna: true })))
+    assert.equal(bands(m).length, 6, 'unlinked: the local toggle is off')
+    // The click reports to the parent instead of flipping local state; the bar follows the prop.
+    const calls: boolean[] = []
+    await m.update(h(Browser, props({
+      data: dnaData, headers: dnaHeaders, dna: true,
+      onDnaChange: (on) => { calls.push(on) },
+    })))
+    await click(dnaButton(m))
+    assert.deepEqual(calls, [false])
+    assert.equal(bands(m).length, 7, 'still on until the parent re-renders the prop')
+    await m.unmount()
+  })
+
+  test('the toggle redraws the composition bar as one band per item, in prompt order', async () => {    const m = await mount(h(Browser, props({ data: dnaData, headers: dnaHeaders })))
     // Category mode: one segment per category in CATS order, pick cursor off, tooltip slot unmounted.
     assert.equal(bands(m).length, 6)
     const normal = bands(m).map(seg => seg.style.width)
@@ -1920,6 +2110,19 @@ describe('ContextBrowser DNA mode and the open-category bar pin', () => {
       assert.equal(query<HTMLInputElement>(m.container, '.lc-br-tool-search').value, '')
       assert.equal(queryAll(m.container, '.lc-br-elem-on').length, 1)
       assert.ok(text(query(m.container, '.lc-br-body')).includes('hi'))
+
+      // A stale kind chip clears the same way — even when the band reopens the SAME category (zero counts render too).
+      await click(catRow(m, 'assistant'))
+      const toolsChip = queryAll(m.container, '.lc-br-toolctl .lc-gran-btn')[1]
+      assert.equal(text(toolsChip), 'Tools0')
+      await click(toolsChip)
+      assert.ok(text(query(m.container, '.lc-br-body')).includes('No rows match'))
+      await click(bands(m)[5])
+      const kindChips = queryAll(m.container, '.lc-br-toolctl .lc-gran-btn')
+      assert.equal(kindChips.length, 3)
+      assert.ok(kindChips.every(b => !b.className.includes('lc-gran-on')), 'the band click clears a stale kind chip')
+      assert.equal(elemRows(m).length, 1)
+      assert.equal(queryAll(m.container, '.lc-br-elem-on').length, 1)
 
       // The system band opens the system section (metadata-only note without a header fetcher).
       await click(bands(m)[0])

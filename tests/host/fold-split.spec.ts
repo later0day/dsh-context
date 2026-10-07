@@ -50,9 +50,10 @@ function canonicalLog(): TimelineEvent[] {
 describe('the detailRev ledger', () => {
   test('bumps exactly on the detail-mutating folds of the canonical log', () => {
     // Mutations: userMessage(5), assistantMessage(6), toolResult(8),
-    // assistantMessage(10), compaction(11), planMode(12) — six in total.
+    // stepEnd(9, the strip's span flush), assistantMessage(10), compaction(11),
+    // planMode(12) — seven in total.
     const { state } = driveTimeline(canonicalLog())
-    assert.equal(state.detailRev, 6)
+    assert.equal(state.detailRev, 7)
   })
 
   test('the working-slot and envelope folds do NOT bump (nothing to refetch)', () => {
@@ -68,7 +69,7 @@ describe('the detailRev ledger', () => {
     ]
     let st = state
     for (const ev of follow) st = def.apply(st, ev)
-    assert.equal(st.detailRev, 6, 'no detail mutation, no bump')
+    assert.equal(st.detailRev, 7, 'no detail mutation, no bump')
     // The capacity metadata and the header DID fold (state changed) — only the rev stayed.
     assert.notEqual(st, state)
   })
@@ -76,7 +77,7 @@ describe('the detailRev ledger', () => {
   test('a real model switch bumps (the events collection gains a row)', () => {
     const { def, state } = driveTimeline(canonicalLog())
     const switched = def.apply(state, header(13, { model: 'deepseek-v4-pro', provider: 'deepseek', reason: 'change' }))
-    assert.equal(switched.detailRev, 7)
+    assert.equal(switched.detailRev, 8)
   })
 
   test('the rev is plain JSON and survives the state gate', () => {
@@ -104,7 +105,7 @@ describe('buildTimelineHead', () => {
     // The headline anchor is the newest retained request's billing summary.
     const lastReq = state.requests.at(-1)!
     assert.deepEqual(head.last, { seq: lastReq.seq, total: lastReq.total, prompt: 20 })
-    assert.equal(head.detailRev, 6)
+    assert.equal(head.detailRev, 7)
     // The collections stay empty on the head — the detail channel serves them.
     assert.deepEqual(head.requests, [])
     assert.deepEqual(head.events, [])
@@ -150,7 +151,7 @@ describe('buildTimelineDetail', () => {
   test('serves the same collections the inline view serves, plus the revision and the head', () => {
     const { state, view } = driveTimeline(canonicalLog())
     const detail = buildTimelineDetail(state, resolveBounds({}))
-    assert.equal(detail.rev, 6)
+    assert.equal(detail.rev, 7)
     assert.deepEqual(detail.requests, view.requests)
     assert.deepEqual(detail.events, view.events)
     assert.deepEqual(detail.nodes, view.nodes)

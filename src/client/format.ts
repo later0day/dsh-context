@@ -20,24 +20,25 @@ export function fmtBytes(n: number | null | undefined): string {
 
 /**
  * Cache-hit share of billed prompt-side input (`reads` over `billed`),
- * TRUNCATED to `decimals` places (cut, not round) — same formula as the
- * harness chat stats line's '缓存命中' figure and the stats board's cell
- * (which shows two decimals). Null when nothing was billed. The 1e-9 epsilon
- * absorbs only float noise (integer token counts never sit that close to a
- * boundary).
+ * TRUNCATED to two decimals (cut, not round) — same formula as the harness
+ * chat stats line's '缓存命中' figure and the token card's corner. Null when
+ * nothing was billed. The 1e-9 epsilon absorbs only float noise (integer
+ * token counts never sit that close to a boundary).
  */
-export function cacheHitPercent(reads: number, billed: number, decimals = 2): string | null {
+export function cacheHitPercent(reads: number, billed: number): string | null {
   if (!(billed > 0)) return null
-  const factor = 10 ** decimals
-  const scaled = Math.trunc((reads / billed) * 100 * factor + 1e-9)
-  return `${Math.floor(scaled / factor)}.${String(scaled % factor).padStart(decimals, '0')}`
+  const scaled = Math.trunc((reads / billed) * 100 * 100 + 1e-9)
+  return `${Math.floor(scaled / 100)}.${String(scaled % 100).padStart(2, '0')}`
 }
 
+/** One shared formatter: building an Intl formatter per call costs ~50x the format itself (issue #116). */
+const TIME_FMT = new Intl.DateTimeFormat('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
 export function fmtTime(t: number): string {
-  // en-GB 24-hour clock zero-pads HH:MM:SS without a helper; invalid dates must show '—' (toLocaleTimeString throws RangeError).
+  // en-GB 24-hour clock zero-pads HH:MM:SS without a helper; invalid dates must show '—' (DateTimeFormat.format throws RangeError).
   const d = new Date(t)
   if (isNaN(d.getTime())) return '—'
-  return d.toLocaleTimeString('en-GB', { hour12: false })
+  return TIME_FMT.format(d)
 }
 
 /**

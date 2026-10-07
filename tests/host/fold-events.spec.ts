@@ -11,6 +11,7 @@ import {
   assistantMessage,
   at,
   compaction,
+  endSeed,
   foreign,
   header,
   planMode,
@@ -478,6 +479,55 @@ describe('hostile provider usage (issue #44: stats must survive nonconforming fi
     assert.deepEqual(state.cost?.['deepseek-official']?.['deepseek-v4-flash']?.peak, {
       uncached: 0, cacheRead: 300, cacheWrite: 10, output: 0,
     })
+  })
+})
+
+describe('session/end-seed', () => {
+  // A seeded fork's inherited prefix: a settlement the parent session already
+  // priced, replayed verbatim into the child's log (issue #94).
+  const inherited = [
+    header(1, { model: 'deepseek-v3' }),
+    assistantMessage(2, { usage: { inputTokens: 100 } }),
+  ]
+
+  test('a tagged marker zeroes the inherited prefix\'s spend', () => {
+    const { state } = driveTimeline([...inherited, endSeed(3, { inherited: true })])
+    assert.deepEqual(state.cost, {})
+  })
+
+  test('spend after the cut prices afresh', () => {
+    const { state } = driveTimeline([
+      ...inherited,
+      endSeed(3, { inherited: true }),
+      assistantMessage(4, { usage: { inputTokens: 7 } }),
+    ])
+    assert.equal(state.cost?.['']?.['deepseek-v3']?.peak?.uncached, 7)
+  })
+
+  test('nested seeds re-reset at each cut; the surviving total is post-own-cut spend', () => {
+    const { state } = driveTimeline([
+      ...inherited,
+      endSeed(3, { inherited: true }),
+      assistantMessage(4, { usage: { inputTokens: 7 } }), // the middle fork's own work
+      endSeed(5, { inherited: true }), // a fork of that fork: cuts its inherited work too
+      assistantMessage(6, { usage: { inputTokens: 2 } }),
+    ])
+    assert.equal(state.cost?.['']?.['deepseek-v3']?.peak?.uncached, 2)
+  })
+
+  test('the untagged resume marker keeps the totals and the state reference', () => {
+    const { def, state } = driveTimeline(inherited)
+    assert.ok(state.cost !== undefined)
+    assert.equal(def.apply(state, endSeed(3, {})), state)
+  })
+
+  test('a marker without a strict `inherited: true` flag is a no-op', () => {
+    const { def, state } = driveTimeline(inherited)
+    const before = state.cost
+    for (const data of [undefined, null, {}, { inherited: 'yes' }, { inherited: 1 }, { inherited: null }]) {
+      assert.equal(def.apply(state, endSeed(3, data)), state, `data ${JSON.stringify(data)} must not reset`)
+    }
+    assert.equal(state.cost, before)
   })
 })
 

@@ -8,16 +8,16 @@
  * can spread its steps thinly across many days while another day stacks a
  * run, so each metric scales on its OWN maximum — in four steps; a day with
  * data is a button whose click
- * pins the session list to that day (click again to release). Cells tip
- * through the harness's own Tooltip primitive (instant on hover; native
- * `title` lags a second behind), the bubble carrying the date, the day's
- * active sessions, and its steps. The grid is computed from the injected
+ * pins the session list to that day (click again to release). Cells carry
+ * their tip (the date, the day's active sessions, and its steps) in
+ * `data-lc-tip`, served by the page's portaled hover tip (hoverTip.tsx) —
+ * instant on hover, where a native `title` lags a second behind. The grid is
+ * computed from the injected
  * `today` key, so
  * the layout is deterministic in tests and follows the browser's local
  * calendar at runtime.
  */
 
-import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactElement } from 'react'
 import { dayKeyOf, shiftDayKey, sundayOfWeek } from '../../shared/days'
 import { type DayTotals } from '../overview'
@@ -142,24 +142,20 @@ export function makeHeatmap(kit: ViewKit): (props: HeatmapProps) => ReactElement
                     if (cell.future) return <span key={cell.key} className="lc-heat-cell lc-heat-future" aria-hidden="true" />
                     const level = cell.entry === undefined ? 0 : levelOf(metricValueOf(cell.entry), max)
                     if (cell.entry === undefined) {
-                      return (
-                        <Tooltip key={cell.key} label={cell.key} side="top">
-                          <span className="lc-heat-cell lc-heat-0" />
-                        </Tooltip>
-                      )
+                      return <span key={cell.key} className="lc-heat-cell lc-heat-0" data-lc-tip={cell.key} />
                     }
                     const picked = props.selected === cell.key
                     const label = `${cell.key}\n${t('ov.heat.sessions', { n: cell.entry.sessions })}\n${t('ov.heat.steps', { n: cell.entry.requests })}`
                     return (
-                      <Tooltip key={cell.key} label={label} side="top">
-                        <button
-                          type="button"
-                          className={`lc-heat-cell lc-heat-${String(level)}${picked ? ' lc-heat-on' : ''}`}
-                          aria-label={label}
-                          aria-pressed={picked}
-                          onClick={() => { if (props.onSelect !== undefined) props.onSelect(picked ? null : cell.key) }}
-                        />
-                      </Tooltip>
+                      <button
+                        key={cell.key}
+                        type="button"
+                        className={`lc-heat-cell lc-heat-${String(level)}${picked ? ' lc-heat-on' : ''}`}
+                        data-lc-tip={label}
+                        aria-label={label}
+                        aria-pressed={picked}
+                        onClick={() => { if (props.onSelect !== undefined) props.onSelect(picked ? null : cell.key) }}
+                      />
                     )
                   })}
                 </div>

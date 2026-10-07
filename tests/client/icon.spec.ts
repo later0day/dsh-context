@@ -1,6 +1,7 @@
-// The Context emblem (src/client/icon.tsx): the bundled polychrome document
-// sheet that fills the right-Sidebar tab type's two glyph seats — the guide
-// capsule and the chip title. Bundled rather than read off the harness
+// The Context emblem (src/client/icon.tsx): the bundled document sheet that
+// fills the right-Sidebar tab type's two glyph seats — the guide capsule and
+// the chip title — in its polychrome default, plus the sidebar-foot entry
+// seat in the mono variant. Bundled rather than read off the harness
 // primitives, so these specs render the real component. The same sheet is
 // exported statically as the package-root icon.svg the Host's package-meta
 // reader serves to the Plugins page; a spec pins the two in lockstep.
@@ -36,6 +37,15 @@ describe('ContextIcon', () => {
     assert.equal(svg.getAttribute('width'), '20')
     assert.equal(svg.getAttribute('height'), '20')
     assert.equal(svg.getAttribute('class'), null)
+    await m.unmount()
+  })
+
+  test('the mono seat trades every palette fill for the current colour', async () => {
+    const m = await mount(h(ContextIcon, { mono: true }))
+    const paths = queryAll<SVGPathElement>(m.container, 'path')
+    assert.equal(paths.length, 10)
+    const fills = paths.map(p => p.getAttribute('fill'))
+    assert.ok(fills.every(f => f === 'currentColor'))
     await m.unmount()
   })
 

@@ -52,9 +52,16 @@
 .lc-rich-seg-btn { border: 0; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1; padding: 3px 8px; border-radius: 5px; cursor: pointer; font-family: inherit; transition: color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
 .lc-rich-seg-btn:hover { color: var(--dsw-alias-label-primary); }
 .lc-rich-seg-on, .lc-rich-seg-on:hover { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
-.lc-rich-copy { display: inline-flex; align-items: center; border: 0; background: transparent; color: var(--dsw-alias-label-secondary); padding: 2px; border-radius: 5px; cursor: pointer; transition: color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
-.lc-rich-copy:hover { color: var(--dsw-alias-label-primary); }
+.lc-rich-copy, .lc-find-btn { display: inline-flex; align-items: center; border: 0; background: transparent; color: var(--dsw-alias-label-secondary); padding: 2px; border-radius: 5px; cursor: pointer; transition: color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
+.lc-rich-copy:hover, .lc-find-btn:hover { color: var(--dsw-alias-label-primary); }
 .lc-rich-copy-on, .lc-rich-copy-on:hover { color: var(--dsw-alias-state-success-primary); }
+.lc-find-btn:disabled { opacity: 0.4; cursor: default; }
+.lc-find-btn:disabled:hover { color: var(--dsw-alias-label-secondary); }
+.lc-find-btn-on, .lc-find-btn-on:hover { color: var(--dsw-alias-label-primary); }
+.lc-find { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.lc-find-count { color: var(--dsw-alias-label-secondary); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lc-find-mark { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 25%, transparent); color: inherit; border-radius: 2px; }
+.lc-find-mark-on { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 65%, transparent); }
 .lc-ts-desc-md { padding: 4px 10px; color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 1.55; word-break: break-word; overflow-wrap: anywhere; min-width: 0; max-height: 320px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
 /*
  The shared markdown renderer sizes its root/headings for chat bubbles;

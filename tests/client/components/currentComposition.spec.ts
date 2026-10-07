@@ -21,14 +21,17 @@ function headOf(over: Partial<Headline> = {}): Headline {
 describe('CurrentComposition header', () => {
   test('windowed head: tokens/window figure, used percentage, reserve band, subtitle', async () => {
     const m = await mount(h(CurrentComposition, {
-      head: headOf({ window: 10000, pct: 50 }),
+      head: headOf({ window: 10000, pct: 50.4 }),
       subtitle: 'deepseek-v4-flash',
     }))
     assert.ok(text(m.container).includes('Current Context'))
     assert.equal(query(m.container, '.lc-card-sub').textContent, 'deepseek-v4-flash')
     const num = query(m.container, '.lc-overview-num')
     assert.ok(text(num).includes('5.0k / 10.0k tokens'))
-    assert.equal(query(num, '.lc-overview-pct b').textContent, '50%')
+    // The reading keeps one decimal, a whole tenth included (headline.ts).
+    assert.equal(query(num, '.lc-overview-pct b').textContent, '50.4%')
+    await m.update(h(CurrentComposition, { head: headOf({ window: 10000, pct: 50 }) }))
+    assert.equal(query(num, '.lc-overview-pct b').textContent, '50.0%')
     assert.ok(text(num).includes('of context used'))
     // The reserve band mirrors the 80% auto-compaction threshold.
     const band = query(m.container, '.lc-reserve')

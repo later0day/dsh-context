@@ -1,20 +1,25 @@
 // StatsTiming (src/client/components/statsTiming.tsx) rendered with real
 // React: the active-time donut (TTFT + generation vs tools vs overhead) and
-// the pct-led slice rows with call counts and true durations — plus the empty
-// and hostile-timing degrades.
+// the pct-led slice rows with call counts and true durations — plus the
+// bottom session-time strip (the fold's per-step spans packed by their share
+// of the active time in occurrence order, joined into the hover link by
+// KIND), and the empty and hostile-timing degrades.
 
 import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import { makeDonut } from '../../../src/client/components/donut'
 import { makeStatsTiming } from '../../../src/client/components/statsTiming'
-import type { TimingTotals } from '../../../src/shared/types'
+import type { TimingSpan, TimingTotals } from '../../../src/shared/types'
 import { makeKit, mount, query, queryAll, text, hover } from '../helpers/kit'
 
 const kit = makeKit()
 const kitZh = makeKit('zh')
 const StatsTiming = makeStatsTiming(kit, makeDonut(kit))
 const StatsTimingZh = makeStatsTiming(kitZh, makeDonut(kitZh))
+
+/** Local HH:MM:SS exactly as the kit's fmtTime renders it (a timezone-free assertion). */
+const timeOf = (ms: number): string => new Date(ms).toLocaleTimeString('en-GB', { hour12: false })
 
 const TIMING: TimingTotals = {
   wallMs: 600_000, ttftMs: 100_000, genMs: 140_000, calls: 10, toolsMs: 300_000, toolCalls: 25,
@@ -210,32 +215,32 @@ describe('StatsTiming — the generation split', () => {
   })
 })
 
-describe('StatsTiming — the throughput chip', () => {
+describe('StatsTiming — the throughput figure', () => {
   const paired: TimingTotals = { ...TIMING, speedTokens: 12_345, speedMs: 42_720 }
 
-  test('the paired seat renders the harness-formatted figure in the title row', async () => {
+  test('the paired seat renders the output-speed figure in the title row', async () => {
     const m = await mount(h(StatsTiming, { timing: paired }))
-    const chip = query(m.container, '.lc-timing-tps')
-    assert.equal(chip?.textContent, '289 tok/s', '12345 tokens over 42.72s')
-    assert.ok(chip?.getAttribute('title')?.includes('Output speed (TPS)'))
+    const rate = query(m.container, '.lc-card-rate')
+    assert.equal(rate?.textContent, 'TPS 289 tok/s', '12345 tokens over 42.72s')
+    assert.ok(rate?.getAttribute('title')?.includes('Output speed (TPS)'))
     await m.unmount()
   })
 
-  test('the chip localizes its tooltip and stays in the title row', async () => {
+  test('the figure localizes its label and tooltip in the title row', async () => {
     const m = await mount(h(StatsTimingZh, { timing: paired }))
-    const chip = query(m.container, '.lc-timing-tps')
-    assert.equal(chip?.textContent, '289 tok/s')
-    assert.ok(chip?.getAttribute('title')?.includes('输出速度（TPS）'))
+    const rate = query(m.container, '.lc-card-rate')
+    assert.equal(rate?.textContent, '输出速度 289 tok/s')
+    assert.ok(rate?.getAttribute('title')?.includes('输出速度（TPS）'))
     await m.unmount()
   })
 
   test('a sub-10 figure keeps one decimal', async () => {
     const m = await mount(h(StatsTiming, { timing: { ...TIMING, speedTokens: 26, speedMs: 10_000 } }))
-    assert.equal(query(m.container, '.lc-timing-tps')?.textContent, '2.6 tok/s')
+    assert.equal(query(m.container, '.lc-card-rate')?.textContent, 'TPS 2.6 tok/s')
     await m.unmount()
   })
 
-  test('an unpaired, zero-window, or hostile seat renders no chip', async () => {
+  test('an unpaired, zero-window, or hostile seat renders no figure', async () => {
     for (const timing of [
       TIMING,
       { ...TIMING, speedTokens: 500, speedMs: 0 },
@@ -243,8 +248,87 @@ describe('StatsTiming — the throughput chip', () => {
       { ...TIMING, speedTokens: -5, speedMs: 1_000 },
     ] as TimingTotals[]) {
       const m = await mount(h(StatsTiming, { timing }))
-      assert.equal(queryAll(m.container, '.lc-timing-tps').length, 0, JSON.stringify(timing.speedTokens))
+      assert.equal(queryAll(m.container, '.lc-card-rate').length, 0, JSON.stringify(timing.speedTokens))
       await m.unmount()
     }
+  })
+})
+
+describe('StatsTiming — the session-time strip', () => {
+  // The generation-split timing: genMs 140s splits into thinking 90s, answer 30s, tool args 20s.
+  const SPLIT: TimingTotals = {
+    wallMs: 600_000, ttftMs: 100_000, genMs: 140_000, reasoningMs: 90_000, textMs: 30_000, toolArgMs: 20_000,
+    calls: 10, toolsMs: 300_000, toolCalls: 25, tools: { bash: { calls: 15, ms: 200_000 } },
+  }
+  // A 50-second session window (epoch 1s → 51s) holding 40s of ACTIVE time:
+  // the decode slices, then tools and overhead — with 5s idle gaps between
+  // them (21s → 26s and 41s → 46s) that take no track on the strip.
+  const SPANS: TimingSpan[] = [
+    { kind: 'ttft', start: 1_000, end: 6_000 },
+    { kind: 'reasoning', start: 6_000, end: 16_000 },
+    { kind: 'text', start: 16_000, end: 21_000 },
+    { kind: 'tools', start: 26_000, end: 41_000 },
+    { kind: 'other', start: 46_000, end: 51_000 },
+  ]
+
+  test('the strip packs the folded spans by their share of the active time over the zero/quartile/full axis', async () => {
+    const m = await mount(h(StatsTiming, { timing: TIMING, spans: SPANS }))
+    const segs = queryAll(m.container, '.lc-tstrip-seg')
+    assert.equal(segs.length, 5)
+    assert.deepEqual(segs.map(s => parseFloat((s as HTMLElement).style.left)), [0, 12.5, 37.5, 50, 87.5])
+    assert.deepEqual(segs.map(s => parseFloat((s as HTMLElement).style.width)), [12.5, 25, 12.5, 37.5, 12.5])
+    const ticks = queryAll(m.container, '.lc-tstrip-tick')
+    assert.deepEqual(ticks.map(t => t.textContent), ['0', '10.0s', '20.0s', '30.0s', '40.0s'])
+    await m.unmount()
+  })
+
+  test('an absent or empty spans collection paints no strip (the aggregate overview card)', async () => {
+    const collections: (TimingSpan[] | undefined)[] = [undefined, []]
+    for (const spans of collections) {
+      const m = await mount(h(StatsTiming, { timing: TIMING, spans }))
+      assert.equal(queryAll(m.container, '.lc-sl-row').length, 4, 'the rows still render')
+      assert.equal(queryAll(m.container, '.lc-tstrip').length, 0)
+      await m.unmount()
+    }
+  })
+
+  test('the empty timing state shows no strip even with spans', async () => {
+    const m = await mount(h(StatsTiming, { timing: null, spans: SPANS }))
+    assert.ok(text(m.container).includes('No timing data yet'))
+    assert.equal(queryAll(m.container, '.lc-tstrip').length, 0)
+    await m.unmount()
+  })
+
+  test('a strip band hover lights its donut arc and legend row by KIND — the shared hover link', async () => {
+    const m = await mount(h(StatsTiming, { timing: SPLIT, spans: SPANS }))
+    const segs = queryAll(m.container, '.lc-tstrip-seg')
+    await hover(segs[3])
+    const tip = query(m.container, '.lc-bar-tip')
+    assert.ok(tip.className.includes('lc-bar-tip-on'))
+    assert.equal(tip.textContent, `Tool runs 15.0s · ${timeOf(26_000)}`)
+    assert.ok(segs[3].className.includes('lc-tstrip-seg-on'))
+    assert.ok(query(m.container, '.lc-donut').className.includes('lc-donut-dim'))
+    assert.ok((queryAll(m.container, '.lc-donut-seg')[4]?.getAttribute('class') ?? '').includes('lc-donut-seg-on'))
+    assert.ok(queryAll(m.container, '.lc-sl-row')[4].className.includes('lc-sl-row-on'))
+    await m.unmount()
+  })
+
+  test('a legend row hover lights the strip spans of that kind WITHOUT floating the strip tip (the mirror rule)', async () => {
+    const m = await mount(h(StatsTiming, { timing: SPLIT, spans: SPANS }))
+    const rows = queryAll(m.container, '.lc-sl-row')
+    await hover(rows[1])
+    assert.ok(query(m.container, '.lc-tstrip-bar').className.includes('lc-tstrip-dim'))
+    const on = queryAll(m.container, '.lc-tstrip-seg-on')
+    assert.equal(on.length, 1)
+    assert.equal(on[0], queryAll(m.container, '.lc-tstrip-seg')[1])
+    assert.equal(query(m.container, '.lc-bar-tip').className, 'lc-tip lc-bar-tip')
+    await m.unmount()
+  })
+
+  test('the strip tip localizes', async () => {
+    const m = await mount(h(StatsTimingZh, { timing: SPLIT, spans: SPANS }))
+    await hover(queryAll(m.container, '.lc-tstrip-seg')[1])
+    assert.equal(query(m.container, '.lc-bar-tip').textContent, `模型思考 10.0s · ${timeOf(6_000)}`)
+    await m.unmount()
   })
 })

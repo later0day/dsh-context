@@ -112,3 +112,32 @@ describe('StatsTokens', () => {
     await m.unmount()
   })
 })
+
+describe('StatsTokens — the cache-hit corner figure', () => {
+  test('a billed session shows the chat line\'s cache-hit share in the title row', async () => {
+    const m = await mount(h(StatsTokens, { usage: USAGE, current: CURRENT, breakdown: null }))
+    const rate = query(m.container, '.lc-card-rate')
+    assert.equal(rate?.textContent, 'Cache Hit 25.00%', '100 reads over the 400 billed')
+    assert.ok(rate?.getAttribute('title')?.includes('Cumulative cache-read share'))
+    await m.unmount()
+  })
+
+  test('the figure localizes its label and tooltip', async () => {
+    const kitZh = makeKit('zh')
+    const StatsTokensZh = makeStatsTokens(kitZh, makeDonut(kitZh))
+    const m = await mount(h(StatsTokensZh, { usage: USAGE, current: CURRENT, breakdown: null }))
+    const rate = query(m.container, '.lc-card-rate')
+    assert.equal(rate?.textContent, '缓存命中 25.00%')
+    assert.ok(rate?.getAttribute('title')?.includes('整个会话累计的缓存读取'))
+    await m.unmount()
+  })
+
+  test('an unbilled or unreported session renders no figure', async () => {
+    const zero: TokenUsage = { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+    for (const usage of [null, zero] as (TokenUsage | null)[]) {
+      const m = await mount(h(StatsTokens, { usage, current: CURRENT, breakdown: null }))
+      assert.equal(queryAll(m.container, '.lc-card-rate').length, 0, JSON.stringify(usage))
+      await m.unmount()
+    }
+  })
+})
