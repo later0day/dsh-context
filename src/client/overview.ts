@@ -6,6 +6,12 @@
  * daily ledger) — so the overview joins every session's insight WITHOUT
  * opening a single session log.
  *
+ * The row IS the team: subagent-origin sessions never list (the workspace
+ * browser's own exclusion), so every row folds its WHOLE descendant subtree
+ * into itself — the card's billed tokens and cost, the KPI band, the usage
+ * chart, and the heatmap all read the family scope, each member contributing
+ * its own composition and daily ledger, nothing counted twice.
+ *
  * The list is harness data (untrusted at the boundary): the snapshot is
  * re-proved field by field, every projection value passes its services.ts
  * sanitizer, and each row's derivation is isolated — one hostile row drops
@@ -19,6 +25,7 @@ import { billedParts } from './categories'
 import { cacheHitPercent } from './format'
 import { estimateSessionCost, mergeCostUsage } from './cost'
 import type { CostCurrency, ModelBook } from './cost'
+import { agentRowOf } from './agentTree'
 import { activityOf, asRecord, timelineOf, type ClientCtx, type SessionsFace } from './services'
 import type { ContextActivity, ContextTimeline, SessionCostUsage, TimingTotals, TokenUsage, ToolTimingTotals } from '../shared/types'
 
@@ -34,8 +41,17 @@ export interface OverviewRow {
   current: boolean
   /** The sanitized timeline head, or null when the host folded nothing for this session yet. */
   timeline: ContextTimeline | null
-  /** The sanitized daily ledger, or null on an older host (the heatmap's empty note). */
+  /**
+   * The TEAM's merged daily ledger (this session's own plus every descendant
+   * subagent's, day by day), or null when no member carries one. Subagent-origin
+   * sessions never list (the workspace browser's exclusion, see rowsOfSnapshot),
+   * so each family folds into exactly one row and nothing counts twice.
+   */
   activity: ContextActivity | null
+  /** Every subtree member's sanitized head, self first, ALL levels — the parts split proportions each member's OWN composition. */
+  family: (ContextTimeline | null)[]
+  /** The subtree's merged billed usage — the card stat, KPI band, and token sort's family figure (null: nothing billed anywhere). */
+  familyCost: SessionCostUsage | null
 }
 
 /**
@@ -217,12 +233,83 @@ export function rowsOfSnapshot(snapshot: unknown, workspaces?: unknown): Overvie
         current: id === current,
         timeline: timelineOf(values?.contextTimeline),
         activity: activityOf(values?.contextActivity),
+        family: [],
+        familyCost: null,
       })
     } catch {
       // A hostile row (throwing accessor) drops whole; the list keeps working.
     }
   }
+  // The family fold: every listed row owns its WHOLE subagent subtree (all
+  // levels — the walk mirrors the Context tab's cost fold, agentTree
+  // subagentCostFoldOf: childrenOf off non-blank rows' parentId, BFS with a
+  // seen-set so a lineage cycle cannot loop). Each member's own sanitized
+  // timeline and ledger join the row's family; the row's own `activity` then
+  // becomes the team's merged ledger.
+  const childrenOf = new Map<string, string[]>()
+  for (const id of Object.keys(byId)) {
+    // The row loop's own isolation, mirrored: a hostile (throwing) row drops
+    // out of the lineage walk the same way it dropped out of the list.
+    try {
+      const row = agentRowOf(byId[id])
+      if (row === null || row.blank || row.parentId === undefined) continue
+      const list = childrenOf.get(row.parentId) ?? []
+      list.push(id)
+      childrenOf.set(row.parentId, list)
+    } catch { /* the hostile row links nobody */ }
+  }
+  for (const row of rows) {
+    const timelines: (ContextTimeline | null)[] = [row.timeline]
+    const activities: (ContextActivity | null)[] = [row.activity]
+    const seen = new Set<string>([row.id])
+    const queue = [row.id]
+    for (let i = 0; i < queue.length; i++) {
+      for (const kid of childrenOf.get(queue[i]) ?? []) {
+        if (seen.has(kid)) continue
+        seen.add(kid)
+        const values = asRecord(asRecord(byId[kid])?.projectionValues)
+        timelines.push(timelineOf(values?.contextTimeline))
+        activities.push(activityOf(values?.contextActivity))
+        queue.push(kid)
+      }
+    }
+    row.family = timelines
+    row.familyCost = mergeCostUsage(...timelines.map(t => t?.cost))
+    row.activity = mergeActivity(activities)
+  }
   return rows
+}
+
+/**
+ * Merge several sessions' daily ledgers into one family's: per day the tokens
+ * and requests sum and the pricing records merge (each member's own entry,
+ * same day — the fee prices off the same book downstream either way). Null
+ * when no member carries a ledger, matching a lone session's day-less state.
+ */
+function mergeActivity(members: (ContextActivity | null)[]): ContextActivity | null {
+  const days: ContextActivity['days'] = {}
+  // Widened honestly: a Record index read can miss at runtime.
+  const byKey: Record<string, ContextActivity['days'][string] | undefined> = days
+  let any = false
+  for (const activity of members) {
+    if (activity === null) continue
+    any = true
+    for (const key of Object.keys(activity.days)) {
+      const entry = activity.days[key]
+      const prev = byKey[key]
+      if (prev === undefined) {
+        days[key] = { tokens: entry.tokens, requests: entry.requests, ...(entry.cost !== undefined ? { cost: entry.cost } : {}) }
+      } else {
+        prev.tokens += entry.tokens
+        prev.requests += entry.requests
+        if (entry.cost !== undefined) {
+          /* v8 ignore next 1 -- a merge with a defined input never comes back empty. */
+          prev.cost = mergeCostUsage(prev.cost, entry.cost) ?? entry.cost
+        }
+      }
+    }
+  }
+  return any ? { days } : null
 }
 
 // ---- range / filter / sort -------------------------------------------------
@@ -240,12 +327,12 @@ export function rangeStartOf(range: OverviewRange, now: number): number | null {
 export type OverviewSort = 'recent' | 'tokens' | 'context'
 
 /**
- * The session's cumulative billed tokens (the host-folded cost buckets'
- * sum), or null when nothing was billed yet — the sort and the card stat
- * share this one figure.
+ * The team card's cumulative billed tokens (the subtree's merged cost
+ * buckets' sum), or null when nothing was billed anywhere — the sort and the
+ * card stat share this one figure.
  */
-export function billedOf(timeline: ContextTimeline | null): number | null {
-  const totals = usageTotalsOf(timeline?.cost)
+export function billedOf(row: OverviewRow): number | null {
+  const totals = usageTotalsOf(row.familyCost)
   return totals?.total ?? null
 }
 
@@ -304,7 +391,7 @@ export function filterRows(
 /** Order the filtered rows; the input array is never mutated. */
 export function sortRows(rows: readonly OverviewRow[], sort: OverviewSort): OverviewRow[] {
   const copy = [...rows]
-  if (sort === 'tokens') copy.sort((a, b) => (billedOf(b.timeline) ?? -1) - (billedOf(a.timeline) ?? -1))
+  if (sort === 'tokens') copy.sort((a, b) => (billedOf(b) ?? -1) - (billedOf(a) ?? -1))
   else if (sort === 'context') copy.sort((a, b) => (b.timeline?.current.total ?? -1) - (a.timeline?.current.total ?? -1))
   else copy.sort((a, b) => b.updatedAt - a.updatedAt)
   return copy
@@ -430,13 +517,13 @@ export interface TokenPartTotal {
 
 /**
  * The range's billed tokens split by WHAT they are — the Context tab's Token
- * card categorization, folded across sessions: each session's
- * `billedParts` estimate (the composition ratios proportioning that
- * session's provider-reported prompt total, output exact) sums by category,
- * and every session's parts total its own billed figure, so the aggregate's
+ * card categorization, folded across the rows' FAMILIES: every subtree
+ * member's `billedParts` estimate (its OWN composition ratios proportioning
+ * its own provider-reported prompt total, output exact) sums by category,
+ * and every member's parts total its own billed figure, so the aggregate's
  * total stays the exact merged billed volume while the split inherits the
- * per-session card's `≈` estimate convention. Null when no session billed
- * anything. A non-finite part estimate (a hostile fast-path composition)
+ * per-session card's `≈` estimate convention. Null when nothing billed
+ * anywhere. A non-finite part estimate (a hostile fast-path composition)
  * drops whole instead of poisoning the sums.
  */
 export function tokenPartsOf(rows: readonly OverviewRow[]): { parts: TokenPartTotal[]; total: number } | null {
@@ -444,26 +531,27 @@ export function tokenPartsOf(rows: readonly OverviewRow[]): { parts: TokenPartTo
   let total = 0
   let any = false
   for (const row of rows) {
-    const timeline = row.timeline
-    if (timeline === null) continue
-    const totals = usageTotalsOf(timeline.cost)
-    if (totals === null) continue
-    any = true
-    const usage: TokenUsage = {
-      uncachedInputTokens: totals.input,
-      cacheReadTokens: totals.cacheRead,
-      cacheWriteTokens: totals.cacheWrite,
-      outputTokens: totals.output,
-    }
-    for (const part of billedParts(timeline.current, null, usage)) {
-      if (!Number.isFinite(part.value) || part.value <= 0) continue
-      total += part.value
-      // Widened honestly: a Map get can miss at runtime.
-      const sumsGet: Map<string, TokenPartTotal | undefined> = sums
-      const prev = sumsGet.get(part.key)
-      sums.set(part.key, prev === undefined
-        ? { key: part.key, color: part.color, value: part.value }
-        : { ...prev, value: prev.value + part.value })
+    for (const member of row.family) {
+      if (member === null) continue
+      const totals = usageTotalsOf(member.cost)
+      if (totals === null) continue
+      any = true
+      const usage: TokenUsage = {
+        uncachedInputTokens: totals.input,
+        cacheReadTokens: totals.cacheRead,
+        cacheWriteTokens: totals.cacheWrite,
+        outputTokens: totals.output,
+      }
+      for (const part of billedParts(member.current, null, usage)) {
+        if (!Number.isFinite(part.value) || part.value <= 0) continue
+        total += part.value
+        // Widened honestly: a Map get can miss at runtime.
+        const sumsGet: Map<string, TokenPartTotal | undefined> = sums
+        const prev = sumsGet.get(part.key)
+        sums.set(part.key, prev === undefined
+          ? { key: part.key, color: part.color, value: part.value }
+          : { ...prev, value: prev.value + part.value })
+      }
     }
   }
   if (!any) return null
@@ -508,7 +596,9 @@ export function kpisOf(
   book: ModelBook | null | undefined,
   currency: CostCurrency,
 ): OverviewKpis {
-  const usage = mergeCostUsage(...rows.map(row => row.timeline?.cost))
+  // The KPI band's billed volume and spend ride the same family scope as the
+  // cards and the chart: each row's subtree-merged usage.
+  const usage = mergeCostUsage(...rows.map(row => row.familyCost))
   const totals = usageTotalsOf(usage)
   let turns = 0
   let toolCalls = 0
@@ -518,12 +608,11 @@ export function kpisOf(
   let costSessions = 0
   let usageSessions = 0
   for (const row of rows) {
-    const cost = row.timeline?.cost
     // Each qualifying sub-line counts the sessions its own figure covers: a
     // session with usage but no book rates feeds the cache-hit rate while
     // pricing to nothing.
-    if (estimateSessionCost(cost, book, currency) !== null) costSessions++
-    if (usageTotalsOf(cost) !== null) usageSessions++
+    if (estimateSessionCost(row.familyCost, book, currency) !== null) costSessions++
+    if (usageTotalsOf(row.familyCost) !== null) usageSessions++
     turns += turnsOf(row.timeline)
     const timing = row.timeline?.timing
     toolCalls += timing?.toolCalls ?? 0
@@ -563,7 +652,8 @@ export interface DayTotals {
 
 /**
  * Merge every row's daily ledger into one — the heatmap's and the usage
- * chart's data. A session counts toward a day only when its own entry
+ * chart's data (each row's ledger is already its family's merge, see
+ * rowsOfSnapshot). A row counts toward a day only when its family entry
  * carries activity, mirroring the day filter's predicate, so the cell's
  * tooltip previews the click; a zeroed entry is skipped whole. Each day's
  * pricing records merge into one SessionCostUsage and price off the SAME

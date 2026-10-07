@@ -355,9 +355,9 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
   }
 }
 
-/** One card's priced cost label, or the dash (no book yet, nothing billed, unpriceable model). */
+/** One card's priced cost label at the team scope, or the dash (no book yet, nothing billed, unpriceable models). */
 function cardCostOf(row: OverviewRow, book: ModelBook | null, currency: CostCurrency): string {
-  if (row.timeline?.cost === undefined) return '—'
-  const cost = estimateSessionCost(row.timeline.cost, book, currency)
+  if (row.familyCost === null) return '—'
+  const cost = estimateSessionCost(row.familyCost, book, currency)
   return cost === null ? '—' : formatCost(cost, currency)
 }

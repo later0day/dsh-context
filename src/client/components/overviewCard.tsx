@@ -32,7 +32,10 @@ export function makeOverviewCard(kit: ViewKit): (props: OverviewCardProps) => Re
   return function OverviewCard(props: OverviewCardProps): ReactElement {
     const { row } = props
     const timeline = row.timeline
-    const billed = billedOf(timeline)
+    // The card's two money figures ride the team scope: the whole subtree's
+    // billed tokens and priced cost (the donut and the turns stay the
+    // session's own — the ring reads the session's CURRENT context).
+    const billed = billedOf(row)
     const occupancy = timeline !== null && typeof timeline.contextWindow === 'number' && timeline.contextWindow > 0
       ? fmtShare(timeline.current.total, timeline.contextWindow)
       : null
@@ -91,11 +94,11 @@ export function makeOverviewCard(kit: ViewKit): (props: OverviewCardProps) => Re
                 <span className="lc-ov-mini-value">{turnsLabel}</span>
               </span>
               <span className="lc-ov-mini-stat">
-                <span className="lc-ov-mini-label">{t('tokens.total')}</span>
+                <span className="lc-ov-mini-label">{t('ov.card.teamUsage')}</span>
                 <span className="lc-ov-mini-value">{billed === null ? '—' : fmt(billed)}</span>
               </span>
               <span className="lc-ov-mini-stat">
-                <span className="lc-ov-mini-label">{t('stats.cost')}</span>
+                <span className="lc-ov-mini-label">{t('ov.card.teamCost')}</span>
                 <span className="lc-ov-mini-value">{props.costLabel}</span>
               </span>
             </span>

@@ -32,7 +32,7 @@ import {
 } from '../../src/client/overview'
 import type { ClientCtx } from '../../src/client/services'
 import type { ContextActivity, ContextTimeline, SessionCostUsage } from '../../src/shared/types'
-import { priceIndexOf } from '../../src/client/cost'
+import { mergeCostUsage, priceIndexOf } from '../../src/client/cost'
 
 /** The minimal wire-valid timeline head, overridable per case. */
 function timelineOf(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -71,6 +71,8 @@ function rowOf(over: Partial<OverviewRow> = {}): OverviewRow {
     current: false,
     timeline: null,
     activity: null,
+    family: [over.timeline ?? null],
+    familyCost: null,
     ...over,
   }
 }
@@ -118,7 +120,7 @@ describe('rowsOfSnapshot', () => {
     const [b, c, d, e] = rows
     assert.deepEqual(b, {
       id: 'b', title: 'shown', updatedAt: 5, running: true, current: true,
-      timeline: null, activity: null,
+      timeline: null, activity: null, family: [null], familyCost: null,
     })
     assert.equal(c.title, 'titled')
     assert.equal(c.current, false)
@@ -176,10 +178,9 @@ describe('rowsOfSnapshot', () => {
 })
 
 describe('billedOf / turnsOf', () => {
-  test('billed sums the cost buckets; absent cost reads null', () => {
-    assert.equal(billedOf(null), null)
-    assert.equal(billedOf({ current: 1 } as never), null)
-    assert.equal(billedOf({ cost: COST } as never), 200)
+  test('billed sums the team’s merged cost buckets; absent cost reads null', () => {
+    assert.equal(billedOf(rowOf()), null)
+    assert.equal(billedOf(rowOf({ familyCost: COST })), 200)
   })
 
   test('turns prefer the precomputed count and fall back to the records', () => {
@@ -246,7 +247,7 @@ describe('filterRows', () => {
 })
 
 describe('sortRows', () => {
-  const cheap = rowOf({ id: 'cheap', updatedAt: 1, timeline: { current: { total: 50 }, cost: COST } as unknown as ContextTimeline })
+  const cheap = rowOf({ id: 'cheap', updatedAt: 1, timeline: { current: { total: 50 }, cost: COST } as unknown as ContextTimeline, familyCost: COST })
   const dear = rowOf({
     id: 'dear',
     updatedAt: 2,
@@ -254,6 +255,7 @@ describe('sortRows', () => {
       current: { total: 900 },
       cost: { deepseek: { m: { peak: { uncached: 1000, cacheRead: 0, cacheWrite: 0, output: 0 } } } },
     } as unknown as ContextTimeline,
+    familyCost: { deepseek: { m: { peak: { uncached: 1000, cacheRead: 0, cacheWrite: 0, output: 0 } } } },
   })
   const plain = rowOf({ id: 'plain', updatedAt: 3 })
 
@@ -446,6 +448,7 @@ describe('kpisOf', () => {
           requests: [],
           timing: { wallMs: 90_000, ttftMs: 1_000, genMs: 30_000, calls: 4, toolsMs: 20_000, toolCalls: 7, tools: {} },
         } as unknown as ContextTimeline,
+        familyCost: COST,
       }),
       rowOf({
         timeline: {
@@ -476,13 +479,14 @@ describe('kpisOf', () => {
 
   test('a session with usage the book cannot price feeds the cache-hit rate but prices to nothing', () => {
     const rows = [
-      rowOf({ timeline: { cost: COST, current: { system: 100, tools: 50, user: 30, inject: 10, skill: 10, assistant: 200, tool: 100, total: 500 }, requests: [] } as unknown as ContextTimeline }),
+      rowOf({ timeline: { cost: COST, current: { system: 100, tools: 50, user: 30, inject: 10, skill: 10, assistant: 200, tool: 100, total: 500 }, requests: [] } as unknown as ContextTimeline, familyCost: COST }),
       rowOf({
         timeline: {
           cost: { openai: { 'gpt-5': { peak: { uncached: 10, cacheRead: 5, cacheWrite: 1, output: 2 } } } },
           current: { system: 10, tools: 0, user: 0, inject: 0, skill: 0, assistant: 0, tool: 0, total: 10 },
           requests: [],
         } as unknown as ContextTimeline,
+        familyCost: { openai: { 'gpt-5': { peak: { uncached: 10, cacheRead: 5, cacheWrite: 1, output: 2 } } } },
       }),
       rowOf(),
     ]
@@ -590,6 +594,105 @@ describe('rowsOfSnapshot: subagent rows', () => {
     ]))
     assert.ok(rows !== null)
     assert.deepEqual(rows.map(r => r.id), ['main'])
+  })
+})
+
+describe('rowsOfSnapshot: the family fold', () => {
+  const COST2: SessionCostUsage = { zhipuai: { m: { peak: { uncached: 300, cacheRead: 0, cacheWrite: 0, output: 0 } } } }
+  /** A minimal head carrying the given billed usage (and a user-only composition). */
+  function billedHead(tokens: number, cost?: SessionCostUsage): Record<string, unknown> {
+    return timelineOf({
+      current: { system: 0, tools: 0, user: tokens, inject: 0, skill: 0, assistant: 0, tool: 0, total: tokens },
+      ...(cost !== undefined ? { cost } : {}),
+    })
+  }
+
+  test('every descendant level folds into the root row’s family — members, cost, and days merge', () => {
+    const rows = rowsOfSnapshot(snapshotOf([
+      ['root', {
+        displayTitle: 'root',
+        projectionValues: {
+          contextTimeline: billedHead(100, COST),
+          contextActivity: { days: { '2026-09-16': { tokens: 5, requests: 1, cost: COST } } },
+        },
+      }],
+      ['kid', {
+        origin: 'subagent', parentId: 'root',
+        projectionValues: {
+          contextTimeline: billedHead(50, COST2),
+          contextActivity: { days: { '2026-09-16': { tokens: 7, requests: 2, cost: COST2 } } },
+        },
+      }],
+      ['grand', {
+        origin: 'subagent', parentId: 'kid',
+        projectionValues: {
+          contextTimeline: billedHead(25),
+          contextActivity: { days: { '2026-09-16': { tokens: 4, requests: 1 }, '2026-09-15': { tokens: 3, requests: 1 } } },
+        },
+      }],
+      ['stranger', { displayTitle: 'unrelated' }],
+    ]))
+    assert.ok(rows !== null)
+    assert.deepEqual(rows.map(r => r.id), ['root', 'stranger'], 'subagent-origin rows stay unlisted')
+    const [root, stranger] = rows
+    assert.equal(root.family.length, 3, 'self + kid + grand — all levels')
+    // COST (200) + COST2 (300) merge; the grandchild carried no cost.
+    assert.equal(billedOf(root), 500)
+    assert.equal(billedOf(stranger), null)
+    // The daily ledgers merge across the subtree, pricing records included.
+    assert.equal(root.activity?.days['2026-09-16'].tokens, 16)
+    assert.equal(root.activity?.days['2026-09-16'].requests, 4)
+    assert.deepEqual(root.activity?.days['2026-09-16'].cost, mergeCostUsage(COST, COST2))
+    assert.equal(root.activity?.days['2026-09-15'].tokens, 3)
+    assert.equal(root.activity?.days['2026-09-15'].cost, undefined)
+    // The composed split proportions each member's OWN composition: the root's
+    // all-user 160 billed input + output 40, the kid's all-user 300 — user 460 / output 40.
+    const parts = tokenPartsOf([root])
+    assert.deepEqual(parts, {
+      total: 500,
+      parts: [
+        { key: 'user', color: 'var(--color-green-500)', value: 460 },
+        { key: 'output', color: 'var(--color-pink-500)', value: 40 },
+      ],
+    })
+  })
+
+  test('an unlisted subtree (a subagent whose root never lists) leaks nowhere', () => {
+    const rows = rowsOfSnapshot(snapshotOf([
+      ['root', { displayTitle: 'root', projectionValues: { contextTimeline: billedHead(1, COST) } }],
+      ['ghost', { origin: 'subagent', parentId: 'missing', projectionValues: { contextTimeline: billedHead(999, COST2) } }],
+    ]))
+    assert.ok(rows !== null)
+    assert.equal(rows.length, 1)
+    assert.equal(billedOf(rows[0]), 200, 'the ghost subtree folds into no row')
+  })
+
+  test('a blank placeholder’s subtree stays out, and a lineage cycle cannot loop the walk', () => {
+    const rows = rowsOfSnapshot(snapshotOf([
+      // The reachable cycle: root points at p and p points back — the walk
+      // must cut at the revisited id (root counts its family, never itself twice).
+      ['root', { displayTitle: 'root', parentId: 'p', projectionValues: { contextTimeline: billedHead(1, COST) } }],
+      ['p', { origin: 'subagent', parentId: 'root', projectionValues: { contextTimeline: billedHead(2, COST2) } }],
+      ['blank', { blank: true, parentId: 'root', projectionValues: { contextTimeline: billedHead(9, COST2) } }],
+      ['under-blank', { origin: 'subagent', parentId: 'blank', projectionValues: { contextTimeline: billedHead(9, COST2) } }],
+    ]))
+    assert.ok(rows !== null)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].family.length, 2, 'root + p once; the blank is no agent and its child never links through')
+    assert.equal(billedOf(rows[0]), 500, 'COST + COST2 — the cycle’s revisit adds nothing twice')
+  })
+
+  test('hostile descendant projections degrade to null members, never a throw', () => {
+    const rows = rowsOfSnapshot(snapshotOf([
+      ['root', { displayTitle: 'root', projectionValues: { contextTimeline: billedHead(1, COST) } }],
+      ['kid', { origin: 'subagent', parentId: 'root', projectionValues: { contextTimeline: 7, contextActivity: 'x' } }],
+      ['junk', 5 as unknown as Record<string, unknown>],
+    ]))
+    assert.ok(rows !== null)
+    assert.equal(rows[0].family.length, 2)
+    assert.equal(rows[0].family[1], null, 'the hostile head sanitizes to null in place')
+    assert.equal(rows[0].activity, null, 'no member carried a ledger → the family has none')
+    assert.equal(billedOf(rows[0]), 200)
   })
 })
 
