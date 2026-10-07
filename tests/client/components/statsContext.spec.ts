@@ -22,7 +22,7 @@ import { makeAgentHeads } from '../../../src/client/agentHeads'
 import { resetModelPrices, setModelPricesLoader } from '../../../src/client/modelPrices'
 import type { ContextEventRecord, ContextTimeline, RequestRecord, SessionCostUsage, SurfaceNode } from '../../../src/shared/types'
 import { TestClientCtx, asClientCtx } from '../helpers/harness'
-import { flush, makeKit, mount, queryAll, text } from '../helpers/kit'
+import { click, flush, makeKit, mount, query, queryAll, text } from '../helpers/kit'
 
 const kit = makeKit()
 const kitZh = makeKit('zh')
@@ -189,7 +189,7 @@ describe('StatsContext', () => {
     assert.ok(text(m.container).includes('Context Stats'))
     const nodes = flowNodes(m.container)
     const { labels, totals } = headsOf(m.container)
-    assert.deepEqual(labels, ['Input / Output', 'Context Events', 'Tool Calls', 'Agent Team?'])
+    assert.deepEqual(labels, ['Input / Output', 'Context Events', 'Tool Calls', 'Agent Network?'])
     // I/O totals the inputs plus every file op (7 + 9 + 2 + 4 + 1); the family's 1M
     // uncached input bills the doubled peak rate — the team's header pairs its tokens with it.
     assert.deepEqual(totals, ['23', '6', '12', '1.0M/$0.30'])
@@ -358,7 +358,7 @@ describe('StatsContext', () => {
     assert.ok(text(m.container).includes('上下文统计'))
     const nodes = flowNodes(m.container)
     const { labels, totals } = headsOf(m.container)
-    assert.deepEqual(labels, ['输入输出', '上下文事件', '工具调用', 'Agent 团队?'])
+    assert.deepEqual(labels, ['输入输出', '上下文事件', '工具调用', 'Agent 网络?'])
     // $0.30 / 0.15 = ¥2; the rates convert through the same fixed rate.
     assert.deepEqual(totals, ['3', '1', '2', '1.0M/¥2.00'])
     assert.deepEqual(pillsOf(nodes[0]), ['用户输入?0', '读取2', '写入1'])
@@ -479,6 +479,48 @@ describe('StatsContext', () => {
     assert.ok(rows.every(r => !r.includes('|')))
     // Both buckets bill at list price: 2M × $0.075 — no half-price off-peak.
     assert.ok(headsOf(m.container).totals[3] === '2.0M/$0.15')
+    await m.unmount()
+  })
+
+  test('clicking the team card scrolls its Agent-network namesake into view; the price link stays out of it', async () => {
+    const m = await mount(h('div', { className: 'lc-root', style: { overflowY: 'auto' } },
+      h(StatsContext, { counts: NO_COUNTS, files: NO_FILES, tools: [], cost: COST, locale: 'en' }),
+      h('div', { className: 'lc-agents' }),
+    ))
+    await flush()
+    const root = query(m.container, '.lc-root')
+    const agents = query(m.container, '.lc-agents')
+    // jsdom reports 0 for both — the wrapper must overflow to be the operative scroller.
+    Object.defineProperty(root, 'scrollHeight', { value: 500 })
+    Object.defineProperty(root, 'clientHeight', { value: 200 })
+    agents.getBoundingClientRect = () => ({ top: 120 }) as DOMRect
+    const team = query(m.container, '.lc-flow-team')
+    // A click on the card body lands the namesake flush at the scrollport top.
+    await click(team)
+    assert.equal(root.scrollTop, 120)
+    // A click inside the price link keeps the link's own navigation — never a scroll.
+    root.scrollTop = 0
+    await click(query(m.container, 'a.lc-flow-head'))
+    assert.equal(root.scrollTop, 0, 'the price link never triggers the reveal')
+    // Keyboard parity: Enter/Space reveal, anything else stays quiet.
+    team.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    assert.equal(root.scrollTop, 120)
+    root.scrollTop = 0
+    team.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }))
+    assert.equal(root.scrollTop, 0)
+    await m.unmount()
+  })
+
+  test('without the namesake card a click is a quiet no-op', async () => {
+    // No .lc-root ancestor at all.
+    const bare = await mount(h(StatsContext, { counts: NO_COUNTS, files: NO_FILES, tools: [], cost: COST, locale: 'en' }))
+    await click(query(bare.container, '.lc-flow-team'))
+    await bare.unmount()
+    // A .lc-root without the Agent network card in it (a harness that hides it).
+    const m = await mount(h('div', { className: 'lc-root' },
+      h(StatsContext, { counts: NO_COUNTS, files: NO_FILES, tools: [], cost: COST, locale: 'en' }),
+    ))
+    await click(query(m.container, '.lc-flow-team'))
     await m.unmount()
   })
 })

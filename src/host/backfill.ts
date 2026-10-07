@@ -46,6 +46,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { interruptedTurnClosers, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
+import { type ColdReadGate, makeColdReadGate } from './coldRead'
 
 /** The plugin's warm-up trigger route, under the authenticated `/api` fence. */
 export const BACKFILL_ROUTE = '/api/dsh-context/backfill'
@@ -232,9 +233,12 @@ function messageOf(error: unknown): string {
  * when the dashboard first opens; the cold-path faces compose `launch`.
  * Either half may land first; the first request after both launches the one
  * pass, and every later request is a no-op. Returns the deferred injects'
- * disposer (abort on unload).
+ * disposer (abort on unload). Every cold read runs through the shared
+ * host-wide gate (coldRead.ts): one read at a time, and the pass stops
+ * early when the gate skips under heap pressure — folded rows persist and
+ * every remaining session keeps its on-demand refold paths.
  */
-export function watchActivityBackfill(ctx: Context): () => void {
+export function watchActivityBackfill(ctx: Context, coldReads: ColdReadGate = makeColdReadGate()): () => void {
   let requested = false
   let started = false
   let launch: (() => void) | null = null
@@ -292,6 +296,7 @@ export function watchActivityBackfill(ctx: Context): () => void {
       if (!Array.isArray(listed)) return
       let folded = 0
       let refused = 0
+      let paused = false
       for (const record of listed) {
         if (abort.signal.aborted) return
         const header = headerOf(record)
@@ -299,10 +304,20 @@ export function watchActivityBackfill(ctx: Context): () => void {
         if (isLive(sessions, header.id)) continue
         if (servesRows(cache as unknown as ProjectionCacheLike, header)) continue
         try {
-          const log = await readColdLog(persistence as unknown as PersistenceLike, header.id, abort.signal)
-          // The handle's header is authoritative (fixed at open); the listed
-          // one was only the probe's identity witness.
-          ;(cache as unknown as ProjectionCacheLike).coldSnapshot(log.header, log.inheritedEventCount, log.events)
+          const admitted = await coldReads.admit(async () => {
+            const log = await readColdLog(persistence as unknown as PersistenceLike, header.id, abort.signal)
+            // The handle's header is authoritative (fixed at open); the listed
+            // one was only the probe's identity witness.
+            ;(cache as unknown as ProjectionCacheLike).coldSnapshot(log.header, log.inheritedEventCount, log.events)
+            return true
+          })
+          if (admitted === undefined) {
+            // Skipped under heap pressure: end the pass here — pressure does
+            // not fall within a pacing tick, so hammering the gate per
+            // remaining session only delays the host's own work.
+            paused = true
+            break
+          }
           folded++
         } catch (error: unknown) {
           if (isUnsupportedFormat(error)) {
@@ -318,6 +333,9 @@ export function watchActivityBackfill(ctx: Context): () => void {
         await new Promise(resolve => setTimeout(resolve, YIELD_MS))
       }
       if (folded > 0) ctx.logger.info(`dsh-context: projection rows backfilled for ${folded} session(s)`)
+      if (paused) {
+        ctx.logger.info('dsh-context: projection backfill stopped early under heap pressure (remaining sessions refold on their next live activity)')
+      }
       if (refused > 0) {
         ctx.logger.info(`dsh-context: projection backfill skipped ${refused} session(s) (legacy log format is not migratable; sources left unchanged)`)
       }

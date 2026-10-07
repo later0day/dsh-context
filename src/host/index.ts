@@ -25,6 +25,7 @@ import { createContextActivityDefinition } from './activity'
 import { createToolAttribution } from './attribution'
 import { watchBalanceChannel } from './balance'
 import { watchActivityBackfill } from './backfill'
+import { makeColdReadGate } from './coldRead'
 import { Config, resolveBounds } from './config'
 import { watchDetailChannel } from './detail'
 import { createFallbackActivityDefinition, createFallbackHeadersDefinition, createFallbackTimelineDefinition } from './fallback'
@@ -76,11 +77,16 @@ export function apply(ctx: Context, config: Config): void {
   // for any pre-step message that would persist unidentified — the harness's
   // load path refuses such events wholesale, permanently bricking the session.
   watchStepIdentity(ctx)
+  // The host-wide cold-read governor (coldRead.ts, issue #121): the detail
+  // route's cold rung and the overview warm-up share one FIFO + heap
+  // high-water mark, so the plugin's own log decodes never stack on a hot
+  // heap — each skipped read takes its caller's designed no-data path.
+  const coldReads = makeColdReadGate()
   // The split wire generation (detail.ts): the detail channel arms whenever
   // the connection/sessions/webServer services compose (load order never
   // assumed), and the unit's view reads the gate per serve — slim while the
   // channel is live, inline otherwise.
-  const gate = watchDetailChannel(ctx, resolveBounds(config))
+  const gate = watchDetailChannel(ctx, resolveBounds(config), coldReads)
   ctx.sessionProjections.register(createContextTimelineDefinition(config, () => gate.live))
   ctx.sessionProjections.register(createContextHeadersDefinition(name => attribution.ownerOf(name)))
   ctx.sessionProjections.register(createContextActivityDefinition())
@@ -88,7 +94,7 @@ export function apply(ctx: Context, config: Config): void {
   // a unit existed get their rows from one background cold read each, run on
   // demand — the dashboard (the rows' only reader) summons the pass through
   // the plugin's fetch route the first time it opens.
-  watchActivityBackfill(ctx)
+  watchActivityBackfill(ctx, coldReads)
   installSettings(ctx)
 }
 

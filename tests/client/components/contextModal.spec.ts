@@ -282,7 +282,8 @@ describe('ContextModal', () => {
     await m.unmount()
   })
 
-  test('the mask docks beside the frame ancestor, follows template rewrites, and disconnects on close', async () => {
+  test('the mask docks between the frame sidebars, follows template rewrites, and disconnects on close', async () => {
+    vi.stubGlobal('innerWidth', 1280)
     const sessions = new TestSessions()
     const ctx = new TestClientCtx({ services: { sessions } })
     const ContextModal = makeContextModal(asClientCtx(ctx), kit, settings)
@@ -290,7 +291,7 @@ describe('ContextModal', () => {
     // The shell frame: the plugin matches its INLINE grid template, the one
     // host anchor carried by every supported baseline (dockMeasure.ts).
     const frame = document.createElement('div')
-    frame.style.gridTemplateColumns = '280px minmax(0, 1fr) 360px'
+    frame.style.gridTemplateColumns = '280px minmax(400px, 1fr) minmax(0px, 360px)'
     const seat = document.createElement('div')
     frame.appendChild(seat)
     document.body.appendChild(frame)
@@ -307,14 +308,19 @@ describe('ContextModal', () => {
     await act(async () => {
       modalStoreOf(sid).set(true)
     })
-    assert.equal(query(m.container, '.lc-modal-backdrop').style.left, '280px')
+    const backdrop = query(m.container, '.lc-modal-backdrop')
+    assert.equal(backdrop.style.left, '280px')
+    assert.equal(backdrop.style.right, '360px')
 
-    // A sidebar collapse rewrite while open is followed through the observer.
+    // A sidebar rewrite while open (the right panel closed here) is followed
+    // through the observer on both edges.
     await act(async () => {
-      frame.style.gridTemplateColumns = '56px minmax(0, 1fr) 360px'
+      frame.style.gridTemplateColumns = '56px minmax(0px, 1fr) minmax(0px, 0px)'
     })
     await flush()
-    assert.equal(query(m.container, '.lc-modal-backdrop').style.left, '56px')
+    const rewritten = query(m.container, '.lc-modal-backdrop')
+    assert.equal(rewritten.style.left, '56px')
+    assert.equal(rewritten.style.right, '0px')
 
     disconnectSpy.mockClear()
     await click(query(m.container, '.lc-modal-backdrop'))
@@ -332,7 +338,9 @@ describe('ContextModal', () => {
       useContextModal: OPEN,
       useProjection: () => undefined,
     }))
-    assert.equal(query(m.container, '.lc-modal-backdrop').style.left, '0px')
+    const backdrop = query(m.container, '.lc-modal-backdrop')
+    assert.equal(backdrop.style.left, '0px')
+    assert.equal(backdrop.style.right, '0px')
     await m.unmount()
   })
 

@@ -739,4 +739,46 @@ describe('watchActivityBackfill', () => {
     await new Promise(resolve => setTimeout(resolve, 30))
     dispose()
   })
+
+  test('every cold read runs through the shared gate, and a skip stops the pass early', async () => {
+    const ctx = new Context()
+    const state = fakeState([
+      { header: { id: 'a', cwd: '/repo/a' } },
+      { header: { id: 'b', cwd: '/repo/b' } },
+      { header: { id: 'c', cwd: '/repo/c' } },
+    ])
+    const route = arm(ctx, state)
+    const lines = captureLogs(ctx)
+    let admitted = 0
+    const dispose = watchActivityBackfill(ctx, {
+      // The first read runs; every later one is skipped (the heap-pressure answer).
+      admit: <T>(read: () => Promise<T>): Promise<T | undefined> => {
+        admitted++
+        return admitted === 1 ? read() : Promise.resolve(undefined)
+      },
+    })
+    await trigger(route)
+    await until(() => (lines.some(l => l.text.includes('heap pressure')) ? true : undefined), 'the early-stop line')
+    await new Promise(resolve => setTimeout(resolve, 40))
+    dispose()
+    assert.deepEqual(state.coldReads, ['a'], 'the pass stopped at the first skip')
+    assert.deepEqual(state.coldSnapshots, ['a'], 'the folded session kept its row')
+    assert.equal(admitted, 2, 'one run plus one skip — the loop did not hammer the gate')
+    assert.ok(lines.some(l => l.level === 'info' && l.text.includes('backfilled for 1 session(s)')), 'the folded count still reports')
+    assert.ok(lines.some(l => l.level === 'info' && l.text.includes('stopped early under heap pressure')), 'the early stop reports once')
+  })
+
+  test('a pass admitted under pressure from the start folds nothing and says so', async () => {
+    const ctx = new Context()
+    const state = fakeState([{ header: { id: 'a', cwd: '/repo/a' } }])
+    const route = arm(ctx, state)
+    const lines = captureLogs(ctx)
+    const dispose = watchActivityBackfill(ctx, { admit: () => Promise.resolve(undefined) })
+    await trigger(route)
+    await until(() => (lines.some(l => l.text.includes('heap pressure')) ? true : undefined), 'the early-stop line')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    dispose()
+    assert.deepEqual(state.coldReads, [], 'nothing was read')
+    assert.equal(lines.filter(l => l.text.includes('heap pressure')).length, 1, 'one line, not one per session')
+  })
 })

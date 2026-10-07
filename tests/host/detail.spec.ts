@@ -267,6 +267,42 @@ describe('the detail route', () => {
     assert.equal(result.error.message, 'persistence down')
   })
 
+  test('a cold read skipped under heap pressure answers the typed null (and never observes)', async () => {
+    let observed = 0
+    const { ctx, captured } = ctxOf({
+      connection: { fetch: { register: () => () => {} } },
+      sessions: sessionsWith(okSession()),
+      stateOf: () => undefined,
+      sessionQuery: {
+        observeSession: () => {
+          observed++
+          return Promise.resolve({ events: [] })
+        },
+      },
+    })
+    let admitted = 0
+    watchDetailChannel(ctx, BOUNDS, {
+      admit: <T>(_read: () => Promise<T>): Promise<T | undefined> => {
+        admitted++
+        return Promise.resolve(undefined)
+      },
+    })
+    assert.deepEqual(await call(captured, { sessionId: 'cold1' }), { ok: true, value: null })
+    assert.equal(admitted, 1, 'the cold read went through the gate')
+    assert.equal(observed, 0, 'a skipped read never touches the log')
+  })
+
+  test('the live path never touches the cold-read gate', async () => {
+    const { state } = driveTimeline([userMessage(1, [{ type: 'text', text: 'hi' }], { kind: 'user' })])
+    const { ctx, captured } = liveCtx(state)
+    watchDetailChannel(ctx, BOUNDS, {
+      admit: () => Promise.reject(new Error('the gate must not see a live read')),
+    })
+    const result = await call(captured, { sessionId: 's1' }) as { ok: boolean; value: { rev: number } | null }
+    assert.equal(result.ok, true)
+    assert.ok(result.value !== null, 'the live read served its detail without the gate')
+  })
+
   test('serves the fold state\'s detail payload with its revision', async () => {
     const { state } = driveTimeline([
       header(1, { model: 'deepseek-v4-flash', provider: 'deepseek' }),

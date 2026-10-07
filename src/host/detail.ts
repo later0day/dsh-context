@@ -37,6 +37,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { FoldBounds } from './config'
+import { type ColdReadGate, makeColdReadGate } from './coldRead'
 import { applyTimeline, buildTimelineDetail, createTimelineState } from './fold'
 
 /** The plugin's detail route, under the authenticated `/api` fence. */
@@ -90,7 +91,7 @@ function failure(code: string, message: string): Response {
  * registration rides the injected fiber: either service unloading withdraws
  * the route and closes the gate.
  */
-export function watchDetailChannel(ctx: Context, bounds: FoldBounds): DetailChannelGate {
+export function watchDetailChannel(ctx: Context, bounds: FoldBounds, coldReads: ColdReadGate = makeColdReadGate()): DetailChannelGate {
   const gate = { live: false }
   ctx.inject(['connection', 'sessions'], (c) => {
     const connection = c.get('connection') as ConnectionHostFace | undefined
@@ -131,24 +132,30 @@ export function watchDetailChannel(ctx: Context, bounds: FoldBounds): DetailChan
         // Cold session (viewed through a prepared observation, never entered
         // into the live store): observe it and fold the detail from its
         // immutable log. The lease disposes promptly; the query's prepared
-        // cache retains the session for reuse. A session nothing can observe
-        // resolves to the typed null — the client keeps its last detail.
+        // cache retains the session for reuse. The read runs through the
+        // shared cold-read gate (coldRead.ts): one log decode at a time
+        // host-wide, and a skip under heap pressure resolves to the same
+        // typed null as a session nothing can observe — the client keeps
+        // its last detail either way.
         const query = ctx.get('sessionQuery') as SessionQueryFace | undefined
         const observe = typeof query?.observeSession === 'function'
           ? query.observeSession.bind(query)
           : undefined
         if (observe === undefined) return reply({ ok: true, value: null })
-        const observation = await observe(sessionId, { projectionMode: 'none' })
-        const events = (observation as { events?: unknown } | null)?.events
-        if (!Array.isArray(events)) return reply({ ok: true, value: null })
-        let state = createTimelineState()
-        try {
-          for (const ev of events) state = applyTimeline(state, ev as never, bounds)
-        } finally {
-          const dispose = (observation as { [Symbol.dispose]?: unknown } | null)?.[Symbol.dispose]
-          if (typeof dispose === 'function') dispose.call(observation)
-        }
-        return reply({ ok: true, value: buildTimelineDetail(state, bounds) })
+        const value = await coldReads.admit(async () => {
+          const observation = await observe(sessionId, { projectionMode: 'none' })
+          const events = (observation as { events?: unknown } | null)?.events
+          if (!Array.isArray(events)) return null
+          let state = createTimelineState()
+          try {
+            for (const ev of events) state = applyTimeline(state, ev as never, bounds)
+          } finally {
+            const dispose = (observation as { [Symbol.dispose]?: unknown } | null)?.[Symbol.dispose]
+            if (typeof dispose === 'function') dispose.call(observation)
+          }
+          return buildTimelineDetail(state, bounds)
+        })
+        return reply({ ok: true, value: value ?? null })
       } catch (err) {
         return failure('gateway/internal', err instanceof Error ? err.message : String(err))
       }

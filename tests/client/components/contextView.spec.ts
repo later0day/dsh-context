@@ -1348,10 +1348,13 @@ describe('ContextView — chat→Context jump', () => {
 
     // The jump remount: restore applies 42, then the jump resolves and the
     // reveal scrolls the composition card to the scrollport's top (42 + 350).
+    // jsdom reports 0 for both — the scroller must overflow to be operative.
     requestContextFocus('sv-jumpscroll', 4)
     const scroller2 = document.createElement('div')
     scroller2.setAttribute('data-conversation-scroll', '')
     scroller2.style.overflowY = 'auto'
+    Object.defineProperty(scroller2, 'scrollHeight', { value: 800 })
+    Object.defineProperty(scroller2, 'clientHeight', { value: 300 })
     const m2 = await mountInScroller(h(View, props), scroller2)
     assert.equal(scroller2.scrollTop, 392, 'restore(42) overridden by the card reveal delta(350)')
     assert.ok(query(m2.container, '.lc-bar[data-seq="4"]').className.includes('lc-bar-selected'))

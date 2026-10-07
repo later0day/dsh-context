@@ -32,7 +32,7 @@
  * (`countsOfRecords`). The card itself never touches the collections.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from 'react'
 import type { ContextEventRecord, ContextTimeline, RequestRecord, SessionCostUsage, SurfaceNode, TimelineCounts } from '../../shared/types'
 import { estimateSessionCost, billedTokensOf, formatCost, formatPriceRate, mergeCostUsage, priceFaceOf, toCurrency } from '../cost'
 import type { CostCurrency, ModelBook, PriceFace } from '../cost'
@@ -40,6 +40,7 @@ import { sessionsFaceOf, subagentCostFoldOf } from '../agentTree'
 import type { AgentHeads } from '../agentHeads'
 import { useSessionsSnapshot } from '../agentHeads'
 import { useModelPrices } from '../modelPrices'
+import { revealInScrollParent } from '../revealScroll'
 import { asRecord, type ClientCtx } from '../services'
 import { isDeepSeekProvider } from '../../shared/providers'
 import type { ViewKit } from '../viewkit'
@@ -433,6 +434,24 @@ export function makeStatsContext(
     const costText = cost === null ? '—' : formatCost(cost, currency)
     const ownText = ownCost === null ? '—' : formatCost(ownCost, currency)
     const subText = subCost === null ? '—' : formatCost(subCost, currency)
+    // The card's namesake sits at the tab's foot (the Agent network card):
+    // a click anywhere OUTSIDE the price link scrolls it into view (a quiet
+    // no-op when the harness hides that card — no sessions service — or the
+    // page itself cannot scroll, revealScroll.ts). The price link and the
+    // '?' hover tips keep their own behavior untouched.
+    const revealAgents = (): void => {
+      const agents = flowRef.current?.closest('.lc-root')?.querySelector('.lc-agents') ?? null
+      if (agents !== null) revealInScrollParent(agents)
+    }
+    const onTeamClick = (ev: MouseEvent): void => {
+      if ((ev.target as HTMLElement).closest('a') !== null) return
+      revealAgents()
+    }
+    const onTeamKeyDown = (ev: KeyboardEvent): void => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return
+      ev.preventDefault()
+      revealAgents()
+    }
     // The I/O card's total: the user's own inputs plus every file op.
     const ioTotal = (props.humanInputs ?? 0) + props.files.reads + props.files.writes + props.files.searches + props.files.images
     // The tool card: the head's live tally figure (the tools' own tally sums
@@ -508,8 +527,15 @@ export function makeStatsContext(
                 )
                 : null}
             </div>
-            <div className="lc-flow-node" ref={nodeRef('cost')}>
-              {head(t('stats.team'), pair(familyTokens, costText), costTip, costHref)}
+            <div
+              className="lc-flow-node lc-flow-team"
+              ref={nodeRef('cost')}
+              role="button"
+              tabIndex={0}
+              onClick={onTeamClick}
+              onKeyDown={onTeamKeyDown}
+            >
+              {head(t('agents.title'), pair(familyTokens, costText), costTip, costHref)}
               {/* The team ledger: one row per scope — the current agent itself,
                   then the subagent subtree (its session count from the same
                   fold). A scope with nothing billed reads 0 tokens / a dashed

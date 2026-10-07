@@ -160,6 +160,11 @@ a.lc-flow-head:hover .lc-flow-label { color: var(--dsw-alias-label-primary); }
 .lc-flow-pair { margin-left: auto; flex: none; display: inline-flex; align-items: baseline; gap: 5px; font-variant-numeric: tabular-nums; }
 .lc-flow-pair b { font-weight: 700; color: var(--dsw-alias-label-primary); }
 .lc-flow-pair i { font-style: normal; opacity: 0.55; }
+/* The Agent Network team card doubles as a jump to its namesake at the tab's
+   foot: pointer plus the stat cell's anchor-hover edge (statsContext.tsx —
+   the price link inside keeps its own behavior and never scrolls). */
+.lc-flow-team { cursor: pointer; }
+.lc-flow-team:hover { border-color: var(--dsw-alias-label-secondary); }
 /* The session node: the diagram's pivot — raised surface, brand-tinted edge
    and halo, the two shape figures centered under the label. */
 .lc-flow-self { background: var(--dsw-alias-bg-layer-1); border-color: color-mix(in srgb, var(--dsw-alias-brand-primary) 40%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 8%, transparent); padding: 8px 14px; align-items: center; gap: 4px; }

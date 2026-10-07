@@ -54,9 +54,9 @@ export function makeContextModal(
     // order stays stable across open/close).
     const convNodes = conversationNodesOf(props)
     const [hoverCat, setHoverCat] = useState<string | null>(null)
-    // Dock the mask beside the shell sidebar: 0 until the frame measure lands
-    // (the layout effect below resolves it before first paint).
-    const [dockLeft, setDockLeft] = useState(0)
+    // Dock the mask between the shell sidebars: 0s until the frame measure
+    // lands (the layout effect below resolves it before first paint).
+    const [dock, setDock] = useState({ left: 0, right: 0 })
     const backdropRef = useRef<HTMLDivElement | null>(null)
     // Session-authorized durable-image loader for the browser's attachment cards, resolved through the harness `uiConversation` service
     // (`imageUrl`); absent service/session degrades the cards to metadata-only, never an error. Same parity as the Context tab.
@@ -97,17 +97,18 @@ export function makeContextModal(
     // Capture-phase Escape close + focus restore (the shared overlay contract).
     useEscapeClose(open, close)
 
-    // Dock the mask to the main column: measure the sidebar track once before
-    // first paint, then follow the frame's inline template while open (sidebar
-    // drags, collapse toggles and narrow-viewport re-solves all rewrite it).
-    // An unresolved frame keeps the full-viewport mask.
+    // Dock the mask to the main column: measure the sidebar tracks once
+    // before first paint, then follow the frame's inline template while open
+    // (either sidebar's drags, collapse toggles and narrow-viewport re-solves
+    // all rewrite it). An unresolved frame keeps the full-viewport mask.
     useLayoutEffect(() => {
       if (!open) return undefined
       const dock = measureDock(backdropRef.current)
-      setDockLeft(dock.left)
+      setDock({ left: dock.left, right: dock.right })
       if (dock.frame === null) return undefined
       const observer = new MutationObserver(() => {
-        setDockLeft(measureDock(backdropRef.current).left)
+        const next = measureDock(backdropRef.current)
+        setDock({ left: next.left, right: next.right })
       })
       observer.observe(dock.frame, { attributes: true, attributeFilter: ['style'] })
       return () => { observer.disconnect() }
@@ -119,7 +120,7 @@ export function makeContextModal(
     const subtitle = data !== null ? (data.model ? data.model : '') + (data.provider ? ' · ' + data.provider : '') : ''
 
     return (
-      <div ref={backdropRef} className="lc-modal-backdrop" style={{ left: dockLeft }} onClick={close}>
+      <div ref={backdropRef} className="lc-modal-backdrop" style={{ left: dock.left, right: dock.right }} onClick={close}>
         <div className="lc-modal-card" onClick={(ev) => { ev.stopPropagation() }}>
           <div className="lc-modal-head">
             <span className="lc-modal-title">{t('tab')}</span>
