@@ -1,9 +1,5 @@
-// The on-demand detail route (src/host/detail.ts): the nested-inject gating
-// on the connection/sessions faces (load-order independent), the gate's live
-// flip on unload, and the route's typed outcomes — the detail payload off the
-// live fold state, the typed `null` for a gone session or an absent unit, and
-// the failure envelope for bad payloads and hostile reads (the route must
-// never throw into the transport).
+// The on-demand detail route (src/host/detail.ts) and its gate: the nested-inject gating on the connection/sessions faces (load-order
+// independent), the live flip on unload, and typed outcomes — never a throw into the transport.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -25,11 +21,9 @@ interface CtxSpec {
   stateOf?: (session: unknown, key: string) => unknown
 }
 
-/**
- * A minimal host ctx double with cordis inject semantics: the callback runs
+/** A minimal host ctx double with cordis inject semantics: the callback runs
  * once its dependency list completes (here: immediately when the services
- * map has them, never otherwise), and its returned disposer is collected.
- */
+ * map has them, never otherwise), and its returned disposer is collected. */
 function ctxOf(spec: CtxSpec): { ctx: Context; captured: { path?: string; fetch?: RouteFetch }; disposers: (() => void)[] } {
   const captured: { path?: string; fetch?: RouteFetch } = {}
   const disposers: (() => void)[] = []
@@ -65,7 +59,6 @@ function ctxOf(spec: CtxSpec): { ctx: Context; captured: { path?: string; fetch?
   return { ctx: ctx as unknown as Context, captured, disposers }
 }
 
-/** POST one JSON body to the captured route and parse the JSON reply. */
 async function call(captured: { fetch?: RouteFetch }, body: unknown): Promise<Record<string, unknown>> {
   const request = new Request(`http://dsh.test${DETAIL_ROUTE}`, {
     method: 'POST',
@@ -76,7 +69,6 @@ async function call(captured: { fetch?: RouteFetch }, body: unknown): Promise<Re
   return await response.json() as Record<string, unknown>
 }
 
-/** POST one raw (non-JSON) body to the captured route. */
 async function callRaw(captured: { fetch?: RouteFetch }, body: string): Promise<Record<string, unknown>> {
   const request = new Request(`http://dsh.test${DETAIL_ROUTE}`, {
     method: 'POST',
@@ -86,7 +78,6 @@ async function callRaw(captured: { fetch?: RouteFetch }, body: string): Promise<
   return await captured.fetch!(request).then(r => r.json()) as Record<string, unknown>
 }
 
-/** A live sessions face whose get() serves the `s1` id only. */
 function sessionsWith(session: unknown): { get(id: string): unknown } {
   return { get: (id: string) => (id === 's1' ? session : undefined) }
 }
@@ -97,11 +88,8 @@ function okSession(): object {
 
 describe('watchDetailChannel gating', () => {
   test('the gate stays closed without the connection or sessions service', () => {
-    // Neither service.
     assert.equal(watchDetailChannel(ctxOf({}).ctx, BOUNDS).live, false)
-    // Sessions only.
     assert.equal(watchDetailChannel(ctxOf({ sessions: sessionsWith(okSession()) }).ctx, BOUNDS).live, false)
-    // Connection only.
     const connOnly = ctxOf({ connection: { fetch: { register: () => () => {} } } })
     assert.equal(watchDetailChannel(connOnly.ctx, BOUNDS).live, false)
     // A connection without the fetch.register face, or a sessions without get.

@@ -1,7 +1,3 @@
-// One session card in the overview grid (src/client/components/
-// overviewCard.tsx): the full-data rendering (donut, occupancy, mini
-// stats), the metadata-only degradation, the markers, and the open relay.
-
 import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -46,7 +42,6 @@ describe('OverviewCard', () => {
     assert.ok(!card.className.includes('lc-ov-session-current'))
     assert.equal(query(m.container, '.lc-ov-session-title').textContent, 'refactor the parser')
     assert.equal(query(m.container, '.lc-ov-session-time').textContent, '3h ago')
-    // The mini donut: center carries the current total and the window share.
     assert.equal(query(m.container, '.lc-donut-center b').textContent, '500')
     assert.equal(query(m.container, '.lc-donut-center span').textContent, '50.0%')
     // The three mini stats: turns+steps lead, then the team's billed, then its cost.

@@ -1,6 +1,4 @@
-// Display formatting (src/client/format.ts): the k/M/B suffix style, byte
-// sizes, the cache-hit truncation, locale-safe time, locale-unit durations,
-// and leading slice shares.
+// Display formatting (src/client/format.ts): the k/M/B suffix style, byte sizes, and locale-safe time/duration/share formatting.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'

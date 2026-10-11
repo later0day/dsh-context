@@ -1,14 +1,11 @@
-// Settings binding (src/client/settings.ts): defaults, the observable store,
-// scope attach/sync, preference parsing, and the local-echo set path.
+// Settings binding (src/client/settings.ts): the local-echo store over the harness configForms section.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import { createContextSettings, type SettingsScopeLike } from '../../src/client/settings'
 
-/**
- * A faithful in-memory settings scope (the harness settingsScope.bind
- * contract: getSnapshot/subscribe/set), not a mock of plugin code.
- */
+/** A faithful in-memory settings form (the harness configForms.get contract:
+ * getSnapshot/subscribe/set), not a mock of plugin code. */
 class TestSettingsScope implements SettingsScopeLike {
   private snapshot: { status: string; value: unknown; writable: boolean }
   private readonly listeners = new Set<() => void>()
@@ -55,6 +52,9 @@ describe('createContextSettings defaults', () => {
       fileSort: 'count',
       insightsEntry: 'show',
       durationCurve: 'show',
+      fleetTab: 'show',
+      promptPrefix: '',
+      promptSuffix: '',
       writable: false,
     })
     assert.equal(s.defaultPlacement(), 'all')
@@ -65,6 +65,7 @@ describe('createContextSettings defaults', () => {
     assert.equal(s.defaultFileSort(), 'count')
     assert.equal(s.insightsEntry(), 'show')
     assert.equal(s.defaultDurationCurve(), 'show')
+    assert.equal(s.fleetTab(), 'show')
   })
 })
 
@@ -91,6 +92,8 @@ describe('set', () => {
     assert.equal(s.defaultPlacement(), 'sidebar')
     s.set('defaultDeltaBase', 'turn')
     assert.equal(s.defaultDeltaBase(), 'turn')
+    s.set('promptPrefix', 'Be terse.')
+    assert.equal(s.store.getSnapshot().promptPrefix, 'Be terse.')
   })
 
   test('an unchanged value does not notify listeners', () => {
@@ -145,8 +148,7 @@ describe('set', () => {
 
   test('a rejected placement write degrades to all when the scope carries no valid value', async () => {
     // Fail open: the unpersisted echo must not keep hiding an entry until
-    // the next reload — with nothing valid in the scope's truth, fall back
-    // to `all`.
+    // the next reload — with nothing valid in the scope's truth, fall back to `all`.
     const s = createContextSettings()
     const scope = new TestSettingsScope({ status: 'ready', value: {}, writable: true })
     s.attach(scope)
@@ -158,8 +160,7 @@ describe('set', () => {
   })
 
   test('a rejected placement write rolls back to the scope\'s valid truth', async () => {
-    // The scope truth itself is a valid placement: the rollback restores it,
-    // no forced degrade.
+    // The scope truth itself is a valid placement: the rollback restores it, no forced degrade.
     const s = createContextSettings()
     const scope = new TestSettingsScope({ status: 'ready', value: { defaultPlacement: 'sidebar' }, writable: true })
     s.attach(scope)
@@ -170,9 +171,6 @@ describe('set', () => {
   })
 
   test('a rejected insights-entry write degrades to show when the scope carries no valid value', async () => {
-    // Fail open: the unpersisted echo must not keep the panel's entry hidden
-    // until the next reload — with nothing valid in the scope's truth, fall
-    // back to `show`.
     const s = createContextSettings()
     const scope = new TestSettingsScope({ status: 'ready', value: {}, writable: true })
     s.attach(scope)
@@ -192,6 +190,38 @@ describe('set', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     assert.equal(s.insightsEntry(), 'hide')
   })
+
+  test('a rejected fleet-tab write degrades to show when the scope carries no valid value', async () => {
+    const s = createContextSettings()
+    const scope = new TestSettingsScope({ status: 'ready', value: {}, writable: true })
+    s.attach(scope)
+    scope.failSet = true
+    s.set('fleetTab', 'hide')
+    assert.equal(s.fleetTab(), 'hide', 'the optimistic echo lands first')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(s.fleetTab(), 'show', 'an unpersisted hide must not keep the tab away')
+  })
+
+  test('a rejected fleet-tab write rolls back to the scope\'s valid truth', async () => {
+    const s = createContextSettings()
+    const scope = new TestSettingsScope({ status: 'ready', value: { fleetTab: 'hide' }, writable: true })
+    s.attach(scope)
+    scope.failSet = true
+    s.set('fleetTab', 'show')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(s.fleetTab(), 'hide')
+  })
+
+  test('a rejected prompt write rolls back to the scope truth', async () => {
+    const s = createContextSettings()
+    const scope = new TestSettingsScope({ status: 'ready', value: { promptPrefix: 'kept' }, writable: true })
+    s.attach(scope)
+    scope.failSet = true
+    s.set('promptPrefix', 'draft')
+    assert.equal(s.store.getSnapshot().promptPrefix, 'draft', 'the optimistic echo lands first')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(s.store.getSnapshot().promptPrefix, 'kept', 'the echo rolls back to the scope truth')
+  })
 })
 
 describe('attach', () => {
@@ -208,6 +238,9 @@ describe('attach', () => {
         defaultFileSort: 'path',
         insightsEntry: 'hide',
         defaultDurationCurve: 'hide',
+        fleetTab: 'hide',
+        promptPrefix: 'Be terse.',
+        promptSuffix: 'Sign as Atlas.',
       },
       writable: true,
     })
@@ -222,6 +255,9 @@ describe('attach', () => {
       fileSort: 'path',
       insightsEntry: 'hide',
       durationCurve: 'hide',
+      fleetTab: 'hide',
+      promptPrefix: 'Be terse.',
+      promptSuffix: 'Sign as Atlas.',
       writable: true,
     })
   })
@@ -254,6 +290,9 @@ describe('attach', () => {
         fileSort: 'count',
         insightsEntry: 'show',
         durationCurve: 'show',
+        fleetTab: 'show',
+        promptPrefix: '',
+        promptSuffix: '',
         writable: false,
       })
     }
@@ -263,7 +302,7 @@ describe('attach', () => {
     const s = createContextSettings()
     s.attach(new TestSettingsScope({
       status: 'ready',
-      value: { defaultPlacement: 'window', defaultGranularity: 'bogus', defaultTrendMode: 7, defaultDeltaBase: 'bogus', defaultToolSort: 'alpha', defaultFileSort: 'alpha', insightsEntry: 42, defaultDurationCurve: 'always' },
+      value: { defaultPlacement: 'window', defaultGranularity: 'bogus', defaultTrendMode: 7, defaultDeltaBase: 'bogus', defaultToolSort: 'alpha', defaultFileSort: 'alpha', insightsEntry: 42, defaultDurationCurve: 'always', fleetTab: 7, promptPrefix: 9, promptSuffix: {} },
       writable: false,
     }))
     assert.equal(s.defaultPlacement(), 'all')
@@ -274,11 +313,13 @@ describe('attach', () => {
     assert.equal(s.defaultFileSort(), 'count')
     assert.equal(s.insightsEntry(), 'show')
     assert.equal(s.defaultDurationCurve(), 'show')
+    assert.equal(s.fleetTab(), 'show')
+    assert.equal(s.store.getSnapshot().promptPrefix, '', 'a non-string prompt value degrades to the empty default')
+    assert.equal(s.store.getSnapshot().promptSuffix, '')
   })
 
   test('an invalid scope placement degrades to all instead of keeping the current one', () => {
-    // Fail open on the read path too: a value the plugin cannot understand
-    // must not strand a previously chosen placement.
+    // Fail open on the read path too: a value the plugin cannot understand must not strand a previously chosen placement.
     const s = createContextSettings()
     s.set('defaultPlacement', 'tab')
     assert.equal(s.defaultPlacement(), 'tab')
@@ -288,8 +329,7 @@ describe('attach', () => {
   })
 
   test('an invalid scope insights entry degrades to show instead of keeping the current one', () => {
-    // Fail open on the read path too: a config problem must not leave the
-    // panel's entry hidden.
+    // Fail open on the read path too: a config problem must not leave the panel's entry hidden.
     const s = createContextSettings()
     s.set('insightsEntry', 'hide')
     assert.equal(s.insightsEntry(), 'hide')
@@ -329,6 +369,7 @@ describe('attach', () => {
     s.set('defaultToolSort', 'size')
     s.set('insightsEntry', 'hide')
     s.set('defaultDurationCurve', 'hide')
+    s.set('promptPrefix', 'drafted')
     s.attach(new TestSettingsScope({ status: 'ready', value: { defaultFileSort: 'latest' }, writable: false }))
     assert.equal(s.defaultPlacement(), 'tab', 'the in-session choice survives a section without the field')
     assert.equal(s.defaultGranularity(), 'step')
@@ -337,6 +378,7 @@ describe('attach', () => {
     assert.equal(s.defaultFileSort(), 'latest')
     assert.equal(s.insightsEntry(), 'hide', 'the in-session entry choice survives a section without the field')
     assert.equal(s.defaultDurationCurve(), 'hide', 'the in-session curve choice survives a section without the field')
+    assert.equal(s.store.getSnapshot().promptPrefix, 'drafted', 'the in-session prompt text survives a section without the field')
   })
 
   test('scope updates republish to subscribers', () => {
@@ -395,5 +437,47 @@ describe('attach', () => {
     scope.emit({ status: 'ready', value: { defaultGranularity: 'turn' }, writable: true })
     assert.equal(calls, 0)
     assert.equal(s.defaultGranularity(), 'step')
+  })
+
+  test('a set after the disposer runs never reaches the dead scope', () => {
+    const s = createContextSettings()
+    const scope = new TestSettingsScope({ status: 'ready', value: {}, writable: true })
+    const detach = s.attach(scope)
+    detach()
+    s.set('defaultTrendMode', 'delta')
+    assert.deepEqual(scope.sets, [])
+  })
+
+  test('disposing a superseded attach keeps the newer scope bound', () => {
+    const s = createContextSettings()
+    const first = new TestSettingsScope({ status: 'ready', value: {}, writable: true })
+    const second = new TestSettingsScope({ status: 'ready', value: {}, writable: true })
+    const detachFirst = s.attach(first)
+    s.attach(second)
+    detachFirst()
+    s.set('defaultTrendMode', 'delta')
+    assert.deepEqual(first.sets, [])
+    assert.deepEqual(second.sets, [{ field: 'defaultTrendMode', value: 'delta' }])
+  })
+
+  test('a snapshot value that throws on property access keeps the current state', () => {
+    const s = createContextSettings()
+    const hostile = new Proxy({}, { get() { throw new Error('hostile') } })
+    s.attach(new TestSettingsScope({ status: 'ready', value: hostile, writable: true }))
+    assert.deepEqual(s.store.getSnapshot(), {
+      status: 'ready',
+      placement: 'all',
+      granularity: 'step',
+      mode: 'total',
+      deltaBase: 'step',
+      toolSort: 'count',
+      fileSort: 'count',
+      insightsEntry: 'show',
+      durationCurve: 'show',
+      fleetTab: 'show',
+      promptPrefix: '',
+      promptSuffix: '',
+      writable: true,
+    })
   })
 })

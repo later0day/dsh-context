@@ -1,7 +1,5 @@
-// The cold-read governor (src/host/coldRead.ts, issue #121): FIFO exclusion
-// across concurrent admits, the two-thirds high-water skip checked when the
-// read reaches the FRONT of the queue (not when queued), fail-open on a
-// hostile or garbage probe, and queue survival across a rejecting read.
+// The cold-read governor (src/host/coldRead.ts, issue #121): FIFO exclusion across concurrent admits and
+// the two-thirds high-water skip, checked when the read reaches the FRONT of the queue — not when queued.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -10,7 +8,6 @@ import { type HeapReading, makeColdReadGate } from '../../src/host/coldRead'
 const LOW: HeapReading = { used: 100, limit: 1000 }
 const HIGH: HeapReading = { used: 800, limit: 1000 }
 
-/** One manually-settled promise. */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((r) => { resolve = r })
@@ -70,8 +67,7 @@ describe('makeColdReadGate', () => {
       ran++
       return 'b'
     })
-    // Let the first read actually START (its check passed), then let pressure
-    // rise while the second read waits behind it.
+    // Let the first read actually START (its check passed), then let pressure rise while the second read waits behind it.
     await new Promise(resolve => setTimeout(resolve, 10))
     assert.ok(started, 'the front read started under the low reading')
     reading = HIGH

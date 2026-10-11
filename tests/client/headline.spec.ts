@@ -1,6 +1,5 @@
-// Headline derivation (src/client/headline.ts): the provider-anchored
-// occupancy (projected → sampled → derived → heuristic), the window/pct
-// pairing on the kernel's occupancy grid, and the anchored composition parts.
+// Headline derivation (src/client/headline.ts): the provider-anchored occupancy ladder, the window/pct pairing
+// on the kernel's occupancy grid, and the anchored composition parts.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -83,7 +82,6 @@ describe('headlineOf occupancy', () => {
   })
 
   test('the split head anchors the derivation from `last` (the records ride the detail channel)', () => {
-    // lastReq.prompt + surface movement since: 150 + (100 - 80).
     const h = headlineOf(timeline({ last: { seq: 9, total: 80, prompt: 150 } }), null)
     assert.equal(h.tokens, 170)
   })

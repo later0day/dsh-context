@@ -1,11 +1,4 @@
-// The projection warm-up (src/host/backfill.ts) over the REAL cordis
-// context: the trigger route's gating (no connection, no registry — no
-// pass), the one-pass-per-process arm (either half landing first, later
-// route hits no-op), the deferred inject's service gating, the per-session
-// skip ladder (malformed, invisible, live, already fully served), the
-// cold-read → coldSnapshot fold path, per-session failure isolation with
-// the migration-refusal accounting (debug detail, one summary info), and
-// abort-on-dispose.
+// The projection warm-up (src/host/backfill.ts) over the REAL cordis context — no mocks.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -13,7 +6,6 @@ import { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { BACKFILL_ROUTE, watchActivityBackfill } from '../../src/host/backfill'
 
-/** Poll until the async run reaches a condition. */
 async function until<T>(read: () => T | undefined, message: string): Promise<T> {
   for (let i = 0; i < 300; i++) {
     const value = read()
@@ -23,7 +15,6 @@ async function until<T>(read: () => T | undefined, message: string): Promise<T> 
   assert.fail(message)
 }
 
-/** One captured route registration (the trigger half's observable). */
 interface RouteBox {
   path?: string
   fetch?: (request: Request) => Promise<Response>
@@ -39,17 +30,14 @@ async function trigger(route: RouteBox): Promise<Response> {
   return route.fetch(new Request(`http://dsh.test${BACKFILL_ROUTE}`, { method: 'POST' }))
 }
 
-/** One log line the tests capture off the ctx logger. */
 interface LogLine {
   level: string
   text: string
 }
 
-/** Capture the pass's log lines through the logger service's exporter sink. */
 function captureLogs(ctx: Context): LogLine[] {
   const lines: LogLine[] = []
-  // Lift every source's threshold to debug: the default exporter drops
-  // warn/debug records before they reach the sink.
+  // Lift every source's threshold to debug: the default exporter drops warn/debug records before they reach the sink.
   ctx.logger.exporter({
     levels: { root: 3, 'dsh-context': 3 },
     export(message) {
@@ -59,12 +47,10 @@ function captureLogs(ctx: Context): LogLine[] {
   return lines
 }
 
-/**
- * One format-refusal face of the persistence seam. The format edge throws
+/** One format-refusal face of the persistence seam. The format edge throws
  * `SessionFormatUnsupportedMigrationError`, but the seam translates it — with
  * the "source vN artifact remains unchanged (raw log: …)" suffix — into
- * `SessionFormatUnsupportedError` before the error escapes (issue #75): the
- * pass must classify BOTH faces as the same refusal.
+ * `SessionFormatUnsupportedError` before the error escapes (issue #75): the pass must classify BOTH faces as the same refusal.
  */
 function unsupportedFormatError(name: string): Error {
   const error = new Error(
@@ -284,26 +270,21 @@ describe('watchActivityBackfill', () => {
     assert.deepEqual(state.coldSnapshots, [])
   })
 
-  test('the 0.1.7 face answers when the 3-arg spelling throws (the rc.2 cachedSnapshot signature)', async () => {
-    // dsh 0.1.7-rc.2 dropped the probe's offset parameter: a 3-arg call binds
-    // the branded offset onto `keys`, where `new Set(0)` throws as soon as a
-    // served record is reached. The probe must fall through to the newer
-    // 2-arg face instead of reading every served session as "not served".
+  test('the cached-rows probe rides the 2-arg face (header + keys)', async () => {
+    // The projection cache's `cachedSnapshot(meta, keys?)` — the lifecycle
+    // identity rides the header alone on every supported line.
     const ctx = new Context()
     const state = fakeState([{ header: { id: 'a', cwd: '/repo/a' } }])
-    const arities: number[] = []
+    const calls: number[] = []
     const route: RouteBox = {}
     ctx.provide('connection', connectionOf(route))
     ctx.provide('sessionQuery', {
-      listSessions: async () => {
-        arities.push(0)
-        return state.listed
-      },
+      listSessions: async () => state.listed,
     })
     ctx.provide('sessionProjectionCache', {
-      cachedSnapshot: (header: { id: string }, offsetOrKeys: unknown, keys?: unknown) => {
-        arities.push(keys === undefined ? 2 : 3)
-        if (keys !== undefined) throw new TypeError('offset is not iterable')
+      cachedSnapshot: (header: { id: string }, keys?: unknown) => {
+        calls.push(1)
+        assert.ok(Array.isArray(keys), 'the probe passes the keys as the second argument')
         return header.id === 'a'
           ? { asOfSeq: 0, values: { contextActivity: { days: {} }, contextTimeline: { ok: true } } }
           : undefined
@@ -317,12 +298,11 @@ describe('watchActivityBackfill', () => {
     ctx.provide('sessions', { get: () => undefined })
     const dispose = watchActivityBackfill(ctx)
     await trigger(route)
-    await until(() => (arities.length > 0 ? true : undefined), 'the corpus was queried')
+    await until(() => (calls.length > 0 ? true : undefined), 'the corpus was queried')
     await new Promise(resolve => setTimeout(resolve, 40))
     dispose()
-    assert.deepEqual(state.coldReads, [], 'the newer face served the rows — no cold read')
+    assert.deepEqual(state.coldReads, [], 'the served rows skip the cold read')
     assert.deepEqual(state.coldSnapshots, [])
-    assert.deepEqual([...new Set(arities)].sort(), [0, 2, 3], 'the 3-arg spelling was tried first, the 2-arg face answered')
   })
 
   test('a rejection landing AFTER abort skips the warn (the unload owns the silence)', async () => {
@@ -619,8 +599,7 @@ describe('watchActivityBackfill', () => {
     ctx.provide('connection', connectionOf(route))
     const dispose = watchActivityBackfill(ctx)
     await trigger(route)
-    // The request landed while only the route half existed; the faces land
-    // now and the pass must still run.
+    // The request landed while only the route half existed; the faces land now and the pass must still run.
     ctx.provide('sessionQuery', { listSessions: async () => state.listed })
     ctx.provide('sessionProjectionCache', {
       cachedSnapshot: () => undefined,

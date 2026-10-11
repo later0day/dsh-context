@@ -1,7 +1,5 @@
-// The timing fold (src/host/fold.ts): whole-session durations priced from the
-// durable step lifecycle (step/start → assistant/message with its embedded
-// stream → step/end) and the per-call tool durations (tool/call → tool/result
-// via callId), plus the bounded per-name tally. No mocks: the real fold runs.
+// The timing fold (src/host/fold.ts with its src/host/foldMetering.ts accumulators): durations priced from the durable step lifecycle (step/start → assistant/message with its embedded
+// stream → step/end) and per-call tool durations (tool/call → tool/result via callId). No mocks: the real fold runs.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -21,7 +19,6 @@ const text = (t: string) => [{ type: 'text', text: t }]
 /** One raw `chunk` record of an embedded assistant stream, at an absolute time. */
 const chunkRec = (time: number, chunk: unknown): unknown => ({ type: 'chunk', time, chunk })
 
-/** One full step lifecycle at explicit times: start, [first token], message, end. */
 function step(seq: number, startMs: number, lmMs: number, opts: { tokenMs?: number; usage?: Record<string, number> } = {}): TimelineEvent[] {
   const events: TimelineEvent[] = [{ type: 'step/start', seq, time: startMs }]
   const stream = opts.tokenMs === undefined
@@ -145,26 +142,15 @@ describe('timing — tool call durations', () => {
     })
   })
 
-  test('repeated names accumulate; the block-id fallback prices too', () => {
+  test('repeated names accumulate into the per-name tally', () => {
     const call = (seq: number, callId: string, time: number): TimelineEvent => ({
       type: 'tool/call', seq, time, data: { callId, name: 'bash', arguments: '{}' },
     })
-    const blockResult: TimelineEvent = {
-      type: 'tool/result', seq: 5, time: 9_000,
-      data: {
-        callId: 'x',
-        message: {
-          source: { kind: 'tool', callId: 'x' },
-          content: [{ type: 'tool-result', toolCallId: 'c2', content: text('ok') }],
-        },
-      },
-      surfaceOp: 'append',
-    }
     const { state } = driveTimeline([
       call(1, 'c1', 1_000),
       toolResult(2, { callId: 'c1', content: text('ok'), time: 3_000 }),
       call(4, 'c2', 5_000),
-      blockResult,
+      toolResult(5, { callId: 'c2', content: text('ok'), time: 9_000 }),
     ])
     assert.equal(state.timing?.toolsMs, 2_000 + 4_000)
     assert.deepEqual(state.timing?.tools, { bash: { calls: 2, ms: 6_000 } })
@@ -173,8 +159,7 @@ describe('timing — tool call durations', () => {
   test('an unpaired result carries no duration, no tally, and no `timing` slot at all', () => {
     const drive = driveTimeline([toolResult(1, { callId: 'ghost', content: text('ok') })])
     assert.equal(drive.state.timing, undefined)
-    // ABSENT, never materialized as an `undefined`-valued property: the fold
-    // priced no call, so the slot stays untouched — one such property fails
+    // ABSENT, never an `undefined`-valued property: one such property fails
     // every projection-cache write for the session (the plain-JSON contract).
     assert.equal(Object.hasOwn(drive.state, 'timing'), false)
   })
@@ -191,13 +176,10 @@ describe('timing — tool call durations', () => {
     const events: TimelineEvent[] = []
     let seq = 1
     for (let i = 0; i < 17; i++) {
-      // Tool 't0' is the cheapest (100ms); every later tool is costlier, so
-      // the cap eviction must repeatedly drop 't0'… until it returns with a
-      // heavier call — model a unique heavy tool per round instead.
+      // Tool 't0' is the cheapest (100ms); every later tool is costlier.
       events.push({ type: 'tool/call', seq: seq++, time: i * 1_000, data: { callId: 'c' + i, name: 't' + i, arguments: '{}' } })
       events.push(toolResult(seq++, { callId: 'c' + i, content: text('ok'), time: i * 1_000 + (i === 0 ? 100 : 5_000) }))
     }
-    // Feed the cheapest call LAST so the eviction path must drop it.
     const { state } = driveTimeline(events)
     assert.equal(Object.keys(state.timing?.tools ?? {}).length, 16)
     assert.equal(state.timing?.tools.t0, undefined, 'the cheapest tally left the ranking')
@@ -224,8 +206,7 @@ describe('timing — tool call durations', () => {
 describe('timing — the generation split (reasoning / text / tool args)', () => {
   test('the embedded stream tiles the generation window into the three buckets', () => {
     // step start 0, first marker 200 (10ms BEFORE the first token 210 — the
-    // wait/generation boundary opens there), blocks reasoning→text→tool-call,
-    // message at 2000.
+    // wait/generation boundary opens there), blocks reasoning→text→tool-call, message at 2000.
     const stream = [
       chunkRec(200, { type: 'block-start', index: 0, blockType: 'reasoning' }),
       { type: 'reasoning-chunks', time0: 210, index: 0, dt: [], texts: ['think'] },
@@ -277,8 +258,7 @@ describe('timing — the generation split (reasoning / text / tool args)', () =>
   test('an unstamped call carries no split (its model time is unattributed wholesale)', () => {
     // Block markers but no token anywhere in the stream: the call prices no
     // generation time, so its spans must not reappear as generation the
-    // caller never charged — and its blocks count nothing either (the tally
-    // rides the same gate).
+    // caller never charged — and its blocks count nothing either (the tally rides the same gate).
     const { state } = driveTimeline([
       stepStart(1, { time: 0 }),
       assistantMessage(2, {
@@ -415,14 +395,32 @@ describe('timing — served wire view', () => {
     assert.equal(view.timing, undefined)
   })
 
+  test('a hostile __proto__ tool name books no row and keeps the served view schema-valid', () => {
+    const def = timelineDef({})
+    // One hostile tool only: a later tool-run event re-clones the tally through a spread, which would launder
+    // the damage and hide it from this probe.
+    const drive = driveTimeline([
+      toolCall(5, { callId: 'c1', name: '__proto__' }),
+      toolResult(6, { callId: 'c1', content: text('ok') }),
+    ])
+    const tools = drive.state.timing?.tools ?? {}
+    assert.equal(Object.getPrototypeOf(tools), Object.prototype, 'the tally keeps a plain prototype')
+    assert.deepEqual(Object.keys(tools), [], 'the reserved name books no row')
+    assert.deepEqual(drive.view.timing?.tools, {}, 'nothing inherited rides the wire')
+    // The consequence this guards: assigning that name sets the prototype instead of a row, so foldWire's
+    // `for...in` copies the inherited `calls`/`ms` as `{}` — which the strict tool-timing schema rejects, and the
+    // registry's drive has no error boundary, so the throw would stall this unit's push feed for good.
+    const wire = def as unknown as { wire: { viewSchema: { parse(v: unknown): unknown } } }
+    assert.doesNotThrow(() => wire.wire.viewSchema.parse(drive.view))
+  })
+
   test('the persisted-state schema accepts the timing shape (stamped slot included)', () => {
     const def = timelineDef({})
     const drive = driveTimeline([...step(1, 0, 1_000, { tokenMs: 300 }),
       toolCall(5, { callId: 'c1', name: 'bash' }),
       toolResult(6, { callId: 'c1', content: text('ok') }),
       stepEnd(7, { time: 30_000 }),
-      // A step left OPEN with a stamped slot: the final state carries
-      // stepStart.{time,firstToken} for the gate.
+      // A step left OPEN with a stamped slot: the final state carries stepStart.{time,firstToken} for the gate.
       stepStart(8, { time: 40_000 }),
       assistantAttempt(9, { stream: [chunkRec(40_100, { type: 'text-delta', text: 'x' })] })])
     // The 0.1.1+ contract validates persisted state through stateSchema.
@@ -530,8 +528,7 @@ describe('timing — the step\'s active time (user waits priced out)', () => {
   })
 
   test('a requestless step after a real one stamps nothing onto its record', () => {
-    // The seq guard: the open step armed no back-pointer, so the earlier
-    // step's record keeps its own stamp untouched.
+    // The seq guard: the open step armed no back-pointer, so the earlier step's record keeps its own stamp untouched.
     const { state } = driveTimeline([
       ...step(1, 0, 1_000, { tokenMs: 200 }),
       stepStart(4, { time: 10_000 }),

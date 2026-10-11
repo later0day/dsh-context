@@ -1,9 +1,4 @@
-// Session-cost estimate (src/client/cost.ts): the model-price-book lookup
-// (exact, case-insensitive, and the model-side resolution tiers behind the
-// cross-provider fallback), the USD→CNY conversion at the fixed 1 CNY = 0.15
-// USD, the null degradations, the numOf coercion of garbage bucket fields,
-// the money/rate formatting, and the deep merge behind the stats board's
-// family-scope cost cells.
+// Session-cost estimate (src/client/cost.ts): the model-price-book lookup tiers and the fixed 1 CNY = 0.15 USD conversion.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -148,8 +143,7 @@ describe('priceIndexOf / the model-side resolution tiers', () => {
     // The live-registry shape: azure re-lists `deepseek-v4-pro` flat (no
     // cache_read published) and its `@ai-sdk/azure` package is the only
     // self-named one — DeepSeek rides `@ai-sdk/openai-compatible`, so the
-    // model-side tiers would hand the id to azure. The `deepseek-` spelling
-    // prices from DeepSeek's own listing instead.
+    // model-side tiers would hand the id to azure. The `deepseek-` spelling prices from DeepSeek's own listing instead.
     const AZURE_FLAT = { hit: 1.74, miss: 1.74, write: 1.74, out: 3.48 }
     const hostBook = bookOf({
       deepseek: { 'deepseek-v4-pro': PRO },

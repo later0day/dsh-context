@@ -1,5 +1,4 @@
-/**
- * The Timing card: where the session's ACTIVE time went. The donut splits
+/** The Timing card: where the session's ACTIVE time went. The donut splits
  * whole-step wall time into the model-call slices — TTFT (step start → first
  * token, the wait) and LLM generation (first token → assistant message) —
  * and the tool-execution slice, with the residue as overhead; a call whose
@@ -18,14 +17,13 @@
  * row numbers stay true. Below them the session-time strip packs every
  * completed step's slices gapless in occurrence order (the DNA idiom applied
  * to time consumed — each band's width is its share of the cumulative active
- * time, idle time takes no track), joining the same hover link by KIND.
- */
+ * time, idle time takes no track), joining the same hover link by KIND. */
 
 import { useState, type ReactElement } from 'react'
 import type { TimingSpan, TimingTotals } from '../../shared/types'
 import type { ViewKit } from '../viewkit'
 
-import { makeSliceList } from './sliceList'
+import { SliceList } from './sliceList'
 import type { SliceRow } from './sliceList'
 import { makeTimingStrip, TIMING_COLOR } from './timingStrip'
 import type { DonutProps, DonutSegment } from './donut'
@@ -44,10 +42,8 @@ interface Slice {
 /** The card's slice palette (timingStrip.tsx owns it — the strip paints the same kinds). */
 const COLOR = TIMING_COLOR
 
-/**
- * The decode-throughput figure, formatted exactly as the harness's own
- * session-stats seat formats it: whole tokens from ten up, one decimal below.
- */
+/** The decode-throughput figure, formatted exactly as the harness's own
+ * session-stats seat formats it: whole tokens from ten up, one decimal below. */
 function formatTokensPerSecond(tps: number): string {
   const clamped = Math.max(0, tps)
   return clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10)
@@ -55,15 +51,12 @@ function formatTokensPerSecond(tps: number): string {
 
 export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => ReactElement): (props: {
   timing: TimingTotals | null
-  /**
-   * The timing strip's painted spans (the detail channel's per-step time
+  /** The timing strip's painted spans (the detail channel's per-step time
    * slices). Absent on the overview's cross-session aggregate card and on
-   * rows folded before the collection existed — the card then shows no strip.
-   */
+   * rows folded before the collection existed — the card then shows no strip. */
   spans?: TimingSpan[]
 }) => ReactElement {
   const { t, fmt, fmtDuration, fmtShare } = kit
-  const SliceList = makeSliceList(kit)
   const TimingStrip = makeTimingStrip(kit)
   return function StatsTiming(props: { timing: TimingTotals | null; spans?: TimingSpan[] }): ReactElement {
     // The legend row ↔ donut segment hover link (shared key, set from either side).
@@ -72,8 +65,7 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
     const wall = timing !== null && Number.isFinite(timing.wallMs) && timing.wallMs > 0 ? timing.wallMs : 0
     // The throughput figure: the host paired provider output tokens with
     // decode windows exactly as the harness session-stats fold does, so the
-    // two figures can never disagree. An unreadable or absent pairing (an
-    // older cached row) renders no figure.
+    // two figures can never disagree. An unreadable or absent pairing (an older cached row) renders no figure.
     const tps = timing !== null
       && typeof timing.speedMs === 'number' && Number.isFinite(timing.speedMs) && timing.speedMs > 0
       && typeof timing.speedTokens === 'number' && Number.isFinite(timing.speedTokens) && timing.speedTokens >= 0
@@ -94,14 +86,12 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
       // alone, and a log whose stream carried token deltas but no block markers
       // (all-zero buckets) keeps the un-split shape instead of three dead rows.
       // An absent bucket reads as 0 (the host omits a zero span).
-      //
       // These slices qualify with their own BLOCK tally, never the call
       // count: one model call emits zero to many decode blocks (a single call
       // routinely requests several tools, and most calls emit no reasoning at
       // all), so the call count would read as a per-slice tally that is simply
       // untrue. TTFT and tools keep theirs — those happen exactly once per
-      // call/run. A host that folded no counts (an older cached row) serves
-      // the duration alone.
+      // call/run. A host that folded no counts (an older cached row) serves the duration alone.
       const blockTimes = (blocks?: number): string | undefined =>
         blocks !== undefined && blocks > 0 ? t('timing.blockTimes', { n: fmt(blocks) }) : undefined
       const buckets: [key: string, color: string, label: string, ms: number, times?: string][] = [
@@ -139,8 +129,7 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
       // into [0, wall], so the ratio needs no further bounding.
       const share = (ms: number): number => (wall > 0 ? ms / wall : 0)
       // The secondary line leads with the duration and qualifies it with the
-      // call count; a zero-duration slice keeps just the count (its dash has
-      // nothing to qualify).
+      // call count; a zero-duration slice keeps just the count (its dash has nothing to qualify).
       const countOf = (ms: number, times?: string): string => {
         const dur = fmtDuration(ms)
         if (times === undefined) return dur
@@ -174,8 +163,7 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
       // a "0.0%" row still carrying a count ("— · 323 calls") reads as "this
       // ran 323 times in no time" when in truth nothing ever ran or decoded
       // there. The ring already skips zero arcs, so the legend now matches it.
-      // Every slice is a share of the wall total, so dropping rows never
-      // distorts the remaining percentages.
+      // Every slice is a share of the wall total, so dropping rows never distorts the remaining percentages.
       rows = [
         ...modelSlices.map(toRow),
         toRow(toolSlice),
@@ -183,7 +171,7 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
       ].filter(row => !row.dim)
     }
     return (
-      <div className="lc-card lc-col-stats lc-col-donut flex-1 min-w-[min(360px,100%)]">
+      <div className="lc-card lc-col-donut flex-1 min-w-[min(360px,100%)]">
         <div className="lc-card-title">
           <span className="lc-card-title-text">{t('timing.title')}</span>
           {tps !== null && (

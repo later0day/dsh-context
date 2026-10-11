@@ -1,8 +1,5 @@
-// Integration tests for the Host-half plugin module (src/host/index.ts)
-// against the REAL cordis registry, session store, and session-projection
-// registry — the dsh-canonical harness: real envelopes appended to a real
-// session, folded by the registered units, read back through the snapshot
-// cut and the change feed.
+// The Host-half plugin module (src/host/index.ts) against the REAL cordis registry, session store, and session-projection registry: real
+// envelopes appended to a real session, folded by the registered units, read back through the snapshot cut and the change feed.
 
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
@@ -23,7 +20,6 @@ const noConfig = {} as never
 /** The committed version-probe homes (see version.spec.ts). */
 const HOMES = fileURLToPath(new URL('./fixtures/version/homes', import.meta.url))
 
-/** Boot with the probe's home anchor pointing at one fixture harness home. */
 async function bootWithHome(home: string) {
   const ctx = new Context()
   ctx.provide('dshHomePath', (...segments: string[]) => join(HOMES, home, ...segments))
@@ -33,7 +29,6 @@ async function bootWithHome(home: string) {
   return { ctx, fiber }
 }
 
-/** Poll until the pending plugin fiber has started and folded the log. */
 async function until<T>(read: () => T | undefined, message: string): Promise<T> {
   for (let i = 0; i < 200; i++) {
     const value = read()
@@ -210,14 +205,13 @@ describe('dsh-context host plugin', () => {
     // A file-tool pair: the fold-derived op log serves through the detail endpoint.
     const call = session.append('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'read', arguments: JSON.stringify({ file_path: 'src/a.ts' }) } as never)
     session.append('tool/result', {
-      callId: 'c1',
-      message: { content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'ok' }] }], source: { kind: 'tool', callId: 'c1' } },
+      message: { role: 'tool', toolCallId: 'c1', content: [{ type: 'text', text: 'ok' }], source: { kind: 'tool', callId: 'c1' } },
     } as never, { surfaceOp: 'append', sourceEventSeqs: [call.seq] })
 
     const timeline = ctx.sessionProjections.snapshot(session).values.contextTimeline
     assert.ok(timeline !== undefined)
     assert.equal(typeof timeline.detailRev, 'number', 'the split marker rides the slim head')
-    assert.deepEqual(timeline.counts, { turns: 1, steps: 1, injects: 0, compactions: 0, prunes: 0 })
+    assert.deepEqual(timeline.counts, { turns: 1, steps: 1, injects: 0, compactions: 0, prunes: 0, skills: 0 })
     assert.equal(timeline.nodes.length, 0, 'the collections stay off the wire value')
     assert.equal(timeline.requests.length, 0)
 
@@ -237,7 +231,6 @@ describe('dsh-context host plugin', () => {
     assert.equal(result.value.rev, timeline.detailRev, 'the payload mirrors the head revision')
     assert.equal(result.value.nodes.length, 3, 'user + assistant + tool-result surface nodes')
     assert.equal(result.value.requests.length, 1)
-    // The fold-derived op log rides the detail payload.
     const ops = (result.value as { fileOps?: { path: string; kind: string; tool: string }[] }).fileOps
     assert.deepEqual(ops?.map(o => [o.kind, o.tool, o.path]), [['read', 'read', 'src/a.ts']])
   })
@@ -279,7 +272,7 @@ describe('the baseline gate', () => {
 
     const timeline = ctx.sessionProjections.snapshot(session).values.contextTimeline
     assert.ok(timeline !== undefined, 'the fallback unit still delivers (no eternal loading)')
-    assert.deepEqual(timeline.unsupported, { current: '0.1.1-rc.2', minimum: BASELINE_DSH_VERSION })
+    assert.deepEqual(timeline.unsupported, { current: '0.1.5-rc.1', minimum: BASELINE_DSH_VERSION })
     assert.equal(timeline.current.total, 0, 'the log is NOT folded below the baseline')
     assert.equal(timeline.nodes.length, 0, 'real appends leave no surface nodes')
     assert.equal(timeline.model, undefined, 'no model metadata either')

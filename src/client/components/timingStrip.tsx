@@ -13,9 +13,15 @@
  * pointer — a mirrored legend/donut hover lights the matching bands without
  * floating a second tip over a surface the pointer is not on (the stacked
  * bar's mirror rule).
+ *
+ * The grow-in sweep (the shared stacked-in token) rides ONE wrapper around the bands, never the bands
+ * themselves: a long session packs thousands of bands, and a per-band animation promoted every one of them
+ * to its own compositor layer (a Layerize storm that stalled the card's open). One transform on the wrapper
+ * is a single composited layer and reads as one left-to-right sweep; the per-band ripple it replaces was
+ * capped at eight stagger slots, so a packed strip already settled as a sweep.
  */
 
-import { useState, type CSSProperties, type ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import type { TimingSpan } from '../../shared/types'
 import type { ViewKit } from '../viewkit'
 
@@ -38,9 +44,6 @@ const KIND_LABEL: Record<TimingSpan['kind'], string> = {
   tools: 'timing.tools',
   other: 'timing.other',
 }
-
-/** Entrance stagger cap (the stacked bar's own rule): late bands join within the cap so a long span list settles fast. */
-const STAGGER_CAP = 8
 
 /** The axis's fixed tick fractions: zero, the three quartiles, and the full span. */
 const TICK_FRACS: readonly number[] = [0, 0.25, 0.5, 0.75, 1]
@@ -97,8 +100,7 @@ export function makeTimingStrip(kit: ViewKit): (props: {
     })
     const hoverKey = props.hoverKey
     const hovering = hoverKey !== null && hoverKey !== undefined && bands.some(b => b.kind === hoverKey)
-    // The tip centers on its band's rendered span, pinned 10% off both edges
-    // so a hairline band's bubble stays inside the card.
+    // The tip centers on its band's rendered span, pinned 10% off both edges so a hairline band's bubble stays inside the card.
     let tip: { text: string; leftPct: number } | null = null
     for (const b of bands) {
       if (b.key === tipKey) {
@@ -116,20 +118,22 @@ export function makeTimingStrip(kit: ViewKit): (props: {
               props.onHoverKey?.(null)
             }}
           >
-            {bands.map((b, i) => (
-              <div
-                key={b.key}
-                className={'lc-tstrip-seg animate-lc-stacked-in motion-reduce:animate-none' + (hoverKey === b.kind ? ' lc-tstrip-seg-on' : '')}
-                // Grow-in stagger slot (the shared stacked-in token's delay): the
-                // bands scaleX-open in log order on mount, capped so a long span
-                // list settles fast.
-                style={{ left: `${b.leftPct}%`, width: `${b.widthPct}%`, background: TIMING_COLOR[b.kind], '--lc-i': Math.min(i, STAGGER_CAP) } as CSSProperties}
-                onMouseEnter={() => {
-                  setTipKey(b.key)
-                  props.onHoverKey?.(b.kind)
-                }}
-              />
-            ))}
+            {/* The bands ride ONE animated wrapper: the strip wipes open left to
+                right on its single composited transform instead of one animation
+                per band (see the module header). */}
+            <div className="lc-tstrip-fill animate-lc-stacked-in motion-reduce:animate-none">
+              {bands.map(b => (
+                <div
+                  key={b.key}
+                  className={'lc-tstrip-seg' + (hoverKey === b.kind ? ' lc-tstrip-seg-on' : '')}
+                  style={{ left: `${b.leftPct}%`, width: `${b.widthPct}%`, background: TIMING_COLOR[b.kind] }}
+                  onMouseEnter={() => {
+                    setTipKey(b.key)
+                    props.onHoverKey?.(b.kind)
+                  }}
+                />
+              ))}
+            </div>
           </div>
           {/* Always mounted (the tip class fades opacity) so it fades out on leave instead of unmounting instantly. */}
           <div

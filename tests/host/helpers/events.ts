@@ -1,7 +1,6 @@
-// Durable session-event envelope builders for the fold specs. Shapes mirror
-// the harness's durable vocabulary (`SessionEventMap` in @deepseek-ai/dsh-session,
-// plus the dsh-compaction declaration-merged `compaction/*` family) — the same
-// envelopes a real session log carries, minus fields the fold never reads.
+// Durable session-event envelope builders for the fold specs. Shapes mirror the harness's durable vocabulary (`SessionEventMap` in
+// @deepseek-ai/dsh-session, plus the dsh-compaction declaration-merged `compaction/*` family) — the same envelopes a real session log
+// carries, minus fields the fold never reads.
 
 import type { TimelineEvent } from '../../../src/host/fold'
 import type { ContentBlock, MessageSource } from '../../../src/host/pricing'
@@ -60,33 +59,26 @@ export function stepEnd(seq: number, opts: { time?: number } = {}): TimelineEven
   return { type: 'step/end', seq, time: at(opts.time) }
 }
 
-/** tool/result: the model-visible message rides data.message with the tool source. */
+/** tool/result: the model-visible message rides data.message — the first-class
+ * tool-role message (the lifted `toolCallId`/`isError`, direct content) whose
+ * tool source carries the callId the fold pairs on. */
 export function toolResult(seq: number, opts: {
   callId: string
   content: ContentBlock[]
+  /** The durable error mark: `message.isError`. */
   error?: boolean
-  /** Drop the durable source (a legacy/foreign envelope). */
-  noSource?: boolean
-  /** Drop the envelope callId (source carries it). */
-  noEnvelopeId?: boolean
   /** The bounded presentation meta (search matches / read window) on the durable event. */
   meta?: unknown
   time?: number
-  /**
-   * The V4 spelling: `role: 'tool'`, the lifted message `toolCallId`/`isError`,
-   * direct content (no wrapper block), and no envelope `error` object — the
-   * mark rides the message alone.
-   */
-  v4?: boolean
 }): TimelineEvent {
-  const message: Record<string, unknown> = opts.v4 === true
-    ? { role: 'tool', toolCallId: opts.callId, content: opts.content }
-    : { content: [{ type: 'tool-result', toolCallId: opts.callId, content: opts.content }] }
-  if (opts.noSource !== true) message.source = { kind: 'tool', callId: opts.callId }
-  if (opts.v4 === true && opts.error === true) message.isError = true
+  const message: Record<string, unknown> = {
+    role: 'tool',
+    toolCallId: opts.callId,
+    source: { kind: 'tool', callId: opts.callId },
+    content: opts.content,
+  }
+  if (opts.error === true) message.isError = true
   const data: Record<string, unknown> = { message }
-  if (opts.noEnvelopeId !== true) data.callId = opts.callId
-  if (opts.v4 !== true && opts.error === true) data.error = true
   if (opts.meta !== undefined) data.meta = opts.meta
   return { type: 'tool/result', seq, time: at(opts.time), data, surfaceOp: 'append' }
 }

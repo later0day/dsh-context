@@ -1,9 +1,3 @@
-// The first row's usage chart (src/client/components/overviewUsage.tsx):
-// the fixed last-7-days window off the injected today key, the two series'
-// independent maxima, bar heights, the tick rails and gridlines framed off
-// the same maxima, unpriced/zero days, and the empty and degraded paths —
-// rendered with real React.
-
 import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -99,7 +93,6 @@ describe('OverviewUsage', () => {
       currency: 'usd',
       today: TODAY,
     }))
-    // Five hairlines, the 0 one solid (the baseline).
     assert.equal(queryAll(m.container, '.lc-ov-usage-line').length, 5)
     assert.ok(query(m.container, '.lc-ov-usage-line-0') !== null)
     const baseline = query(m.container, '.lc-ov-usage-line-0') as HTMLElement

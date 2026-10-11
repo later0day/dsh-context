@@ -1,29 +1,18 @@
 /**
- * Shape-driven readers over the durable session-event vocabulary — the ONE
- * place the plugin's log spellings meet. The supported range (dsh
- * 0.1.5-rc.1+, session formats V3/V4) speaks ONE dialect:
- * `system/message` surface nodes, `assistant/message.data.stream` /
- * `assistant/attempt.data.stream` (packed delta runs plus raw chunk
- * records), `SurfaceOp { startSeq, endSeq }`, `tool/ptc-dispatch`.
+ * Shape-driven readers over the durable session-event vocabulary — the ONE place the plugin's
+ * log spellings meet. The supported range (dsh 0.1.7-rc.2+, session format V4) speaks ONE
+ * dialect: `system/message` surface nodes, packed assistant stream records, `SurfaceOp
+ * { startSeq, endSeq }`.
  *
- * The fold still reads SHAPES, never a detected harness version: the raw log
- * is untrusted input at every layer, and the supported harness refuses —
- * never rewrites — a legacy-format log, so anything that reaches these
- * readers is current-dialect or hostile. Every reader is total over
- * untrusted input — a malformed record yields "nothing here", never a throw
- * (the projection registry drives the fold without an error boundary; one
- * throw stalls the unit's push feed and the browser waits on "loading"
- * forever).
+ * Readers stay total over untrusted input: the projection registry drives the fold with no error
+ * boundary, so one throw stalls that unit's push feed and the browser waits on "loading" forever.
+ * The fold reads SHAPES, never a detected harness version; older logs the harness cannot migrate
+ * to V4 are refused, never served raw.
  *
  * @module dsh-context/host/log-shapes
  */
 
-/**
- * Whether one raw stream chunk carries a token delta — the first-token
- * marker, mirroring dsh-llm's `isTokenDelta` (a non-empty text or reasoning
- * fragment, or any Tool-call delta carrying arguments or a name); a
- * malformed chunk is simply not a token.
- */
+/** Whether a raw stream chunk carries a token delta; mirrors dsh-llm's `isTokenDelta`. */
 export function isTokenChunk(chunk: unknown): boolean {
   if (chunk === null || typeof chunk !== 'object') return false
   const c = chunk as { type?: unknown; text?: unknown; argumentsDelta?: unknown; name?: unknown }
@@ -38,15 +27,9 @@ export function isTokenChunk(chunk: unknown): boolean {
   }
 }
 
-/**
- * The decode bucket a stream's `block-start.blockType` names: the model's
- * thinking, the answer text, or the tool-call arguments. Undefined for an
- * unknown/hostile marker, whose interval then stays unattributed rather than
- * poisoning a bucket.
- */
+/** The decode bucket a stream's `block-start.blockType` names; undefined for an unknown marker. */
 export type DecodeKind = 'reasoning' | 'text' | 'toolarg'
 
-/** Map one `blockType` to its timing bucket (see {@link DecodeKind}). */
 export function decodeKindOfBlock(blockType: unknown): DecodeKind | undefined {
   if (blockType === 'reasoning') return 'reasoning'
   if (blockType === 'text') return 'text'
@@ -54,27 +37,14 @@ export function decodeKindOfBlock(blockType: unknown): DecodeKind | undefined {
   return undefined
 }
 
-/** Per-kind decode spans (see {@link decodeTallyOfStream}). */
-export type DecodeSpans = Record<DecodeKind, number>
-
-/** Per-kind count of opened decode blocks (see {@link decodeTallyOfStream}). */
-export type DecodeCounts = Record<DecodeKind, number>
-
-/** Both decode tallies of one stream: the spans that price the split and the marker counts that qualify its rows. */
 export interface DecodeTally {
-  spans: DecodeSpans
-  blocks: DecodeCounts
+  spans: Record<DecodeKind, number>
+  blocks: Record<DecodeKind, number>
 }
 
-/**
- * Per-kind decode spans AND counted `block-start` markers inside one embedded
- * assistant stream, tiling [first block-start, endTime]: each `block-start`
- * record owns the interval up to the next one, the last one up to `endTime`.
- * Total over untrusted input — a malformed record is skipped whole (a
- * marker with an unusable time anchors no span and counts nothing), a
- * non-finite boundary yields zero, and a stream with no marker (or not an
- * array) yields all zeros.
- */
+/** Decode spans and `block-start` counts inside one embedded assistant stream, tiling
+ * [first block-start, endTime]: each marker owns the interval up to the next one, the last one up
+ * to `endTime`; total over untrusted input. */
 export function decodeTallyOfStream(stream: unknown, endTime: number): DecodeTally {
   const tally: DecodeTally = { spans: { reasoning: 0, text: 0, toolarg: 0 }, blocks: { reasoning: 0, text: 0, toolarg: 0 } }
   if (!Array.isArray(stream) || !Number.isFinite(endTime)) return tally
@@ -97,23 +67,15 @@ export function decodeTallyOfStream(stream: unknown, endTime: number): DecodeTal
   return tally
 }
 
-/** One ordered decode span of a stream's block sequence (see {@link decodeSpansOfStream}). */
 export interface DecodeSpan {
   kind: DecodeKind
   start: number
   end: number
 }
 
-/**
- * The ORDERED decode spans of one embedded assistant stream — the same
- * ownership rule as {@link decodeTallyOfStream} (each `block-start` marker
- * owns the interval up to the next one, the last one up to `endTime`), but
- * keeping the sequence: the timing strip paints the decode window in stream
- * order. Total over untrusted input, mirroring the tally: a malformed record
- * is skipped whole, an unknown `blockType` leaves its interval unspanned
- * (the caller's residue fill owns it), a zero/negative-length span drops
- * out, and a stream with no marker (or not an array) yields none.
- */
+/** The ORDERED decode spans of one embedded assistant stream — the same ownership rule as
+ * {@link decodeTallyOfStream}, keeping the sequence because the timing strip paints in stream
+ * order; an unknown `blockType` leaves its interval unspanned for the caller's residue fill. */
 export function decodeSpansOfStream(stream: unknown, endTime: number): DecodeSpan[] {
   const spans: DecodeSpan[] = []
   if (!Array.isArray(stream) || !Number.isFinite(endTime)) return spans
@@ -138,14 +100,9 @@ export function decodeSpansOfStream(stream: unknown, endTime: number): DecodeSpa
   return spans
 }
 
-/**
- * The first token's instant inside one PACKED delta run (`text-chunks` /
- * `reasoning-chunks` / `tool-call-chunks`): the run's base time plus the
- * accumulated inter-member deltas, taken at the first qualifying member —
- * a name-bearing Tool-call run starts at its first member. Mirrors dsh-llm's
- * `runFirstTokenTime`; a non-finite base or delta yields undefined rather
- * than a NaN instant.
- */
+/** The first token's instant inside one PACKED delta run (`text-chunks` / `reasoning-chunks` /
+ * `tool-call-chunks`): the run's base time plus the accumulated inter-member deltas at the first
+ * qualifying member. Mirrors dsh-llm's `runFirstTokenTime`; a non-finite delta yields undefined. */
 function runFirstTokenTime(record: Record<string, unknown>): number | undefined {
   const time0 = record.time0
   if (typeof time0 !== 'number' || !Number.isFinite(time0)) return undefined
@@ -165,12 +122,9 @@ function runFirstTokenTime(record: Record<string, unknown>): number | undefined 
   return undefined
 }
 
-/**
- * The first token's instant inside an embedded assistant stream
- * (`assistant/message.data.stream`, `assistant/attempt.data.stream`), or
- * undefined when the stream carries no token. Mirrors dsh-llm's
- * `assistantStreamFirstTokenTime` over the compact record union.
- */
+/** The first token's instant inside an embedded assistant stream
+ * (`assistant/message.data.stream`, `assistant/attempt.data.stream`), or undefined when it
+ * carries no token; mirrors dsh-llm's `assistantStreamFirstTokenTime`. */
 export function firstTokenTimeOfStream(stream: unknown): number | undefined {
   if (!Array.isArray(stream)) return undefined
   for (const record of stream) {
@@ -187,12 +141,8 @@ export function firstTokenTimeOfStream(stream: unknown): number | undefined {
   return undefined
 }
 
-/**
- * The inclusive surface range a replacement op covers, or null for `append`
- * and for any unrecognized/hostile op (which the fold treats as an append).
- * The `startSeq`/`endSeq` endpoints are each accepted only as a finite
- * number, so a hostile op with one malformed endpoint degrades to append.
- */
+/** The inclusive surface range a replacement op covers, or null for `append` and any
+ * unrecognized/hostile op (which the fold treats as an append). */
 export function replaceRangeOf(surfaceOp: unknown): { start: number; end: number } | null {
   if (surfaceOp === null || typeof surfaceOp !== 'object') return null
   const op = surfaceOp as { op?: unknown; startSeq?: unknown; endSeq?: unknown }

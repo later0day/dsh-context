@@ -1,8 +1,3 @@
-// PluginInfo (src/client/components/pluginInfo.tsx): static metadata rows
-// plus the live npm latest-version check. fetch is stubbed per test and the
-// modules are re-imported fresh (vi.resetModules) so the baked-in version
-// define and the fetch TTL cache both start clean.
-
 import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { afterEach, describe, test, vi } from 'vitest'
@@ -19,7 +14,8 @@ function stubFetchOk(body: FetchBody) {
   return fetchMock
 }
 
-/** Fresh latestVersion + pluginInfo modules; `version` emulates the tsdown define. */
+/** Fresh latestVersion + pluginInfo modules — resetModules so the baked-in version define
+ * and the fetch TTL cache start clean; `version` emulates the tsdown define. */
 async function loadPluginInfo(version?: string): Promise<ReturnType<typeof makePluginInfoFn>> {
   vi.resetModules()
   if (version === undefined) delete (globalThis as Record<string, unknown>).__DSH_CTX_VERSION__
@@ -55,9 +51,8 @@ describe('PluginInfo', () => {
     assert.equal(rows[1].getAttribute('href'), 'https://github.com/bowenliang123/dsh-context')
     // The settings entry: a button (no href) below GitHub — the guarded jump runs on click.
     assert.equal(rows[2].getAttribute('href'), null)
-    assert.equal(query(rows[2], '.lc-pi-label').textContent, 'Settings')
+    assert.equal(query(rows[2], '.lc-pi-label').textContent, 'Plugin Settings')
     assert.equal(query(rows[2], '.lc-pi-value').textContent, 'Open plugin settings')
-    // The tagline is the repo link too: hover underlines it, a click opens GitHub.
     const hint = query(m.container, '.lc-pi-hint')
     assert.ok(text(hint).includes('The best DSH context plugin'))
     assert.equal(hint.getAttribute('href'), 'https://github.com/bowenliang123/dsh-context')

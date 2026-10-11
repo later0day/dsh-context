@@ -1,22 +1,16 @@
-/**
- * The Context Dashboard's activity heatmap: a GitHub-style contribution grid
+/** The Context Insights page's activity heatmap: a GitHub-style contribution grid
  * (weeks as columns, Sunday-first weekdays as rows, a month label over each
  * column where a month begins — the window's opening column always labeled —
  * and a Less→More key for the depth steps) over the merged daily
  * ledger (overview.ts). Cell depth is the selected metric's share of the
  * window's maximum — distinct active sessions or settlement steps; a session
  * can spread its steps thinly across many days while another day stacks a
- * run, so each metric scales on its OWN maximum — in four steps; a day with
- * data is a button whose click
+ * run, so each metric scales on its OWN maximum — in four steps; a day with data is a button whose click
  * pins the session list to that day (click again to release). Cells carry
  * their tip (the date, the day's active sessions, and its steps) in
  * `data-lc-tip`, served by the page's portaled hover tip (hoverTip.tsx) —
- * instant on hover, where a native `title` lags a second behind. The grid is
- * computed from the injected
- * `today` key, so
- * the layout is deterministic in tests and follows the browser's local
- * calendar at runtime.
- */
+ * instant on hover, where a native `title` lags a second behind. The grid is computed from the injected `today` key, so
+ * the layout is deterministic in tests and follows the browser's local calendar at runtime. */
 
 import type { ReactElement } from 'react'
 import { dayKeyOf, shiftDayKey, sundayOfWeek } from '../../shared/days'
@@ -48,12 +42,9 @@ interface HeatCell {
   future: boolean
 }
 
-/**
- * Lay out the grid: `weeks` columns ending at today's week, each seven
+/** Lay out the grid: `weeks` columns ending at today's week, each seven
  * Sunday-first cells (row 0 = Sunday). Returns null when `today` (or its
- * week math) fails — a corrupt injected key degrades the card to its empty
- * note.
- */
+ * week math) fails — a corrupt injected key degrades the card to its empty note. */
 export function gridOf(today: string, weeks: number): HeatCell[][] | null {
   const lastSunday = sundayOfWeek(today)
   if (lastSunday === null || weeks < 1) return null
@@ -94,8 +85,7 @@ export function makeHeatmap(kit: ViewKit): (props: HeatmapProps) => ReactElement
     const metric = props.metric ?? 'steps'
     const columns = gridOf(props.today, weeks)
     if (columns === null) return <div className="lc-empty">{t('ov.heat.empty')}</div>
-    // Join the ledger onto the grid and price the depth scale. The record is
-    // widened honestly: a day-key read can miss at runtime.
+    // Join the ledger onto the grid and price the depth scale. Widened: a day-key read can miss at runtime.
     const byKey: Record<string, DayTotals | undefined> = props.days
     let maxSessions = 0
     let maxSteps = 0

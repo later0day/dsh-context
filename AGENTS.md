@@ -18,9 +18,18 @@ A DeepSeek Harness plugin for context insight, actions, and management.
 
 ## Coding
 - Make the minimal change that fully solves the problem, with the most efficient implementation.
+- User experience, features, and especially the data accuracy and integrity are the top priority. Never sacrifice them for code refactors, performance, or any other reason. Dive deep and run real tests to verify the correctness of every change.
 - Reuse the classes, utilities, styles, style tokens, events, presets, and lifecycles that DeepSeek Harness already provides.
 - Keep code and tests small, loosely coupled, and modular; avoid duplication.
+- Ensure every source code file or test code file has less than 1000 lines.
 - Add comments only for major decisions or significant value, and update or delete outdated ones when modifying the code.
+- Comments guideline:
+  - Cleanup all the unnecessary, unhelpful or deprecated comments
+  - Cleanup all comments that related code already self-explains or self-constructs, even crossing multiple files and modules.
+  - ONLY use necessary comments for critical major decisions or significant value that cannot be self-explained by the code itself or the dsh code
+  - Use precise, clear, and concise language in comments, avoiding vague or ambiguous statements.
+  - Less comments is always better: avoid over-explaining or repeating what the code already expresses.
+  - Always try to cleanup or remove comments
 - Write comments, documentation, PR descriptions, and commit messages in English.
 - Generate one-time temp files in the `.tmp` directory and clean them up right after use.
 
@@ -31,6 +40,7 @@ Complete ALL of these before ANY commit:
 - Close out the to-do list, ensuring every item is completed, cleaned up or explicitly closed.
 - Review the full diff independently: every change necessary, correct, and not over-engineered.
 - Clean up generated temporary files and temporary or unhelpful comments.
+- Load the [code-review](https://github.com/mattpocock/skills/tree/main/skills/engineering/code-review) skill if available, run it to review all the changes, and independently verify or follow each of its suggestions when its multi-axis analysis done.
 - Run `pnpm run lint:fix && pnpm run test && pnpm run build` as a single command and capture the FULL output.
   - Example for per-file 100% coverage output:
     ```
@@ -78,6 +88,7 @@ Complete ALL of these before ANY commit:
 ## Releasing
 - Version X.Y.Z, 大版本.次版本.小版本。
 - Review all the commits/changes since last tagged release.
+- Review relevant recent issues and PRs; mention them in release notes and close resolved issues.
 - Releases are cut by tagging: `git tag vX.Y.Z && gh release create vX.Y.Z`.
 - A [GitHub Actions workflow](.github/workflows/release.yml) then builds, tests, and publishes the package to npm automatically — no manual action needed.
 - Write the release notes from the [release template](.github/release_template.md)

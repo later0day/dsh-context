@@ -1,6 +1,3 @@
-// CurrentComposition (src/client/components/currentComposition.tsx) rendered
-// with real React over the real StackedBar/Legend pair.
-
 import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -48,7 +45,6 @@ describe('CurrentComposition header', () => {
     assert.equal(queryAll(m.container, '.lc-overview-pct').length, 0)
     assert.equal(queryAll(m.container, '.lc-reserve').length, 0)
     assert.equal(queryAll(m.container, '.lc-card-sub').length, 0)
-    // An empty subtitle renders nothing either; a zero window stays reserve-free.
     await m.update(h(CurrentComposition, { head: headOf({ window: 0 }), subtitle: '' }))
     assert.equal(queryAll(m.container, '.lc-card-sub').length, 0)
     assert.equal(queryAll(m.container, '.lc-reserve').length, 0)

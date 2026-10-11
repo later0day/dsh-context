@@ -1,7 +1,5 @@
-// Unit tests for the contextHeaders projection unit (src/host/headers.ts) —
-// the request-header EPOCH METADATA behind the timeline's envelope figures.
-// The unit is pure init/apply/view: each case drives real event envelopes
-// through the real definition (no harness plumbing).
+// The contextHeaders projection unit (src/host/headers.ts) — the request-header EPOCH METADATA
+// behind the timeline's envelope figures. Pure init/apply/view over real envelopes; no harness plumbing.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -12,12 +10,10 @@ import { header, foreign } from './helpers/events'
 import { assertPlainJson } from './helpers/projection'
 import type { TimelineEvent } from '../../src/host/fold'
 
-/** A raw request/header envelope with full control over the header payload. */
 function headerEvent(seq: number, rawHeader: unknown): TimelineEvent {
   return { type: 'request/header', seq, time: seq * 1000, data: { header: rawHeader, reason: 'initial' } }
 }
 
-/** Fold events through the unit, pinning the plain-JSON state precondition on every result. */
 function fold(def: ReturnType<typeof createContextHeadersDefinition>, events: TimelineEvent[]): HeadersState {
   let state = def.init()
   for (const ev of events) state = def.apply(state, ev as never)
@@ -66,8 +62,7 @@ describe('createContextHeadersDefinition', () => {
       assert.equal(def.apply(state, headerEvent(seq, raw) as never), state, `header ${String(raw)} is not an epoch`)
     }
     // A data-less envelope is unreachable from the harness (append validates
-    // the payload) but must degrade to "not an epoch" all the same: this unit
-    // has no try/catch around its fold.
+    // the payload) but must degrade to "not an epoch" all the same: this unit has no try/catch around its fold.
     assert.equal(def.apply(state, { type: 'request/header', seq: 5, time: 5000 } as never), state)
   })
 

@@ -1,8 +1,6 @@
-// Latest-version check (src/client/latestVersion.ts): registry fetch with a
-// 1h TTL and the semver comparator. The fetch is stubbed per test — the
-// suite never hits the network — and each fetch test re-imports the module
-// (vi.resetModules) to reset the module-level cache. Two registries are
-// tried in order (official npm, then npmmirror as a fallback).
+// Latest-version check (src/client/latestVersion.ts): registry fetch with a 1h TTL and the semver comparator.
+// The fetch is stubbed per test — the suite never hits the network — and each fetch test re-imports the module
+// (vi.resetModules) to reset the module-level cache. Two registries are tried in order (official npm, then npmmirror).
 
 import assert from 'node:assert/strict'
 import { afterEach, describe, test, vi } from 'vitest'

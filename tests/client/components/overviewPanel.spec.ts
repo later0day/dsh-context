@@ -1,7 +1,4 @@
-// The Context Insights page (src/client/components/overviewPanel.tsx) —
-// full renders through the standard-kit seams: KPI band, heatmap day-pin,
-// filters/sorts, pagination, session open path, hover tips, and the
-// degraded states. The page is the keyed `main` panel: mounting it IS
+// OverviewPanel (src/client/components/overviewPanel.tsx) rendered in the layout's keyed `main` panel: mounting it IS
 // opening it (the shell unmounts on panel switch), so no open flag exists.
 
 import { act, createElement as h } from 'react'
@@ -11,7 +8,7 @@ import { makeOverviewPanel } from '../../../src/client/components/overviewPanel'
 import { resetModelPrices, setModelPricesLoader } from '../../../src/client/modelPrices'
 import { dayKeyOf } from '../../../src/shared/days'
 import { TestClientCtx, asClientCtx } from '../helpers/harness'
-import { click, flush, makeKit, mount, query, queryAll, text, until, type Mounted } from '../helpers/kit'
+import { click, flush, hover, makeKit, mount, query, queryAll, text, unhover, until, type Mounted } from '../helpers/kit'
 
 const PROVIDERS = {
   deepseek: { models: { 'deepseek-v4-flash': { cost: { input: 1, output: 2, cache_read: 0.1 } } } },
@@ -20,6 +17,8 @@ const PROVIDERS = {
 const NOW = Date.now()
 const TODAY = dayKeyOf(NOW) ?? ''
 const YESTERDAY = dayKeyOf(NOW - 86_400_000) ?? ''
+/** Local midnight of NOW — the "today" range's floor, so today's session stays inside it whatever hour the spec runs. */
+const MIDNIGHT = new Date(new Date(NOW).setHours(0, 0, 0, 0)).getTime()
 
 /** A wire-shaped timeline head. */
 function timeline(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -47,7 +46,7 @@ function sessionsSnapshot(): { ids: string[]; byId: Record<string, Record<string
       a: {
         displayTitle: 'alpha session',
         cwd: '/repo/alpha',
-        updatedAt: NOW - 3_600_000,
+        updatedAt: MIDNIGHT,
         running: true,
         projectionValues: {
           contextTimeline: timeline(),
@@ -97,14 +96,19 @@ async function openPanel(
     ...props,
   }
   const m = await mount(h(Panel, allProps))
-  // The price book's first fetch resolves a microtask or two behind the
-  // mount; a second act window keeps its notify inside act.
+  // The price book's first fetch resolves a microtask or two behind the mount; a second act window keeps its notify inside act.
   await flush()
   return { m, Panel }
 }
 
-/** The fetch calls the page fired (the warm-up trigger POST), per test. */
 const backfillPosts: string[] = []
+
+/** One day cell of the page's portaled calendar picker, by its day key. */
+function calendarDay(key: string): HTMLElement {
+  const el = queryAll(document.body, '.lc-dp-cell').find(d => d.getAttribute('aria-label') === key)
+  assert.ok(el !== undefined, `the calendar drew ${key}`)
+  return el
+}
 
 beforeEach(() => {
   resetModelPrices()
@@ -135,14 +139,14 @@ describe('OverviewPanel', () => {
     assert.ok(text(m.container).includes('Context Insights'))
     // The page chrome: the section's one scroll region carries the centered
     // content column — the page heading, then the 1:1 first row (the KPI
-    // band beside the last-7-days usage chart), the aggregate stats pair,
-    // and the insight/session body.
+    // band beside the last-7-days usage chart), the aggregate stats pair, and the insight/session body.
     const page = query(m.container, 'section.lc-ov-page')
     assert.equal(page.getAttribute('aria-label'), 'Context Insights')
     const scrollRows = [...query(m.container, '.lc-ov-pagecontent').children].map(el => el.className.split(' ')[0])
     assert.deepEqual(scrollRows, ['lc-ov-pagehead', 'lc-ov-first', 'lc-ov-stats', 'lc-ov-body'])
     assert.equal(query(m.container, '.lc-ov-pagehead h1.lc-ov-pagetitle').textContent, 'Context Insights')
-    // The pair's halves: the KPI band's six cells, then the usage chart.
+    assert.ok(query(m.container, '.lc-ov-pagehead').hasAttribute('data-window-drag'), 'the head is the desktop window drag area')
+    // The pair's halves: the KPI band's six cells.
     assert.equal(queryAll(m.container, '.lc-ov-first > .lc-ov-kpis .lc-stat').length, 6)
     assert.ok(query(m.container, '.lc-ov-first > .lc-card.lc-ov-usage') !== null, 'the usage chart rides the row')
     // KPI band: 2 sessions in the 30d range, 1750 tokens billed, priced cost, cache hit.
@@ -175,7 +179,6 @@ describe('OverviewPanel', () => {
     ])
     assert.equal(query(statsCards[1], '.lc-donut-center b').textContent, '3m0s')
     assert.ok(text(statsCards[1]).includes('LLM Gen'))
-    // Heatmap drew cells for the two ledger days.
     assert.ok(queryAll(m.container, 'button.lc-heat-cell').length >= 2)
     // Cards: a (current, running, grouped), b, and c is outside the 30d range.
     const cards = queryAll(m.container, '.lc-ov-grid > .lc-ov-session')
@@ -204,15 +207,65 @@ describe('OverviewPanel', () => {
     const { m } = await openPanel(ctx)
     const rangeButtons = queryAll<HTMLButtonElement>(m.container, '.lc-ov-range .lc-gran-btn')
     assert.equal(rangeButtons.length, 4)
+    // The chip reads the LIVE window, so every preset prints its own days.
+    const span = () => queryAll(m.container, '.lc-dp-half').map(el => el.textContent)
+    const thirty = new Date(NOW - 30 * 86_400_000)
+    assert.deepEqual(span(), [dayKeyOf(thirty.getTime()), TODAY], '30d shows the thirty days it covers')
     await click(rangeButtons[3]) // All
+    assert.deepEqual(span(), ['Start date', 'End date'], 'an unbounded scope has no span to print')
     assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 3, 'the stale session joins')
     assert.equal(queryAll(m.container, '.lc-stat-value')[0].textContent, '3')
-    await click(rangeButtons[0]) // Last 24 hours
-    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1, 'only the hour-fresh session stays')
+    await click(rangeButtons[0]) // Today
+    assert.deepEqual(span(), [TODAY, TODAY], "today's own day on both ends")
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1, "only today's session stays")
     await click(rangeButtons[1]) // Last 7 days
+    assert.deepEqual(span(), [dayKeyOf(NOW - 7 * 86_400_000), TODAY])
     assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1, 'only the freshest stays')
     await click(rangeButtons[2]) // back to 30d
     assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 2)
+    await m.unmount()
+  })
+
+  test('a picked calendar range scopes the page and hands the presets back', async () => {
+    const ctx = makeCtx()
+    const { m } = await openPanel(ctx)
+    const rangeButtons = queryAll<HTMLButtonElement>(m.container, '.lc-ov-range .lc-gran-btn')
+    await click(query(m.container, '.lc-dp-trigger'))
+    await click(calendarDay(YESTERDAY))
+    await click(calendarDay(TODAY))
+    assert.ok(query(m.container, '.lc-dp-trigger').className.includes('lc-dp-trigger-on'), 'the chip carries the picked range')
+    assert.deepEqual(
+      queryAll(m.container, '.lc-dp-trigger .lc-dp-half').map(el => el.textContent),
+      [YESTERDAY, TODAY],
+      'the head names both ends, start first',
+    )
+    // The window closes at both ends: only the session last touched inside it stays.
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1)
+    assert.equal(queryAll(m.container, '.lc-stat-value')[0].textContent, '1', 'the KPI band narrowed with it')
+    assert.ok(
+      rangeButtons.every(b => !b.className.includes('lc-gran-on')),
+      'a picked range and a preset are never both lit',
+    )
+    await click(rangeButtons[3])
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 3, 'the stale session joins again')
+    assert.ok(!query(m.container, '.lc-dp-trigger').className.includes('lc-dp-trigger-on'))
+    await m.unmount()
+  })
+
+  test('a backwards pick still scopes the window the short way round', async () => {
+    const ctx = makeCtx()
+    const { m } = await openPanel(ctx)
+    await click(query(m.container, '.lc-dp-trigger'))
+    // The end day first, then a start day BEFORE it: the pair swaps rather
+    // than leaving the page with a window that runs backwards.
+    await click(calendarDay(TODAY))
+    await click(calendarDay(YESTERDAY))
+    assert.deepEqual(
+      queryAll(m.container, '.lc-dp-trigger .lc-dp-half').map(el => el.textContent),
+      [YESTERDAY, TODAY],
+      'the picked pair is sorted, start day first',
+    )
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1, 'the same window a forward pick would have left')
     await m.unmount()
   })
 
@@ -237,13 +290,56 @@ describe('OverviewPanel', () => {
     await m.unmount()
   })
 
+  test('the skill card pins the session list to the skill’s loaders; the chip and the row release it', async () => {
+    const ctx = makeCtx()
+    // Session a loaded 'tdd' today; b's ledger carries no skills.
+    const snap = sessionsSnapshot()
+    const aDays = (snap.byId.a.projectionValues as { contextActivity: { days: Record<string, Record<string, unknown>> } }).contextActivity.days
+    aDays[TODAY] = { ...aDays[TODAY], skills: { tdd: { n: 2, last: NOW - 1000 } } }
+    const skillPosts: unknown[] = []
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      const route = String(url)
+      if (route.endsWith('/skills')) {
+        skillPosts.push(init?.body === undefined ? undefined : JSON.parse(String(init.body)))
+        return {
+          ok: true,
+          json: async () => ({ ok: true, value: { skills: [{ name: 'tdd', description: 'Test-driven.', path: '/p/tdd/SKILL.md', source: 'user-agents' }] } }),
+        }
+      }
+      return { ok: true, json: async () => ({}) }
+    })
+    const { m } = await openPanel(ctx, { useSessions: useHookOf(snap) })
+    await flush() // the catalog read lands
+    assert.deepEqual(skillPosts, [{ cwd: '/repo/alpha', sessionId: 'a' }], 'the catalog read anchors on the current session')
+    const skillRow = query<HTMLButtonElement>(m.container, 'button.lc-ov-skill')
+    assert.ok(text(skillRow).includes('tdd'))
+    await hover(skillRow)
+    assert.ok(text(document.querySelector('#lc-skilltip-bubble') as HTMLElement).includes('Test-driven.'), 'the catalog’s description joins the hover card')
+    await unhover(skillRow)
+    await click(skillRow)
+    const cards = queryAll(m.container, '.lc-ov-grid > .lc-ov-session')
+    assert.equal(cards.length, 1)
+    assert.ok(text(cards[0]).includes('alpha session'))
+    const chip = query<HTMLButtonElement>(m.container, '.lc-ov-day-chip[title="Clear the skill filter"]')
+    assert.ok(text(chip).includes('Skill · tdd'))
+    assert.ok(text(query(m.container, '.lc-ov-skill-detail')).includes('/p/tdd/SKILL.md'))
+    await click(chip)
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 2)
+    assert.equal(queryAll(m.container, '.lc-ov-skill-detail').length, 0, 'the detail block leaves with the pin')
+    // Re-pin and release via the row itself.
+    await click(query<HTMLButtonElement>(m.container, 'button.lc-ov-skill'))
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1)
+    await click(query<HTMLButtonElement>(m.container, 'button.lc-ov-skill'))
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 2)
+    await m.unmount()
+  })
+
   test('the metric toggle re-prices the heatmap between steps and sessions', async () => {
     const ctx = makeCtx()
     const { m } = await openPanel(ctx)
     const todayCellClass = (): string | undefined =>
       queryAll<HTMLButtonElement>(m.container, 'button.lc-heat-cell')
         .find(c => c.getAttribute('aria-label')?.startsWith(TODAY))?.className
-    // Steps (the default): today's pair of steps IS the window's steps peak.
     assert.ok(todayCellClass()?.includes('lc-heat-4'), 'steps mode (default): today holds the steps peak')
     const metricButtons = queryAll<HTMLButtonElement>(m.container, '.lc-heat-ctl .lc-gran-btn')
     assert.deepEqual(metricButtons.map(b => b.textContent), ['Sessions', 'Steps'])
@@ -270,14 +366,11 @@ describe('OverviewPanel', () => {
       }),
     })
     const input = query<HTMLInputElement>(m.container, 'input.lc-ov-search')
-    // Query by title.
     await actType(input, 'beta')
     assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1)
     assert.ok(text(m.container).includes('beta session'))
-    // Query by path.
     await actType(input, '/repo/a')
     assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1)
-    // No match → the filtered empty note.
     await actType(input, 'zzz')
     assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 0)
     assert.ok(text(m.container).includes('No sessions match'))
@@ -298,21 +391,17 @@ describe('OverviewPanel', () => {
     const { m } = await openPanel(ctx)
     const chips = queryAll<HTMLButtonElement>(m.container, '.lc-ov-chip')
     assert.deepEqual(chips.map(c => c.textContent), ['All2', 'workspace-one1', 'Ungrouped1'])
-    // Select the workspace group: only its claimed session stays.
     await click(chips[1])
     let cards = queryAll(m.container, '.lc-ov-grid > .lc-ov-session')
     assert.equal(cards.length, 1)
     assert.ok(text(cards[0]).includes('alpha session'))
     assert.ok(queryAll<HTMLButtonElement>(m.container, '.lc-ov-chip')[1].className.includes('lc-ov-chip-on'))
-    // Switch to the ungrouped bucket: only the claimless one stays.
     await click(queryAll<HTMLButtonElement>(m.container, '.lc-ov-chip')[2])
     cards = queryAll(m.container, '.lc-ov-grid > .lc-ov-session')
     assert.equal(cards.length, 1)
     assert.ok(text(cards[0]).includes('beta session'))
-    // Toggle the active chip off → the whole scoped set returns.
     await click(queryAll<HTMLButtonElement>(m.container, '.lc-ov-chip')[2])
     assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 2)
-    // The All chip clears an active selection too.
     await click(queryAll<HTMLButtonElement>(m.container, '.lc-ov-chip')[1])
     await click(queryAll<HTMLButtonElement>(m.container, '.lc-ov-chip')[0])
     assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 2)
@@ -335,7 +424,7 @@ describe('OverviewPanel', () => {
 
   test('a card click opens the session through the harness verb', async () => {
     const opened: string[] = []
-    const ctx = makeCtx({ open: (id: string) => { opened.push(id) } })
+    const ctx = new TestClientCtx({ services: { uiWorkspace: { openSession: (id: string) => { opened.push(id) } } } })
     const { m } = await openPanel(ctx)
     await click(query<HTMLButtonElement>(m.container, '.lc-ov-grid > .lc-ov-session'))
     // The verb's own navigation returns the center column to the conversation
@@ -344,10 +433,9 @@ describe('OverviewPanel', () => {
     await m.unmount()
   })
 
-  test('the settings row under the activity card runs the preferences jump', async () => {
+  test('the settings chip beside the title runs the preferences jump', async () => {
     // The harness chrome the jump drives (settingsJump.ts): the Plugins panel
-    // entry first, then the bundle card's open control (the one non-switch
-    // button inside the card), both click-tracked.
+    // entry first, then the bundle card's open control (the one non-switch button inside the card), both click-tracked.
     const clicks: string[] = []
     const chrome = document.createElement('div')
     chrome.innerHTML = `
@@ -363,9 +451,14 @@ describe('OverviewPanel', () => {
     try {
       const ctx = makeCtx()
       const { m } = await openPanel(ctx)
-      const row = query<HTMLButtonElement>(m.container, '.lc-ov-settings')
-      assert.equal(row.textContent, 'SettingsOpen plugin settings')
-      await click(row)
+      const chip = query<HTMLButtonElement>(m.container, '.lc-ov-settings')
+      // The chip rides the heading, directly after the title (the long hint moved onto the hover title).
+      assert.equal(chip.textContent, 'Plugin Settings')
+      assert.equal(chip.title, 'Open plugin settings')
+      const head = query(m.container, '.lc-ov-pagehead')
+      assert.equal(head.children[0].className, 'lc-ov-pagetitle')
+      assert.equal(head.children[1], chip)
+      await click(chip)
       assert.deepEqual(clicks, ['Plugins'], 'the jump clicked the Plugins panel entry synchronously')
       await until(() => clicks.length > 1, 'the jump never reached the bundle card open control')
       assert.equal(clicks[1], 'Context')
@@ -398,12 +491,10 @@ describe('OverviewPanel', () => {
 
   test('degraded states: unavailable list, empty list, no activity', async () => {
     const ctx = makeCtx()
-    // No sessions seat at all → the unavailable note.
     const bare = await openPanel(ctx, { useSessions: undefined, useWorkspaces: undefined })
     assert.ok(text(bare.m.container).includes('The session list is unavailable'))
     await bare.m.unmount()
 
-    // An empty-but-ready list → the empty note.
     const empty = await openPanel(ctx, {
       useSessions: useHookOf({ ids: [], byId: {}, phase: 'ready' }),
       useWorkspaces: useHookOf({ items: [] }),
@@ -412,7 +503,6 @@ describe('OverviewPanel', () => {
     assert.ok(text(empty.m.container).includes('No activity yet'))
     await empty.m.unmount()
 
-    // Sessions without any timeline → cards render metadata-only.
     const noTimeline = await openPanel(ctx, {
       useSessions: useHookOf({
         ids: ['x'],
@@ -427,7 +517,6 @@ describe('OverviewPanel', () => {
     assert.equal(kpiValues[3], '—', 'no cache hit without billed input')
     assert.equal(kpiValues[4], '0', 'no tool calls without timing')
     assert.equal(kpiValues[5], '—', 'no active time without timing')
-    // The aggregate cards degrade to their empty notes.
     assert.ok(text(noTimeline.m.container).includes('No billed tokens in this range'))
     assert.ok(text(noTimeline.m.container).includes('No timing data yet'))
     await noTimeline.m.unmount()
@@ -445,7 +534,7 @@ describe('OverviewPanel', () => {
     assert.ok(text(m.container).includes('活跃会话'))
     assert.ok(text(m.container).includes('Token 统计'), 'the aggregate stats row rides the zh dictionary too')
     assert.ok(text(m.container).includes('系统提示词'), 'the Context tab\'s composition categories render in zh')
-    assert.ok(text(m.container).includes('打开插件设置'), 'the settings row rides the zh dictionary too')
+    assert.equal(query<HTMLButtonElement>(m.container, '.lc-ov-settings').title, '打开插件设置', 'the settings chip rides the zh dictionary too')
     await flush() // the price book lands
     const values = queryAll(m.container, '.lc-stat-value').map(el => el.textContent)
     assert.ok(values[2].startsWith('¥'), 'CNY under the zh locale')

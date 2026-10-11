@@ -1,7 +1,4 @@
-// Projection narrowing (src/client/services.ts): the no-white-screen wire
-// guards — numOf, timelineOf fast/slow paths, contextPressureOf,
-// contextBreakdownOf, tokenUsageOf, timingOf, headersOf — plus the seat
-// helpers over the harness service faces (conversationNodesOf, imageLoaderOf).
+// Projection narrowing (src/client/services.ts): the no-white-screen wire guards and the service-face seat helpers.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -278,9 +275,9 @@ describe('timelineOf', () => {
   })
 
   test('the unsupported gate record survives the sanitizing slow path only when well-formed', () => {
-    const kept = timelineOf({ current: 1, unsupported: { current: '0.1.1-rc.2', minimum: '0.1.5-rc.1' } })
+    const kept = timelineOf({ current: 1, unsupported: { current: '0.1.1-rc.2', minimum: '0.1.7-rc.2' } })
     assert.ok(kept !== null)
-    assert.deepEqual(kept.unsupported, { current: '0.1.1-rc.2', minimum: '0.1.5-rc.1' })
+    assert.deepEqual(kept.unsupported, { current: '0.1.1-rc.2', minimum: '0.1.7-rc.2' })
     for (const bad of ['x', null, {}, { current: 1, minimum: 'm' }, { current: 'c' }]) {
       const out = timelineOf({ current: 1, unsupported: bad })
       assert.ok(out !== null)
@@ -293,16 +290,20 @@ describe('timelineOf', () => {
       ok: true,
       model: 'm',
       current,
-      counts: { turns: 3, steps: 12, injects: 2, compactions: 1, prunes: 0 },
+      counts: { turns: 3, steps: 12, injects: 2, compactions: 1, prunes: 0, skills: 4 },
       last: { seq: 9, total: 100, prompt: 90 },
       detailRev: 12,
+      humanInputs: 2,
+      answers: 3,
       fileOps: [{ seq: 2, path: 'a.ts', kind: 'read', tool: 'read', err: false, added: 0, removed: 0 }],
       fileOpsFloor: 5,
       spans: [{ kind: 'ttft', start: 0, end: 100 }, null],
     }
     const out = timelineOf(head)
     assert.ok(out !== null)
-    assert.deepEqual(out.counts, { turns: 3, steps: 12, injects: 2, compactions: 1, prunes: 0 })
+    assert.deepEqual(out.counts, { turns: 3, steps: 12, injects: 2, compactions: 1, prunes: 0, skills: 4 })
+    assert.equal(out.humanInputs, 2)
+    assert.equal(out.answers, 3)
     assert.deepEqual(out.last, { seq: 9, total: 100, prompt: 90 })
     assert.equal(out.detailRev, 12)
     assert.deepEqual(out.requests, [])
@@ -314,9 +315,10 @@ describe('timelineOf', () => {
   })
 
   test('the slim head fields re-prove: partial counts zero per field, shapeless last/detailRev drop', () => {
-    const out = timelineOf({ current, counts: { turns: 2, steps: 'many' }, last: { seq: 'x' }, detailRev: 'r' })
+    const out = timelineOf({ current, counts: { turns: 2, steps: 'many' }, last: { seq: 'x' }, detailRev: 'r', answers: 'many' })
     assert.ok(out !== null)
-    assert.deepEqual(out.counts, { turns: 2, steps: 0, injects: 0, compactions: 0, prunes: 0 })
+    assert.deepEqual(out.counts, { turns: 2, steps: 0, injects: 0, compactions: 0, prunes: 0, skills: 0 })
+    assert.ok(!('answers' in out), 'a wrong-typed answers tally drops like any other scalar')
     assert.ok(!('last' in out), 'a wrong-typed seq drops the anchor whole')
     assert.ok(!('detailRev' in out), 'a wrong-typed revision drops the marker (reads as the inline generation)')
     const noCounts = timelineOf({ current, counts: 'junk', last: null, detailRev: NaN })
@@ -334,8 +336,7 @@ describe('timelineOf', () => {
 
   test('a slim head carrying the (empty) collections passes through by reference, markers intact', () => {
     // The host's head builder emits the four collections as empty lists, so
-    // the split generation rides the cheap pass-through path like any
-    // well-formed value — the markers/counts survive untouched.
+    // the split generation rides the cheap pass-through path like any well-formed value — the markers/counts survive untouched.
     const head = {
       ok: true,
       current,
@@ -354,7 +355,7 @@ describe('timelineOf', () => {
 
 describe('unsupportedOf', () => {
   test('well-formed records pass through as plain data', () => {
-    assert.deepEqual(unsupportedOf({ current: '0.1.1-rc.2', minimum: '0.1.5-rc.1' }), { current: '0.1.1-rc.2', minimum: '0.1.5-rc.1' })
+    assert.deepEqual(unsupportedOf({ current: '0.1.1-rc.2', minimum: '0.1.7-rc.2' }), { current: '0.1.1-rc.2', minimum: '0.1.7-rc.2' })
   })
 
   test('non-records and wrong-typed fields degrade to null', () => {
@@ -771,7 +772,6 @@ describe('canOpenPathsOf / openPathVia', () => {
     assert.equal(await canOpenPathsOf(ctxWith({ connection: rpcConn({ 'session/canOpenWorkspacePath': () => 'garbage' }) })), false)
     // The harness's own gate: a page not on the operator's machine never opens.
     assert.equal(await canOpenPathsOf(ctxWith({ connection: { isLoopback: false, rpc: openable().rpc } })), false)
-    // No connection service at all.
     assert.equal(await canOpenPathsOf(ctxWith({})), false)
   })
 
@@ -854,29 +854,14 @@ describe('openSessionVia', () => {
   const ctxWith = (services: Record<string, unknown>): ClientCtx => ({ get: (name: string) => services[name] }) as unknown as ClientCtx
 
   test('jumps through the view owner — every supported line\'s own verb (issue #90)', () => {
-    // Exactly the rc.2 composition: uiWorkspace serves the navigation verb,
-    // the sessions service carries no selection at all.
+    // Exactly the supported composition: uiWorkspace serves the navigation
+    // verb, the sessions service carries no selection at all.
     const opened: string[] = []
     openSessionVia(ctxWith({
       uiWorkspace: { openSession(id: string) { opened.push(id) } },
       sessions: { list: { getSnapshot: () => ({}) } },
     }), 's2')
     assert.deepEqual(opened, ['s2'])
-  })
-
-  test('the retired sessions-service verb still serves as the degradation path', () => {
-    const opened: string[] = []
-    openSessionVia(ctxWith({ sessions: { open: (id: string) => { opened.push(id) } } }), 's1')
-    assert.deepEqual(opened, ['s1'])
-  })
-
-  test('when both faces serve a verb, the view owner wins', () => {
-    const via: string[] = []
-    openSessionVia(ctxWith({
-      uiWorkspace: { openSession: (id: string) => { via.push(`workspace:${id}`) } },
-      sessions: { open: (id: string) => { via.push(`sessions:${id}`) } },
-    }), 's3')
-    assert.deepEqual(via, ['workspace:s3'])
   })
 
   test('the verb is invoked bound to its service instance', () => {
@@ -889,17 +874,14 @@ describe('openSessionVia', () => {
     assert.equal(seen, 's4:s4')
   })
 
-  test('a generation serving neither verb, or a verb-less face, swallows silently', () => {
+  test('a composition without the workspace module, or a verb-less face, swallows silently', () => {
     openSessionVia(ctxWith({}), 's5')
-    openSessionVia(ctxWith({ uiWorkspace: {}, sessions: null }), 's5')
+    openSessionVia(ctxWith({ uiWorkspace: {} }), 's5')
     openSessionVia(ctxWith({ uiWorkspace: { openSession: 7 } }), 's5')
-    openSessionVia(ctxWith({ sessions: {} }), 's5')
-    openSessionVia(ctxWith({ sessions: { open: 7 } }), 's5')
   })
 
   test('a hostile face never throws into the click handler', () => {
     openSessionVia(ctxWith({ uiWorkspace: { openSession: () => { throw new Error('boom') } } }), 's6')
-    openSessionVia(ctxWith({ sessions: { open: () => { throw new Error('boom') } } }), 's6')
     // A traced proxy can throw on the property READ itself (issue #42).
     openSessionVia(ctxWith({ uiWorkspace: { get openSession() { throw new Error('boom') } } }), 's6')
     openSessionVia({ get: () => { throw new Error('boom') } } as unknown as ClientCtx, 's6')
@@ -959,5 +941,37 @@ describe('activityOf', () => {
     assert.deepEqual(out, {
       days: { '2026-09-16': { tokens: 15, requests: 1 }, '2026-09-15': { tokens: 3, requests: 1 } },
     })
+  })
+
+  test('a well-formed skill table rides the pass-through; malformed tallies drop per name', () => {
+    const skills = { tdd: { n: 2, last: 1_758_000_000_000 } }
+    const wire = { days: { '2026-09-16': { tokens: 15, requests: 1, skills } } }
+    assert.ok(activityOf(wire) === (wire as never))
+    const out = activityOf({
+      days: {
+        '2026-09-16': {
+          tokens: 15,
+          requests: 1,
+          skills: {
+            tdd: { n: 1, last: 5 },
+            'bad-count': { n: 'x', last: 5 },
+            'bad-last': { n: 1, last: Number.NaN },
+            'neg-count': { n: -1, last: 5 },
+            'not-record': null,
+          },
+        },
+        '2026-09-17': { tokens: 1, requests: 1, skills: 'x' },
+        '2026-09-18': { tokens: 1, requests: 1, skills: [] },
+        '2026-09-19': { tokens: 1, requests: 1, skills: {} },
+      },
+    })
+    assert.deepEqual(out, {
+      days: {
+        '2026-09-16': { tokens: 15, requests: 1, skills: { tdd: { n: 1, last: 5 } } },
+        '2026-09-17': { tokens: 1, requests: 1 },
+        '2026-09-18': { tokens: 1, requests: 1 },
+        '2026-09-19': { tokens: 1, requests: 1 },
+      },
+    }, 'non-record and empty-after-scrubbing tables drop whole; the days survive')
   })
 })

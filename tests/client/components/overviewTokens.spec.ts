@@ -1,19 +1,17 @@
-// The Context Insights panel's aggregate Token Stats card
-// (src/client/components/overviewTokens.tsx) rendered with real React: the
-// donut centered on the range's merged billed total and split by the SAME
-// composition categories as the Context tab's Token card — the per-session
-// `billedParts` estimates folded by tokenPartsOf.
+// The Context Insights panel's aggregate Token Stats card (src/client/components/overviewTokens.tsx) rendered with real React: the donut
+// centered on the range's merged billed total and split by the SAME composition categories as the Context tab's Token card — the
+// per-session `billedParts` estimates folded by tokenPartsOf.
 
 import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
-import { makeDonut } from '../../../src/client/components/donut'
+import { Donut } from '../../../src/client/components/donut'
 import { makeOverviewTokens } from '../../../src/client/components/overviewTokens'
 import type { TokenPartTotal } from '../../../src/client/overview'
 import { makeKit, hover, mount, query, queryAll, text, unhover } from '../helpers/kit'
 
 const kit = makeKit()
-const Tokens = makeOverviewTokens(kit, makeDonut(kit))
+const Tokens = makeOverviewTokens(kit, Donut)
 
 const PARTS: TokenPartTotal[] = [
   { key: 'system', color: 'var(--color-indigo-500)', value: 42 },

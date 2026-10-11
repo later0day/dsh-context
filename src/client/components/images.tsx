@@ -1,12 +1,8 @@
-/**
- * dsh's multimodal pipeline stores only a normalized reference per image (never inline bytes); the block carries everything the card needs
- * except the display URL, which comes from the harness `uiConversation` service's `imageUrl` (the same loader the chat history rides on),
- * handed down as `load`; absent loader or failed load degrades to the metadata row alone — the card never throws.
- */
+/** dsh stores only a normalized reference per image (no inline bytes); the display URL comes from the harness
+ * `uiConversation.imageUrl` loader handed down as `load`. */
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
-import { createPortal } from 'react-dom'
-import { IconClose } from '../primitives'
+import { useCallback, useEffect, useState, type ReactElement } from 'react'
+import { ImageLightbox } from '@deepseek-ai/dsh-client-ui-primitives'
 import { fmtBytes } from '../format'
 import type { ImageLoader, ImageRefLike } from '../services'
 import { estimateImageTokens } from '../../shared/imageTokens'
@@ -17,11 +13,8 @@ export interface ImageKit {
   load?: ImageLoader
 }
 
-/**
- * Narrow an unknown content block to a durable image ref: accepts both raw message blocks (`{ type: 'image', attachment }`) and the
- * snapshot's assistant blocks (`{ kind: 'image', attachment }`); everything else null. Lenient on the optional facts — imageUrl reads
- * only attachmentId.
- */
+/** Accepts both raw message blocks (`type: 'image'`) and the snapshot's assistant blocks (`kind: 'image'`);
+ * every optional fact is re-proved. */
 export function imageRefOf(block: unknown): ImageRefLike | null {
   if (block === null || typeof block !== 'object') return null
   const b = block as { type?: unknown; kind?: unknown; attachment?: unknown }
@@ -48,51 +41,6 @@ export function imageRefOf(block: unknown): ImageRefLike | null {
   }
 }
 
-/**
- * Document-level original-image preview — the chat history's ImageLightbox recipe (dsh ui-attachment, which the browser module table does
- * not seed) ported onto the plugin's lc-* classes: body portal (a transformed/filtered ancestor cannot trap the fixed backdrop), blurred
- * mask, contain-fit image, circular close, Escape/mask close, focus restored to the opener.
- */
-function AttachmentLightbox(props: {
-  src: string
-  alt: string
-  labels: { dialog: string; close: string }
-  onClose: () => void
-}): ReactElement {
-  const { src, alt, labels, onClose } = props
-  const closeRef = useRef<HTMLButtonElement | null>(null)
-  const restoreRef = useRef<HTMLElement | null>(null)
-
-  useEffect(() => {
-    restoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    closeRef.current?.focus()
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown)
-      restoreRef.current?.focus()
-    }
-  }, [onClose])
-
-  return createPortal(
-    <div className="lc-att-lightbox" role="dialog" aria-modal="true" aria-label={labels.dialog}>
-      <div className="lc-att-lightbox-mask" aria-hidden="true" onMouseDown={onClose} />
-      <img className="lc-att-lightbox-img" src={src} alt={alt} />
-      <button ref={closeRef} type="button" className="lc-att-lightbox-close" aria-label={labels.close} onClick={onClose}>
-        <IconClose size={16} />
-      </button>
-    </div>,
-    document.body,
-  )
-}
-
-/**
- * One attachment card, the WHOLE card the click target: 64px cover tile + metadata column — Raw (the pre-normalization raster dsh records
- * when normalization reduced the image), Sent (the normalized raster the model receives, with byte size), estimated provider-billed tokens.
- * Click opens the chat-style lightbox; load failures retry on click; unknown facts leave no row.
- */
 export function makeImageCard(kit: ViewKit): ImageKit['Card'] {
   const { t, fmt } = kit
   return function ImageCard(props: { attachment: ImageRefLike; load?: ImageLoader }): ReactElement {
@@ -128,8 +76,6 @@ export function makeImageCard(kit: ViewKit): ImageKit['Card'] {
         value: attachment.bytes !== undefined ? `${sent} · ${fmtBytes(attachment.bytes)}` : sent,
       })
     }
-    // Estimated provider-billed tokens (shared/imageTokens — the official docs calculator on the stored dimensions; 117–384 per the vision
-    // guide's cap), shown whenever normalized dimensions are known.
     const tokens = attachment.width !== undefined && attachment.height !== undefined
       ? estimateImageTokens(attachment.width, attachment.height)
       : null
@@ -166,7 +112,7 @@ export function makeImageCard(kit: ViewKit): ImageKit['Card'] {
           </span>
         </button>
         {preview && src !== null && (
-          <AttachmentLightbox
+          <ImageLightbox
             src={src}
             alt={name}
             labels={{ dialog: t('attach.preview'), close: t('attach.close') }}

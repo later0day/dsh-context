@@ -1,8 +1,3 @@
-// RichText/RichSwitch/RichCopy/useRichMode (src/client/components/richText.tsx):
-// markdown mode renders through the REAL shared MarkdownText; raw mode is an
-// exact-text line-numbered <pre>; the switch drives the mode hook; the copy
-// control writes the exact source through the harness clipboard primitive.
-
 import { act, createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { afterEach, describe, test, vi } from 'vitest'
@@ -61,14 +56,14 @@ describe('RichSwitch', () => {
   test('two segments with titles; the active mode carries the on class; clicks report the pick', async () => {
     const picks: RichMode[] = []
     const m = await mount(h(RichSwitch, { mode: 'md', onPick: m2 => picks.push(m2) }))
-    const buttons = queryAll(m.container, '.lc-rich-seg-btn')
+    const buttons = queryAll(m.container, '.lc-gran-btn')
     assert.equal(buttons.length, 2)
     assert.equal(buttons[0].textContent, 'Raw')
     assert.equal(buttons[0].getAttribute('title'), 'View Raw Text')
-    assert.ok(!buttons[0].className.includes('lc-rich-seg-on'))
+    assert.ok(!buttons[0].className.includes('lc-gran-on'))
     assert.equal(buttons[1].textContent, 'Markdown')
     assert.equal(buttons[1].getAttribute('title'), 'View as Markdown')
-    assert.ok(buttons[1].className.includes('lc-rich-seg-on'))
+    assert.ok(buttons[1].className.includes('lc-gran-on'))
     await click(buttons[0])
     await click(buttons[1])
     assert.deepEqual(picks, ['raw', 'md'])
@@ -77,9 +72,9 @@ describe('RichSwitch', () => {
 
   test('raw mode marks the raw segment active instead', async () => {
     const m = await mount(h(RichSwitch, { mode: 'raw', onPick: () => {} }))
-    const buttons = queryAll(m.container, '.lc-rich-seg-btn')
-    assert.ok(buttons[0].className.includes('lc-rich-seg-on'))
-    assert.ok(!buttons[1].className.includes('lc-rich-seg-on'))
+    const buttons = queryAll(m.container, '.lc-gran-btn')
+    assert.ok(buttons[0].className.includes('lc-gran-on'))
+    assert.ok(!buttons[1].className.includes('lc-gran-on'))
     await m.unmount()
   })
 })
@@ -88,10 +83,10 @@ describe('useRichMode', () => {
   test('defaults to markdown and flips to raw via the switch', async () => {
     const m = await mount(h(Harness, { text: SAMPLE }))
     assert.ok(query(m.container, '.lc-ts-desc-md'))
-    const buttons = queryAll(m.container, '.lc-rich-seg-btn')
+    const buttons = queryAll(m.container, '.lc-gran-btn')
     await click(buttons[0]) // Raw
     assert.equal(rawText(m.container), SAMPLE)
-    await click(queryAll(m.container, '.lc-rich-seg-btn')[1]) // back to Markdown
+    await click(queryAll(m.container, '.lc-gran-btn')[1]) // back to Markdown
     assert.equal(query(m.container, '.lc-ts-desc-md h1').textContent, 'Title')
     await m.unmount()
   })

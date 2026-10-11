@@ -36,3 +36,5 @@ yarn-error.log*
 # Environment variables
 .env
 .env.local
+# macOS Finder metadata
+.DS_Store

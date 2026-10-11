@@ -1,8 +1,5 @@
-// applySurface paths of the fold (src/host/fold.ts): per-category node
-// projection (text/calls/tool/skill/plugin previews, image counts), the
-// callNames consume-once lifecycle, the shadow-price claim arm/consume
-// protocol, and every surfaceOp variant (append, range replace, shadowed-seq
-// replace with the net-freed event rewrite). No mocks: the real fold runs.
+// applySurface paths of the fold (src/host/fold.ts): per-category node projection, the callNames
+// consume-once lifecycle, the shadow-price claim protocol, and every surfaceOp variant. No mocks: the real fold runs.
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -49,34 +46,14 @@ describe('applySurface tool/result branch', () => {
     ])
     const node = state.surface.at(-1)
     assert.equal(node?.tool, 'bash')
-    assert.equal(node?.err, undefined, 'no error flag without data.error')
+    assert.equal(node?.err, undefined, 'no error flag without the message mark')
     assert.deepEqual(state.callNames, {}, 'the consumed entry leaves the persisted map')
   })
 
-  test('an unknown source callId falls through to the content block id', () => {
-    // Neither id is armed: the node ends up tool-less (a replay window where
-    // the tool/call event is gone). Note the fold assigns the lookup miss
-    // onto the node, so this state is not assertPlainJson-able.
+  test('an unknown source callId pairs nothing (a replay window where the tool/call event is gone)', () => {
     const { state } = driveTimeline([toolResult(1, { callId: 'ghost', content: text('ok') })])
     assert.equal(state.surface.at(-1)?.tool, undefined)
     assert.deepEqual(state.callNames, {})
-  })
-
-  test('a block toolCallId hit names the node when the source id is unknown', () => {
-    const ev: TimelineEvent = {
-      type: 'tool/result', seq: 2, time: at(),
-      data: {
-        callId: 'x',
-        message: {
-          source: { kind: 'tool', callId: 'x' },
-          content: [{ type: 'tool-result', toolCallId: 'c1', content: text('ok') }],
-        },
-      },
-      surfaceOp: 'append',
-    }
-    const { state } = driveTimeline([toolCall(1, { callId: 'c1', name: 'bash' }), ev])
-    assert.equal(state.surface.at(-1)?.tool, 'bash')
-    assert.deepEqual(state.callNames, {}, 'both the source id and the block id are consumed')
   })
 
   test('consume-once rebuild keeps the other pending calls', () => {
@@ -88,10 +65,12 @@ describe('applySurface tool/result branch', () => {
     assert.equal(state.callNames.c2?.name, 'read', 'the unanswered call stays armed')
   })
 
-  test('a result with neither id leaves callNames untouched', () => {
+  test('a result without the source callId pairs nothing and leaves callNames untouched', () => {
+    // A hostile/foreign envelope: the admission validation requires the
+    // source callId, so a source-less row can only arrive hostile — it folds to an unnamed node instead of throwing.
     const ev: TimelineEvent = {
       type: 'tool/result', seq: 2, time: at(),
-      data: { message: { content: [{ type: 'tool-result', content: text('ok') }] } },
+      data: { message: { role: 'tool', toolCallId: 'keep', content: text('ok') } },
       surfaceOp: 'append',
     }
     const { state } = driveTimeline([toolCall(1, { callId: 'keep', name: 'read' }), ev])
@@ -99,22 +78,32 @@ describe('applySurface tool/result branch', () => {
     assert.equal(state.callNames.keep?.name, 'read')
   })
 
-  test('data.error flags the node', () => {
+  test('the message isError flags the node', () => {
     const { state } = driveTimeline([
       toolCall(1, { callId: 'c1', name: 'bash' }),
       toolResult(2, { callId: 'c1', content: text('boom'), error: true }),
     ])
-    assert.equal(state.surface.at(-1)?.err, true)
-  })
-
-  test('the V4 message isError flags the node (no envelope error object)', () => {
-    const { state } = driveTimeline([
-      toolCall(1, { callId: 'c1', name: 'bash' }),
-      toolResult(2, { callId: 'c1', content: text('boom'), error: true, v4: true }),
-    ])
     const node = state.surface.at(-1)
     assert.equal(node?.err, true)
-    assert.equal(node?.tool, 'bash', 'the V4 source callId still pairs the node')
+    assert.equal(node?.tool, 'bash', 'the source callId still pairs the node')
+  })
+
+  test('the retired envelope-only error mark no longer flags the node', () => {
+    // The pre-V4 spelling (an event-level `data.error` with no message mark)
+    // is unreachable through the supported harnesses' admission validation;
+    // a hostile replay carrying it degrades to an unflagged node, never a throw.
+    const ev: TimelineEvent = {
+      type: 'tool/result', seq: 2, time: at(),
+      data: {
+        error: true,
+        message: { role: 'tool', toolCallId: 'c1', source: { kind: 'tool', callId: 'c1' }, content: text('boom') },
+      },
+      surfaceOp: 'append',
+    }
+    const { state } = driveTimeline([toolCall(1, { callId: 'c1', name: 'bash' }), ev])
+    const node = state.surface.at(-1)
+    assert.equal(node?.err, undefined)
+    assert.equal(node?.tool, 'bash')
   })
 })
 
@@ -291,8 +280,7 @@ describe('surfaceOp variants', () => {
   })
 
   test('restored state: claim without pendingShadowEventSeq skips the rewrite', () => {
-    // A checkpoint restore may carry the claim fields partially — def.apply
-    // accepts any TimelineState.
+    // A checkpoint restore may carry the claim fields partially — def.apply accepts any TimelineState.
     const def = timelineDef({})
     const base = driveTimeline([userMessage(1, text(big))]).state
     const restored: TimelineState = { ...base, pendingShadowedSeqs: [1] }

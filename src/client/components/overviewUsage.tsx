@@ -53,7 +53,7 @@ export function makeOverviewUsage(kit: ViewKit): (props: OverviewUsageProps) => 
   const { t, fmt } = kit
   return function OverviewUsage(props: OverviewUsageProps): ReactElement {
     const window = usageWindowOf(props.today)
-    // Widened honestly: a Record index read can miss at runtime.
+    // Widened: a Record index read can miss at runtime.
     const byKey: Record<string, DayTotals | undefined> = props.days
     const columns = window.map(key => ({ key, entry: byKey[key] }))
     const empty = columns.every(c => c.entry === undefined || (c.entry.tokens <= 0 && c.entry.cost === null))
@@ -67,8 +67,7 @@ export function makeOverviewUsage(kit: ViewKit): (props: OverviewUsageProps) => 
     const heightOf = (value: number, max: number): string => (max <= 0 || value <= 0 ? '0%' : `${Math.max(4, Math.round((value / max) * 100))}%`)
     const tickOf = (percent: number): string => fmt(Math.round((maxTokens * percent) / 100))
     // '—' while nothing prices (an all-zero rail would read as free); the 0
-    // tick reads bare — formatCost's toPrecision renders the floor as the
-    // odd "¥0.0".
+    // tick reads bare — formatCost's toPrecision renders the floor as the odd "¥0.0".
     const costTickOf = (percent: number): string => {
       if (maxCost <= 0) return '—'
       return percent === 0 ? '0' : formatCost((maxCost * percent) / 100, props.currency)
@@ -99,8 +98,7 @@ export function makeOverviewUsage(kit: ViewKit): (props: OverviewUsageProps) => 
                     {columns.map((c) => {
                       const tokens = c.entry?.tokens ?? 0
                       const cost = c.entry?.cost ?? null
-                      // The tooltip line reads the BARE label — the legend's
-                      // qualifier ("仅含支持计价映射的模型") stays off the bubble.
+                      // The tooltip line reads the BARE label; the legend's priced-models qualifier stays off the bubble.
                       const label = `${c.key}\n${t('ov.usage.tokens')} ${fmt(tokens)}\n${t('ov.usage.costTip')} ${cost === null ? '—' : formatCost(cost, props.currency)}`
                       return (
                         <div key={c.key} className="lc-ov-usage-col" data-lc-tip={label}>

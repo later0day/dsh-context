@@ -1,11 +1,5 @@
-/**
- * One live check for the Plugin-info card: lazy with 1h TTL; registries
- * are tried strictly in order — official npm first, npmmirror only as a
- * fallback — and one-at-a-time, never in parallel. Each source's failure
- * (non-ok response, missing/non-string version, network error) advances
- * to the next one; only an all-source failure resolves to null so the
- * card silently keeps its static version.
- */
+/** Lazy 1h TTL check for the Plugin-info card: npm first, npmmirror as fallback, one at a time; all
+ *  sources failing resolves null. */
 
 import { PLUGIN_NAME } from './meta'
 
@@ -41,7 +35,7 @@ export function fetchLatestVersion(): Promise<string | null> {
   return cached.promise
 }
 
-/** Numeric semver compare (pre-release suffix ignored): is `latest` strictly newer than `current`? */
+/** Numeric semver compare; the pre-release suffix is dropped (1.2.0-rc.1 == 1.2.0). */
 export function isNewerVersion(latest: string, current: string): boolean {
   const parse = (v: string): number[] =>
     v.replace(/^v/, '').split('-', 1)[0].split('.').map(n => parseInt(n, 10) || 0)

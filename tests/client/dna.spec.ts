@@ -1,14 +1,12 @@
-// dnaOf (src/client/dna.ts): the DNA strip's per-item decomposition — the
-// system prompt and the header epoch's tool schemas lead, the message flow
-// follows in seq order: the order the model reads the context, which is also
-// the order items joined it.
+// dnaOf (src/client/dna.ts): the DNA strip's per-item decomposition — the system prompt and the header epoch's
+// tool schemas lead, the message flow follows in seq order (the order the model reads the context).
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import { deltaBandsOf, dnaBaseLabel, dnaOf, trendBandsOf } from '../../src/client/dna'
 import type { TrendBand } from '../../src/client/dna'
 import { CAT_COLOR } from '../../src/client/categories'
-import { makeKit } from './helpers/kit'
+import { makeKit, surfaceNode } from './helpers/kit'
 import type { Assembled } from '../../src/client/assemble'
 import type { HeaderRecord, HeaderTool, SurfaceNode, SystemPromptNode } from '../../src/shared/types'
 
@@ -28,9 +26,6 @@ function tool(name: string, tokens: number): HeaderTool {
   return { name, tokens }
 }
 
-function node(over: Partial<SurfaceNode> & { seq: number }): SurfaceNode {
-  return { cat: 'user', tokens: 5, ...over }
-}
 
 describe('dnaOf', () => {
   test('empty context yields no bands', () => {
@@ -41,7 +36,7 @@ describe('dnaOf', () => {
     const items = dnaOf(asm({
       system: system(),
       header: header({ tools: [tool('bash', 30), tool('write', 20)] }),
-      nodes: [node({ seq: 1 })],
+      nodes: [surfaceNode({ seq: 1 })],
     }))
     assert.deepEqual(items.map(i => i.key), ['sys', 'tool:bash', 'tool:write', 'n1'])
     assert.deepEqual(items.map(i => i.cat), ['system', 'tools', 'tools', 'user'])
@@ -57,8 +52,8 @@ describe('dnaOf', () => {
   })
 
   test('message bands follow node seqs and hand the node through, with time only when logged', () => {
-    const a = node({ seq: 3, tokens: 7, time: 3000 })
-    const b = node({ seq: 8, cat: 'tool', tokens: 9 })
+    const a = surfaceNode({ seq: 3, tokens: 7, time: 3000 })
+    const b = surfaceNode({ seq: 8, cat: 'tool', tokens: 9 })
     const items = dnaOf(asm({ nodes: [a, b] }))
     assert.deepEqual(items.map(i => i.key), ['n3', 'n8'])
     assert.deepEqual(items.map(i => i.cat), ['user', 'tool'])
@@ -75,13 +70,13 @@ describe('dnaOf', () => {
     const items = dnaOf(asm({
       system: system({ seq: 50 }),
       header: header({ seq: 50, tools: [tool('bash', 30)] }),
-      nodes: [node({ seq: 3 }), node({ seq: 20, cat: 'tool' }), node({ seq: 60, cat: 'assistant' })],
+      nodes: [surfaceNode({ seq: 3 }), surfaceNode({ seq: 20, cat: 'tool' }), surfaceNode({ seq: 60, cat: 'assistant' })],
     }))
     assert.deepEqual(items.map(i => i.key), ['sys', 'tool:bash', 'n3', 'n20', 'n60'])
   })
 
   test('zero-token items keep their band (the bar drops zero widths, the reading order stays truthful)', () => {
-    const items = dnaOf(asm({ nodes: [node({ seq: 1, tokens: 0 }), node({ seq: 2 })] }))
+    const items = dnaOf(asm({ nodes: [surfaceNode({ seq: 1, tokens: 0 }), surfaceNode({ seq: 2 })] }))
     assert.deepEqual(items.map(i => i.key), ['n1', 'n2'])
   })
 })
@@ -91,7 +86,7 @@ describe('trendBandsOf', () => {
     const bands = trendBandsOf(asm({
       system: system(),
       header: header({ tools: [tool('bash', 30)] }),
-      nodes: [node({ seq: 1 }), node({ seq: 2, cat: 'assistant', tokens: 20 })],
+      nodes: [surfaceNode({ seq: 1 }), surfaceNode({ seq: 2, cat: 'assistant', tokens: 20 })],
     }))
     assert.deepEqual(bands.map(b => b.key), ['sys', 'tool:bash', 'n1', 'n2'])
     assert.deepEqual(bands.map(b => b.cat), ['system', 'tools', 'user', 'assistant'])
@@ -103,7 +98,7 @@ describe('trendBandsOf', () => {
   })
 
   test('zero-token bands keep their slot: the next offset still counts them', () => {
-    const bands = trendBandsOf(asm({ nodes: [node({ seq: 1, tokens: 0 }), node({ seq: 2, tokens: 7 })] }))
+    const bands = trendBandsOf(asm({ nodes: [surfaceNode({ seq: 1, tokens: 0 }), surfaceNode({ seq: 2, tokens: 7 })] }))
     assert.deepEqual(bands.map(b => b.off), [0, 0])
     assert.equal(bands[1].off + bands[1].tokens, 7)
   })
@@ -115,12 +110,12 @@ describe('dnaBaseLabel', () => {
     system: system(),
     header: header({ tools: [tool('bash', 30)] }),
     nodes: [
-      node({ seq: 1, cat: 'assistant' }),
-      node({ seq: 2, cat: 'tool', tool: 'write' }),
-      node({ seq: 3, cat: 'tool' }),
-      node({ seq: 4, cat: 'inject', form: 'notice' }),
-      node({ seq: 5, cat: 'inject' }),
-      node({ seq: 6, cat: 'user', skill: 'sync' }),
+      surfaceNode({ seq: 1, cat: 'assistant' }),
+      surfaceNode({ seq: 2, cat: 'tool', tool: 'write' }),
+      surfaceNode({ seq: 3, cat: 'tool' }),
+      surfaceNode({ seq: 4, cat: 'inject', form: 'notice' }),
+      surfaceNode({ seq: 5, cat: 'inject' }),
+      surfaceNode({ seq: 6, cat: 'user', skill: 'sync' }),
     ],
   }))
   const label = (key: string): string => {
@@ -192,7 +187,7 @@ describe('deltaBandsOf', () => {
 
   test('a removed item\'s node still reaches the label builder', () => {
     const kit = makeKit()
-    const prev = trendBandsOf(asm({ nodes: [node({ seq: 9, cat: 'tool', tool: 'write', tokens: 50 })] }))
+    const prev = trendBandsOf(asm({ nodes: [surfaceNode({ seq: 9, cat: 'tool', tool: 'write', tokens: 50 })] }))
     const cur = trendBandsOf(asm({}))
     const d = deltaBandsOf(cur, prev)
     assert.equal(d.down.length, 1)

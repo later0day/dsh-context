@@ -1,7 +1,3 @@
-// The activity heatmap (src/client/components/heatmap.tsx): grid math off
-// the injected today key, depth levels, day pinning, future cells, and the
-// empty/degraded paths — rendered with real React.
-
 import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -75,15 +71,13 @@ describe('Heatmap', () => {
     // The zero-token day counts as activity (requests > 0); depths ride the
     // steps metric, so its pair of steps draws half the peak.
     assert.ok(byKey.get('2026-09-07')?.className.includes('lc-heat-2'))
-    // The tooltip is three lines: the date, the day's active sessions, its steps.
     assert.equal(byKey.get('2026-09-16')?.getAttribute('aria-label'), '2026-09-16\n2 active sessions\n4 steps')
     assert.equal(byKey.get('2026-09-10')?.getAttribute('aria-label'), '2026-09-10\n1 active sessions\n0 steps')
     // Inert cells: data-less days and future days draw as plain spans.
     const spans = queryAll(m.container, 'span.lc-heat-cell')
     assert.ok(spans.length > 0)
     assert.ok(spans.some(s => s.className.includes('lc-heat-future')), 'future placeholders present')
-    // Weekday labels sit on the rows they name (Sunday-first: row 1 = Mon):
-    // Mon/Wed/Fri carry their names, the rest blank.
+    // Weekday labels sit on the rows they name (Sunday-first: row 1 = Mon): Mon/Wed/Fri carry their names, the rest blank.
     const wds = queryAll(m.container, '.lc-heat-wd')
     assert.deepEqual(wds.map(w => w.textContent), ['', 'Mon', '', 'Wed', '', 'Fri', ''])
     await m.unmount()
@@ -92,8 +86,7 @@ describe('Heatmap', () => {
   test('month labels mark the columns where a month begins', async () => {
     const days = { '2026-09-16': { tokens: 10, requests: 1, sessions: 1, cost: null } }
     // The default 8-week window runs Sunday 2026-07-26 → 2026-09-13: July
-    // began outside it, August begins in the Jul 26 column (Sat Aug 1) and
-    // September in the Aug 30 column (Tue Sep 1).
+    // began outside it, August begins in the Jul 26 column (Sat Aug 1) and September in the Aug 30 column (Tue Sep 1).
     const m = await mount(h(Heatmap, { days, today: TODAY }))
     assert.deepEqual(queryAll(m.container, '.lc-heat-mon').map(s => s.textContent), ['Aug', 'Sep'])
     await m.unmount()
@@ -145,7 +138,6 @@ describe('Heatmap', () => {
       query<HTMLButtonElement>(m.container, 'button.lc-heat-cell').getAttribute('data-lc-tip'),
       '2026-09-16\n3 active sessions\n1 steps',
     )
-    // An empty day tips too — the bare date, one line.
     assert.match(query(m.container, 'span.lc-heat-0').getAttribute('data-lc-tip') ?? '', /^\d{4}-\d{2}-\d{2}$/)
     await m.unmount()
   })

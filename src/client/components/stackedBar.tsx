@@ -1,26 +1,20 @@
-/**
- * Composition bar + legend; the shared hover-link tooltip is bespoke — no shared primitive reproduces the cross-segment/legend linkage —
+/** Composition bar + legend; the shared hover-link tooltip is bespoke — no shared primitive reproduces the cross-segment/legend linkage —
  * styled through the shared `--dsw-alias-*` tokens. On mount the segments and the free track grow open
  * left to right (stackedBar.css, staggered by the capped per-piece `--lc-i` slots below, so a long DNA
- * band list settles fast); the reserve band stays unanimated.
- */
+ * band list settles fast); the reserve band stays unanimated. */
 
 import { useState, type CSSProperties, type ReactElement } from 'react'
 import type { PartsPart } from '../categories'
 import type { ViewKit } from '../viewkit'
 
-/**
- * Mirror of dsh-compaction-basic's default `thresholdRatio` (0.8): it compacts at step boundaries once `floor(contextWindow × ratio)` is
+/** Mirror of dsh-compaction-basic's default `thresholdRatio` (0.8): it compacts at step boundaries once `floor(contextWindow × ratio)` is
  * reached; DSH does not publish the configured ratio to plugins/clients, so the reserve band mirrors the default — deployments tuning
- * `thresholdRatio`/`modelPolicies` should adjust it to match.
- */
+ * `thresholdRatio`/`modelPolicies` should adjust it to match. */
 export const AUTO_COMPACT_RATIO = 0.8
 
-/**
- * Entrance stagger cap: the browser's DNA bands can list dozens of items, so the grow-in cascade stops
+/** Entrance stagger cap: the browser's DNA bands can list dozens of items, so the grow-in cascade stops
  * widening after this many slots and late bands simply join within the cap (stackedBar.css delays by
- * `--lc-i`); the composition bar's few category segments never reach it.
- */
+ * `--lc-i`); the composition bar's few category segments never reach it. */
 const STAGGER_CAP = 8
 
 export interface StackedBarProps {
@@ -31,20 +25,15 @@ export interface StackedBarProps {
   onHoverKey?: (key: string | null) => void
   /** Segment click (the browser's DNA mode opens the band's accordion row): segments gain the pick cursor and report their key. */
   onPickKey?: (key: string) => void
-  /**
-   * Minimum width each segment keeps, as a share of the OCCUPIED region (the browser's DNA bands: a tiny item must
+  /** Minimum width each segment keeps, as a share of the OCCUPIED region (the browser's DNA bands: a tiny item must
    * stay a hoverable filament instead of rendering sub-pixel). Bands below the floor pin to it and the rest rescale
    * proportionally; the floor caps at the equal split (100/N), where the strip degrades to uniform bands. Tooltips
-   * keep reporting TRUE shares — only widths are floored.
-   */
+   * keep reporting TRUE shares — only widths are floored. */
   minBand?: number
-  /**
-   * Render the hover tooltip (default true); a bar that only MIRRORS another card's hover turns it off, so the tooltip floats only over the
-   * surface the pointer actually rests on.
-   */
+  /** Render the hover tooltip (default true); a bar that only MIRRORS another card's hover turns it off, so the tooltip
+   * floats only over the surface the pointer actually rests on. */
   tip?: boolean
-  /**
-   * Optional auto-compaction reserve band: the rightmost (1−ratio) of the window, striped 'headroom' — the region the session normally
+  /** Optional auto-compaction reserve band: the rightmost (1−ratio) of the window, striped 'headroom' — the region the session normally
    * avoids filling because automatic compaction triggers past the threshold; rendered only when `max` (the window) is positive.
    */
   reserve?: { ratio: number; label: string }

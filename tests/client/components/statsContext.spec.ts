@@ -1,17 +1,6 @@
-// StatsContext (src/client/components/statsContext.tsx) rendered with real
-// React: the session-as-a-flow diagram — the two source cards (I/O: the
-// whole-session human-input tally plus the file read/write/search/image
-// pills; Context Events broken down by kind) feeding the session node
-// (turns/steps/subagents), which drains into the two effect cards (Tool
-// Calls with the most-called pills; the Agent Team ledger — the family's
-// billed-token and estimated-cost totals, then one row per scope: the
-// current agent and the subagent subtree — ALL levels, the fold walks the
-// whole descendant tree) — in both locales, against an injected model-price
-// book (the store never reaches the network). The connector geometry is
-// pinned through measureFlow's unit tests (jsdom has no layout); the event
-// rows themselves live on the events card (contextView.spec.ts).
-// `countsOfRecords` and `toolTallyOf` derive the tallies the split
-// generation's wire head carries, pinned here.
+// StatsContext (src/client/components/statsContext.tsx) rendered in both locales against an injected model-price book (the store never
+// reaches the network). Connector geometry is pinned through measureFlow's unit tests (jsdom has no layout); the event rows live on the
+// events card (contextView.spec.ts). `countsOfRecords` and `toolTallyOf` derive the tallies the split generation's slim head carries.
 
 import { act, createElement as h } from 'react'
 import assert from 'node:assert/strict'
@@ -54,14 +43,21 @@ function ev(kind: ContextEventRecord['kind']): ContextEventRecord {
   return { seq: 0, time: 0, kind }
 }
 
+/** A skill-tagged inject event the way the host fold stamps it (fold.ts). */
+function skillEv(name: string): ContextEventRecord {
+  return { seq: 0, time: 0, kind: 'inject', form: 'instructions', sub: 'skill', name }
+}
+
 /** The five flow nodes in DOM order: inputs / events / session / tools / cost. */
 function flowNodes(container: HTMLElement): HTMLElement[] {
   return queryAll(container, '.lc-flow-node')
 }
 
-/** One node's pills as 'label+figure' strings (tips excluded). */
+/** One node's VISIBLE pills as 'label+figure' strings. The tools node also carries an off-flow gauge (every pill at
+ *  its natural width, for `ToolPills`' fit) — the gauge is never shown, so it is not part of what a reader sees. */
 function pillsOf(node: HTMLElement): string[] {
-  return queryAll(node, '.lc-flow-pill').map(el => (el.querySelector('.lc-flow-pill-label')?.textContent ?? '') + (el.querySelector('b')?.textContent ?? ''))
+  return queryAll(node, '.lc-flow-pill').filter(el => el.closest('.lc-flow-pill-gauge') === null)
+    .map(el => (el.querySelector('.lc-flow-pill-label')?.textContent ?? '') + (el.querySelector('b')?.textContent ?? ''))
 }
 
 /** The team ledger's rows as 'label+pair' strings (tips excluded). */
@@ -69,7 +65,6 @@ function rowsOf(node: HTMLElement): string[] {
   return queryAll(node, '.lc-flow-row').map(el => (el.querySelector('.lc-flow-row-label')?.textContent ?? '') + (el.querySelector('.lc-flow-pair')?.textContent ?? ''))
 }
 
-/** The four card headers (inputs / events / tools / cost), in DOM order. */
 function headsOf(container: HTMLElement): { labels: string[]; totals: string[] } {
   const heads = queryAll(container, '.lc-flow-head')
   return {
@@ -88,18 +83,29 @@ afterEach(() => {
 })
 
 describe('countsOfRecords (the inline generation derivation)', () => {
-  test('tallies distinct turns, records, and the three priced event kinds', () => {
+  test('tallies distinct turns, records, the three priced event kinds, and the distinct loaded skills', () => {
     // Two steps in turn 1, one in turn 2, one without a turn (folds as turn 0).
     const counts = countsOfRecords(
       [req(1), req(1), req(2), req()],
-      [ev('inject'), ev('inject'), ev('inject'), ev('compaction'), ev('compaction'), ev('prune'), ev('model'), ev('mode')],
+      [
+        ev('inject'), ev('inject'), ev('inject'), ev('compaction'), ev('compaction'), ev('prune'), ev('model'), ev('mode'),
+        // Skill loads and a `/name` invocation count by DISTINCT name; the
+        // available-skills catalog digest rides an untagged inject event and never lands in the tally.
+        skillEv('grilling'), skillEv('grilling'), skillEv('ponytail'),
+        { ...ev('inject'), name: 'available-skills' },
+        // Hostile shapes skip: a nameless tag and a non-string name.
+        { ...ev('inject'), sub: 'skill' },
+        { ...ev('inject'), sub: 'skill', name: 5 } as unknown as ContextEventRecord,
+      ],
     )
-    // model/mode events do not appear (only the three priced kinds do).
-    assert.deepEqual(counts, { turns: 3, steps: 4, injects: 3, compactions: 2, prunes: 1 })
+    // model/mode events do not appear (only the three priced kinds do); every
+    // inject above rides kind 'inject', the catalog digest and hostile shapes
+    // included — only the skills TALLY filters by the tag.
+    assert.deepEqual(counts, { turns: 3, steps: 4, injects: 9, compactions: 2, prunes: 1, skills: 2 })
   })
 
   test('empty collections tally zero', () => {
-    assert.deepEqual(countsOfRecords([], []), { turns: 0, steps: 0, injects: 0, compactions: 0, prunes: 0 })
+    assert.deepEqual(countsOfRecords([], []), { turns: 0, steps: 0, injects: 0, compactions: 0, prunes: 0, skills: 0 })
   })
 })
 
@@ -175,10 +181,58 @@ describe('measureFlow (the connector geometry)', () => {
 })
 
 describe('StatsContext', () => {
+  /** jsdom has no layout, so `ToolPills` shows the whole tally. Stubbing widths lets the fit run for real: a pill is
+   *  sized by its label's length, and the "+N" chip by its own. */
+  function stubWidths(pillWidth: number, chipWidth: number, rowWidth: number): () => void {
+    const real = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
+      const chip = this.classList.contains('lc-flow-pill-dim')
+      const inGauge = this.closest('.lc-flow-pill-gauge') !== null
+      if (!this.classList.contains('lc-flow-pill') && !this.classList.contains('lc-flow-pills')) return real.call(this)
+      if (this.classList.contains('lc-flow-pills-tools')) {
+        return { width: rowWidth, height: 0, top: 0, left: 0, right: rowWidth, bottom: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      }
+      const w = chip ? chipWidth : pillWidth
+      const left = inGauge && chip ? chipWidth : 0
+      return { width: w, height: 0, top: 0, left, right: left + w, bottom: 0, x: left, y: 0, toJSON: () => ({}) } as DOMRect
+    }
+    return () => { Element.prototype.getBoundingClientRect = real }
+  }
+
+  test('the tools row folds the tail into the overflow pill at the width it is measured against', async () => {
+    const restore = stubWidths(100, 40, 260)
+    try {
+      // 100px pills + a 40px chip + 4px gaps: 260 holds two pills and the chip (248), never three (352).
+      const m = await mount(h(StatsContext, {
+        counts: NO_COUNTS, files: NO_FILES, tools: [['read', 8], ['bash', 3], ['grep', 2]], locale: 'en',
+      }))
+      await flush()
+      assert.deepEqual(pillsOf(flowNodes(m.container)[3]), ['read8', 'bash3', '+1 more'])
+      await m.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  test('a wide card spells out every tool, with the overflow pill at zero', async () => {
+    const restore = stubWidths(100, 40, 900)
+    try {
+      const m = await mount(h(StatsContext, {
+        counts: NO_COUNTS, files: NO_FILES, tools: [['read', 8], ['bash', 3], ['grep', 2]], locale: 'en',
+      }))
+      await flush()
+      assert.deepEqual(pillsOf(flowNodes(m.container)[3]), ['read8', 'bash3', 'grep2', '+0 more'])
+      await m.unmount()
+    } finally {
+      restore()
+    }
+  })
+
   test('folds the flow: source cards feed the session node, which drains into the effect cards', async () => {
     const m = await mount(h(StatsContext, {
-      counts: { turns: 3, steps: 4, injects: 3, compactions: 2, prunes: 1 },
+      counts: { turns: 3, steps: 4, injects: 3, compactions: 2, prunes: 1, skills: 2 },
       humanInputs: 7,
+      answers: 3,
       toolCalls: 12,
       files: { reads: 9, writes: 2, searches: 4, images: 1 },
       tools: [['read', 8], ['bash', 3], ['grep', 2], ['edit', 1], ['glob', 1]],
@@ -195,14 +249,16 @@ describe('StatsContext', () => {
     assert.deepEqual(totals, ['23', '6', '12', '1.0M/$0.30'])
     assert.deepEqual(pillsOf(nodes[0]), ['Human Inputs?7', 'Read9', 'Written2', 'Searched4', 'Images1'])
     assert.deepEqual(pillsOf(nodes[1]), ['Inject3', 'Compact2', 'Prune1'])
-    // The three most-called tools pill out; the rest fold into the overflow pill.
-    assert.deepEqual(pillsOf(nodes[3]), ['read8', 'bash3', 'grep2', '+2 more'])
-    // The team ledger: the current agent's own share, then the (empty) subtree.
+    // Every tool the row can hold pills out in full (jsdom reports no width, so nothing is folded away here); the
+    // overflow pill reads zero. The real fit is measured in the browser, where the card has a width.
+    assert.deepEqual(pillsOf(nodes[3]), ['read8', 'bash3', 'grep2', 'edit1', 'glob1', '+0 more'])
     assert.deepEqual(rowsOf(nodes[4]), ['Current Agent1.0M/$0.30', 'Subagents × 0?0/—'])
-    // The session node carries the three shape figures under its label (no subagents here).
+    // The session node carries two figure rows under its label — turns/steps
+    // above skill loads/answers (two skills, three answers above).
     assert.equal(nodes[2].querySelector('.lc-flow-label')?.textContent, 'Current Session')
-    assert.deepEqual(queryAll(nodes[2], '.lc-flow-kv b').map(el => el.textContent), ['3', '4', '0'])
-    assert.deepEqual(queryAll(nodes[2], '.lc-flow-kv i').map(el => el.textContent), ['Turns', 'Steps', 'Subagents'])
+    const selfRows = queryAll(nodes[2], '.lc-flow-self-stats')
+    assert.deepEqual(selfRows.map(row => queryAll(row, '.lc-flow-kv b').map(el => el.textContent)), [['3', '4'], ['2', '3']])
+    assert.deepEqual(selfRows.map(row => queryAll(row, '.lc-flow-kv i').map(el => el.textContent)), [['Turns', 'Steps'], ['Skill Loads', 'Answers']])
     // The event pills tint by the events card's own kind classes.
     assert.ok(nodes[1].querySelector('.lc-flow-pill.lc-kind-inject') !== null)
     assert.ok(nodes[1].querySelector('.lc-flow-pill.lc-kind-prune') !== null)
@@ -224,7 +280,7 @@ describe('StatsContext', () => {
     assert.deepEqual(headsOf(m.container).totals, ['0', '0', '0', '0/—'])
     const nodes = flowNodes(m.container)
     assert.deepEqual(pillsOf(nodes[0]), ['Human Inputs?0', 'Read0', 'Written0'], 'searches/images pill only when they happened')
-    assert.deepEqual(pillsOf(nodes[3]), [], 'no tool pills without calls')
+    assert.deepEqual(pillsOf(nodes[3]), ['+0 more'], 'the overflow chip always renders, so the reserved row reads as a figure')
     assert.deepEqual(rowsOf(nodes[4]), ['Current Agent0/—', 'Subagents × 0?0/—'])
     assert.equal(queryAll(nodes[0], '.lc-flow-pill-dim').length, 3, 'every zero pill dims')
     assert.equal(queryAll(nodes[1], '.lc-flow-pill-dim').length, 3)
@@ -241,7 +297,7 @@ describe('StatsContext', () => {
     await flush()
     assert.equal(headsOf(m.container).totals[2], '11')
     const nodes = flowNodes(m.container)
-    assert.deepEqual(pillsOf(nodes[3]), ['read8', 'bash3'], 'two tools pill out, no overflow')
+    assert.deepEqual(pillsOf(nodes[3]), ['read8', 'bash3', '+0 more'], 'two tools pill out, the overflow chip reads zero')
     await m.unmount()
   })
 
@@ -348,7 +404,8 @@ describe('StatsContext', () => {
 
   test('the zh locale localizes the cards and prices the cost in CNY at 1 CNY = 0.15 USD', async () => {
     const m = await mount(h(StatsContextZh, {
-      counts: { turns: 1, steps: 1, injects: 0, compactions: 1, prunes: 0 },
+      counts: { turns: 1, steps: 1, injects: 0, compactions: 1, prunes: 0, skills: 5 },
+      answers: 4,
       files: { reads: 2, writes: 1, searches: 0, images: 0 },
       tools: [['read', 2]],
       cost: COST,
@@ -363,16 +420,17 @@ describe('StatsContext', () => {
     assert.deepEqual(totals, ['3', '1', '2', '1.0M/¥2.00'])
     assert.deepEqual(pillsOf(nodes[0]), ['用户输入?0', '读取2', '写入1'])
     assert.deepEqual(pillsOf(nodes[1]), ['注入0', '压缩1', '剪枝0'])
-    assert.deepEqual(pillsOf(nodes[3]), ['read2'])
+    assert.deepEqual(pillsOf(nodes[3]), ['read2', '其他 +0'])
     assert.deepEqual(rowsOf(nodes[4]), ['当前 Agent1.0M/¥2.00', '子 Agent × 0?0/—'])
     assert.equal(nodes[2].querySelector('.lc-flow-label')?.textContent, '当前会话')
-    assert.deepEqual(queryAll(nodes[2], '.lc-flow-kv i').map(el => el.textContent), ['轮次', '步数', '子 Agent'])
+    const selfRowsZh = queryAll(nodes[2], '.lc-flow-self-stats')
+    assert.deepEqual(selfRowsZh.map(row => queryAll(row, '.lc-flow-kv i').map(el => el.textContent)), [['轮次', '步数'], ['技能加载', '模型回复']])
+    assert.deepEqual(selfRowsZh.map(row => queryAll(row, '.lc-flow-kv b').map(el => el.textContent)), [['1', '1'], ['5', '4']])
     const costTip = text(queryAll(m.container, '.lc-stat-tip')[1])
     assert.ok(costTip.includes('含当前智能体及所有层级的子智能体'), 'the cost tip names the family scope too — all levels')
     assert.ok(costTip.includes('每百万 Token 价格'))
     assert.ok(costTip.includes('按 deepseek · deepseek-v4-flash 在 models.dev 的刊登价格如上。'))
     assert.ok(costTip.includes('人民币按 1 元 = 0.15 美元换算。'), 'the CNY display carries the conversion footnote')
-    // The table lists the book rates converted at the fixed rate.
     assert.ok(costTip.includes('缓存输入 ¥0.02'))
     assert.ok(costTip.includes('未缓存输入 ¥1.00'))
     assert.ok(costTip.includes('缓存写入 ¥1.00'))
@@ -482,45 +540,68 @@ describe('StatsContext', () => {
     await m.unmount()
   })
 
-  test('clicking the team card scrolls its Agent-network namesake into view; the price link stays out of it', async () => {
-    const m = await mount(h('div', { className: 'lc-root', style: { overflowY: 'auto' } },
-      h(StatsContext, { counts: NO_COUNTS, files: NO_FILES, tools: [], cost: COST, locale: 'en' }),
-      h('div', { className: 'lc-agents' }),
-    ))
+  test('the team card hands its jump to the caller; the price link stays out of it', async () => {
+    // The card this cell tallies lives on another view, and only the caller knows where it serves it.
+    let opened = 0
+    const m = await mount(h(StatsContext, {
+      counts: NO_COUNTS, files: NO_FILES, tools: [], cost: COST, locale: 'en',
+      onTeamClick: () => { opened += 1 },
+    }))
     await flush()
-    const root = query(m.container, '.lc-root')
-    const agents = query(m.container, '.lc-agents')
-    // jsdom reports 0 for both — the wrapper must overflow to be the operative scroller.
-    Object.defineProperty(root, 'scrollHeight', { value: 500 })
-    Object.defineProperty(root, 'clientHeight', { value: 200 })
-    agents.getBoundingClientRect = () => ({ top: 120 }) as DOMRect
     const team = query(m.container, '.lc-flow-team')
-    // A click on the card body lands the namesake flush at the scrollport top.
+    assert.equal(team.getAttribute('role'), 'button')
     await click(team)
-    assert.equal(root.scrollTop, 120)
-    // A click inside the price link keeps the link's own navigation — never a scroll.
-    root.scrollTop = 0
+    assert.equal(opened, 1)
+    // The price link inside the same cell is a navigation, never a view switch.
     await click(query(m.container, 'a.lc-flow-head'))
-    assert.equal(root.scrollTop, 0, 'the price link never triggers the reveal')
-    // Keyboard parity: Enter/Space reveal, anything else stays quiet.
-    team.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    assert.equal(root.scrollTop, 120)
-    root.scrollTop = 0
+    assert.equal(opened, 1)
+    // Keyboard parity: Enter/Space open, anything else stays quiet.
+    team.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    assert.equal(opened, 2)
     team.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }))
-    assert.equal(root.scrollTop, 0)
+    assert.equal(opened, 2)
     await m.unmount()
   })
 
-  test('without the namesake card a click is a quiet no-op', async () => {
-    // No .lc-root ancestor at all.
-    const bare = await mount(h(StatsContext, { counts: NO_COUNTS, files: NO_FILES, tools: [], cost: COST, locale: 'en' }))
-    await click(query(bare.container, '.lc-flow-team'))
-    await bare.unmount()
-    // A .lc-root without the Agent network card in it (a harness that hides it).
-    const m = await mount(h('div', { className: 'lc-root' },
-      h(StatsContext, { counts: NO_COUNTS, files: NO_FILES, tools: [], cost: COST, locale: 'en' }),
-    ))
-    await click(query(m.container, '.lc-flow-team'))
+  test('without a caller the cell is a plain figure, never a dead button', async () => {
+    const m = await mount(h(StatsContext, { counts: NO_COUNTS, files: NO_FILES, tools: [], cost: COST, locale: 'en' }))
+    const team = query(m.container, '.lc-flow-team')
+    assert.equal(team.getAttribute('role'), null)
+    assert.equal(team.getAttribute('tabindex'), null)
+    await click(team)
+    team.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await m.unmount()
+  })
+
+  test('the second-row figures fire onFigureClick on click and keyboard', async () => {
+    const calls: string[] = []
+    const m = await mount(h(StatsContext, {
+      counts: NO_COUNTS,
+      answers: 1,
+      files: NO_FILES,
+      tools: [],
+      locale: 'en',
+      onFigureClick: (f) => { calls.push(f) },
+    }))
+    await flush()
+    const cells = queryAll(m.container, '.lc-flow-kv-btn')
+    assert.equal(cells.length, 2)
+    assert.equal(cells[0].getAttribute('role'), 'button')
+    assert.ok(cells[0].getAttribute('title') !== null && cells[0].getAttribute('title') !== '', 'the jump tip rides')
+    await click(cells[0])
+    assert.deepEqual(calls, ['skills'])
+    cells[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    assert.deepEqual(calls, ['skills', 'answers'])
+    cells[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true }))
+    assert.deepEqual(calls, ['skills', 'answers'])
+    await m.unmount()
+  })
+
+  test('without onFigureClick the figure cells stay inert', async () => {
+    const m = await mount(h(StatsContext, { counts: NO_COUNTS, answers: 1, files: NO_FILES, tools: [], locale: 'en' }))
+    await flush()
+    const cells = queryAll(m.container, '.lc-flow-kv')
+    assert.ok(cells.every(c => c.getAttribute('role') === null && !c.className.includes('lc-flow-kv-btn')))
     await m.unmount()
   })
 })
@@ -543,10 +624,8 @@ describe('StatsContext — the subagent split (injected seat)', () => {
     // Family total: 1M × $0.30 (the doubled peak) + 2M × $0.075; own share $0.30, the subagents' $0.15.
     assert.equal(headsOf(m.container).totals[3], '3.0M/$0.45')
     assert.deepEqual(rowsOf(flowNodes(m.container)[4]), ['Current Agent1.0M/$0.30', 'Subagents × 2?2.0M/$0.15'])
-    // The session node's third figure counts the subtree.
-    assert.deepEqual(queryAll(flowNodes(m.container)[2], '.lc-flow-kv b').map(el => el.textContent), ['0', '0', '2'])
+    assert.deepEqual(queryAll(flowNodes(m.container)[4], '.lc-flow-row-label').map(el => el.textContent), ['Current Agent', 'Subagents × 2?'])
     const tips = queryAll(m.container, '.lc-stat-tip').map(el => text(el))
-    // The rate table covers BOTH sides' models in either tip.
     assert.ok(tips[1].includes('for deepseek · deepseek-v4-flash.'))
     assert.ok(tips[1].includes('for zhipuai · glm-5.3-flash.'))
     assert.ok(tips[2].includes('every descendant subagent session'))
@@ -663,7 +742,7 @@ describe('StatsContext — the real subagent-cost seat (makeSubagentCost)', () =
   function makeSeat(byId: Record<string, unknown>): { seat: (sessionId: string | undefined) => SubagentStats; face: FakeSessions } {
     const face = new FakeSessions(byId)
     const ctx = new TestClientCtx({ services: { sessions: face } })
-    return { seat: makeSubagentCost(asClientCtx(ctx), makeAgentHeads(asClientCtx(ctx))), face }
+    return { seat: makeSubagentCost(asClientCtx(ctx), makeAgentHeads()), face }
   }
 
   afterEach(() => {
@@ -699,8 +778,8 @@ describe('StatsContext — the real subagent-cost seat (makeSubagentCost)', () =
     assert.equal(headsOf(m.container).totals[3], '2.0M/$0.15')
     assert.deepEqual(rowsOf(flowNodes(m.container)[4]), ['Current Agent0/—', 'Subagents × 2?2.0M/$0.15'])
     assert.deepEqual(calls, ['cold'], 'only the timeline-less relative fetched')
-    // Both descendants count toward the session node's third figure, cold included.
-    assert.deepEqual(queryAll(flowNodes(m.container)[2], '.lc-flow-kv b').map(el => el.textContent), ['0', '0', '2'])
+    // Both descendants count in the ledger's subtree row, cold included.
+    assert.deepEqual(queryAll(flowNodes(m.container)[4], '.lc-flow-row-label').map(el => el.textContent), ['Current Agent', 'Subagents × 2?'])
     // A snapshot tick while the read is in flight re-attaches the SAME
     // pending read; when it lands, the duplicate settle bails on identity.
     await act(async () => {
@@ -757,8 +836,8 @@ describe('StatsContext — the real subagent-cost seat (makeSubagentCost)', () =
     assert.deepEqual(calls, ['cold'])
     assert.equal(headsOf(m.container).totals[3], '0/—')
     assert.deepEqual(rowsOf(flowNodes(m.container)[4]), ['Current Agent0/—', 'Subagents × 1?0/—'])
-    // The cold descendant still counts — a subagent is one whether or not its usage priced.
-    assert.deepEqual(queryAll(flowNodes(m.container)[2], '.lc-flow-kv b').map(el => el.textContent), ['0', '0', '1'])
+    // The cold descendant still counts in the ledger's subtree row — a subagent is one whether or not its usage priced.
+    assert.deepEqual(queryAll(flowNodes(m.container)[4], '.lc-flow-row-label').map(el => el.textContent), ['Current Agent', 'Subagents × 1?'])
     // A later snapshot tick re-folds the subtree; the sticky failure never re-fetches.
     await act(async () => {
       face.setState({ root: { running: false, updatedAt: 1 }, cold: { parentId: 'root', updatedAt: 2 } })
@@ -813,7 +892,7 @@ describe('StatsContext — the real subagent-cost seat (makeSubagentCost)', () =
 
   test('without the sessions face the seat prices nothing', async () => {
     const ctx = new TestClientCtx()
-    const Stats = makeStatsContext(kit, makeSubagentCost(asClientCtx(ctx), makeAgentHeads(asClientCtx(ctx))))
+    const Stats = makeStatsContext(kit, makeSubagentCost(asClientCtx(ctx), makeAgentHeads()))
     const m = await mount(h(Stats, {
       counts: NO_COUNTS,
       files: NO_FILES,
@@ -835,7 +914,7 @@ describe('StatsContext — the real subagent-cost seat (makeSubagentCost)', () =
     })
     const face = new FakeSessions({ root: { running: false, updatedAt: 1 }, kid: { parentId: 'root', updatedAt: 2 } })
     const ctx = new TestClientCtx({ services: { sessions: face } })
-    const Stats = makeStatsContext(kit, makeSubagentCost(asClientCtx(ctx), makeAgentHeads(asClientCtx(ctx))))
+    const Stats = makeStatsContext(kit, makeSubagentCost(asClientCtx(ctx), makeAgentHeads()))
     const m = await mount(h(Stats, {
       counts: NO_COUNTS,
       files: NO_FILES,

@@ -1,7 +1,4 @@
-// Wire-view tests for buildTimelineView (src/host/fold.ts): counters,
-// non-aliasing copies, the cost buckets, the serving window (newest tail +
-// pinned injects + coverage floors), event→request attribution, and view
-// purity. Driven through the real projection unit (driveTimeline / def.wire.view).
+// buildTimelineView (src/host/foldWire.ts) driven through the real projection unit (driveTimeline / def.wire.view).
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -16,8 +13,7 @@ const bucket = (uncached: number, cacheRead: number, cacheWrite: number, output:
 describe('buildTimelineView unknown-model shape', () => {
   test('optional scalars stay ABSENT keys until known — never undefined-valued (issue #29)', () => {
     // A fold over events that name no model/provider/capacity: the served
-    // view must not carry `undefined`-valued properties, which fail the
-    // harness's lossless-JSON push pipeline whole.
+    // view must not carry `undefined`-valued properties, which fail the harness's lossless-JSON push pipeline whole.
     const { view } = driveTimeline([
       userMessage(1, [{ type: 'text', text: 'aaaa' }]),
       assistantMessage(2, { turn: 1, step: 1 }),
@@ -367,7 +363,7 @@ describe('buildTimelineView event attribution', () => {
 
   test('a turn-less previous request stamps no from-side', () => {
     const { view } = driveTimeline([
-      assistantMessage(1, {}), // no turn/step: a replayed log row
+      assistantMessage(1, {}),
       planMode(2, { active: true }),
       assistantMessage(3, { turn: 1, step: 1 }),
     ])

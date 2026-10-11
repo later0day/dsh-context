@@ -1,77 +1,41 @@
 /**
- * Session-cost estimate — prices the host-folded cumulative billed-token
- * totals (SessionCostUsage) from the client's model-price book
- * (client/modelPrices.ts): the models.dev registry, fetched through
- * @opencode-ai/models. Book rates are USD per 1M tokens; the CNY display
- * converts at the fixed 1 CNY = 0.15 USD, and the total and the tooltip's
- * rates both go through `toCurrency`, so the printed figures can never
- * drift from the math that prices the session. DeepSeek bills a period-based
- * list whose models.dev figures ARE the official off-peak rates: the Host
- * already split those buckets at fold time, so DeepSeek's `peak` buckets
- * price at twice the book rate here (the `off` buckets stay at book) —
- * never any other provider's. A dsh provider id the registry does not know
- * prices through the model-side resolution index (PriceIndex): the vendor
- * branch is picked from registry data — the model's own-vendor SDK package,
- * the org segment of `vendor/model` spellings, the provider an id names —
- * with ambiguous or conflicting candidates pricing nothing.
+ * Session-cost estimate: prices the host-folded cumulative billed totals from
+ * the client's models.dev price book. Rates are USD per 1M tokens, converted
+ * for the CNY display at 1 CNY = 0.15 USD.
+ *
+ * DeepSeek's book figures are the official OFF-peak rates, so only its `peak`
+ * buckets double here; a provider id the registry does not know prices through
+ * the model-side index, whose vendor comes from registry data.
  */
 
 import type { SessionCostUsage } from '../shared/types'
 import { isDeepSeekProvider, modelsDevProviderOf } from '../shared/providers'
 import { asRecord, numOf } from './services'
 
-/** The display currencies the stats board ships; the locale picks one. */
 export type CostCurrency = 'usd' | 'cny'
 
-/** 1 CNY = 0.15 USD — the fixed CNY-display conversion rate. */
 const USD_PER_CNY = 0.15
 
-/** DeepSeek's peak rates are twice the off-peak rates (the official list). */
 const PEAK_FACTOR = 2
 
-/**
- * Per-1M-token rates (USD): cache-hit input, cache-miss input, cache
- * write, output (reasoning included). Absent registry fields fall back to
- * the input rate (a provider that publishes no cache prices bills those
- * buckets as plain input).
- */
+/** Per-1M-token rates (USD); an absent registry cache field falls back to the input rate. */
 export interface PriceTriple { hit: number; miss: number; write: number; out: number }
 
-/**
- * The client's price book: models.dev provider id → model id → USD rates,
- * extracted from the registry (modelPrices.ts).
- */
 export type ModelPrices = Record<string, Record<string, PriceTriple>>
 
-/**
- * One cross-provider resolution candidate: the carrying provider (models.dev
- * id) with its rates, and whether it is the model's own vendor — a provider
- * whose AI-SDK package is named after itself (`@ai-sdk/anthropic` →
- * `anthropic`); mirrors and gateways ride generic or foreign packages. `mid`
- * is the registry's own model id spelling (the tooltip's listing face).
- */
+/** One cross-provider candidate: the carrying provider (models.dev id) with its
+ * rates, plus whether it is the model's own vendor (`primary`). `mid` is the
+ * registry's model id spelling, the tooltip's listing face. */
 export interface PriceCandidate { pid: string; mid: string; rate: PriceTriple; primary: boolean }
 
-/**
- * Model-side resolution index over the book: lowercased model id (exact ids
- * plus their `-`-suffix tails, e.g. `k3` under `kimi-k3`) → the providers
- * carrying it. Built once per book load (modelPrices.ts) so a dsh provider id
- * the registry does not know still prices by model id alone — the vendor is
- * picked by data, never by a per-model hardcode.
- */
+/** Model-side index over the book: lowercased model id (exact ids plus their
+ * `-`suffix tails, e.g. `k3` under `kimi-k3`) → the providers carrying it. */
 export interface PriceIndex { byModel: Map<string, PriceCandidate[]> }
 
-/** The delivered book plus the index built over it (one `pricesBookOf` result). */
 export interface ModelBook { prices: ModelPrices; index: PriceIndex }
 
-/**
- * One billed model's price: the USD rates and the registry face — the
- * models.dev provider id and branch model id spelling — they resolved from
- * (the listing source the stats board's tooltip prints).
- */
 export interface PriceFace { pid: string; mid: string; rate: PriceTriple }
 
-/** A USD amount in the display currency (CNY divides the fixed rate). */
 export function toCurrency(usd: number, currency: CostCurrency): number {
   return currency === 'cny' ? usd / USD_PER_CNY : usd
 }
@@ -82,7 +46,6 @@ function sameRate(a: PriceTriple, b: PriceTriple): boolean {
   return close(a.hit, b.hit) && close(a.miss, b.miss) && close(a.write, b.write) && close(a.out, b.out)
 }
 
-/** One proven candidate rate off a built book branch, or null. */
 function rateOfEntry(value: unknown): PriceTriple | null {
   const v: unknown = value
   if (v === null || typeof v !== 'object') return null
@@ -93,14 +56,9 @@ function rateOfEntry(value: unknown): PriceTriple | null {
     : null
 }
 
-/**
- * Build the resolution index over a proven book. `npmOf` carries each
- * provider's registry `npm` package (null when absent) — the vendor signal:
- * a provider whose package is `@ai-sdk/<its own id>` is the model's first
- * party, while mirrors and gateways ride `@ai-sdk/openai-compatible` or
- * someone else's package. Suffix tails are indexed alongside exact ids so a
- * short dsh spelling (`k3`) resolves book-wide too.
- */
+/** Build the resolution index over a proven book. `npmOf` carries each
+ * provider's registry `npm` package (null when absent): `@ai-sdk/<its own id>`
+ * marks a first-party provider, while mirrors and gateways ride a generic or foreign package. */
 export function priceIndexOf(prices: ModelPrices, npmOf: Record<string, string | null>): PriceIndex {
   const byModel = new Map<string, PriceCandidate[]>()
   const push = (key: string, cand: PriceCandidate): void => {
@@ -126,11 +84,7 @@ export function priceIndexOf(prices: ModelPrices, npmOf: Record<string, string |
   return { byModel }
 }
 
-/**
- * The candidate carrying the rate shared by a candidate group, or null: the
- * largest equal-rate group wins, a tie refuses. Agreeing mirrors are noise;
- * disagreeing ones price nothing rather than guess.
- */
+/** The candidate whose rate the most candidates share, or null on a tie. */
 function majorityCandidate(cands: PriceCandidate[]): PriceCandidate | null {
   const groups: { cand: PriceCandidate; n: number }[] = []
   for (const c of cands) {
@@ -142,16 +96,10 @@ function majorityCandidate(cands: PriceCandidate[]): PriceCandidate | null {
   return groups.length > 1 && groups[0].n === groups[1].n ? null : groups[0].cand
 }
 
-/**
- * Pick one candidate: the model's own vendor (unique or unanimous), then a
- * provider the model id itself names (`deepseek-v4-flash` under `deepseek`),
- * then a lone carrier. Everything else prices null.
- */
 function resolveCandidates(lower: string, cands: PriceCandidate[], org: string | null): PriceCandidate | null {
   if (org !== null) {
-    // `vendor/model` catalogs (together- and vercel-style route ids): the
-    // org segment names the vendor — exactly, or as the registry id behind
-    // a variant org (`deepseek-ai` → `deepseek`, `zai-org` → `zai`).
+    // `vendor/model` catalogs: the org segment names the vendor, exactly or as
+    // the registry id behind a variant org (`deepseek-ai` → `deepseek`).
     const named = cands.filter(c => c.pid === org || org.startsWith(c.pid + '-') || (org.length >= 4 && org.startsWith(c.pid)))
     if (named.length > 0) {
       const cand = majorityCandidate(named)
@@ -171,11 +119,7 @@ function resolveCandidates(lower: string, cands: PriceCandidate[], org: string |
   return cands.length === 1 ? cands[0] : null
 }
 
-/**
- * Resolve a model id book-wide: the full id first, then its last `/`-segment
- * (an org-prefixed dialect whose exact spelling no registry provider lists).
- * Null when every tier refuses.
- */
+/** Resolve a model id book-wide: the full id, then its last `/`-segment. */
 function resolveRate(index: PriceIndex, model: string): PriceCandidate | null {
   const lower = model.toLowerCase()
   const slash = lower.lastIndexOf('/')
@@ -189,20 +133,14 @@ function resolveRate(index: PriceIndex, model: string): PriceCandidate | null {
   return null
 }
 
-/** One book branch (a provider's models), as far as runtime can prove it. */
 function branchOf(book: ModelPrices, id: string): Record<string, PriceTriple> | null {
   const v: unknown = book[id]
   return v !== null && typeof v === 'object' ? (v as Record<string, PriceTriple>) : null
 }
 
-/**
- * One branch's lookup hit — the registry's own model id and its rates, as
- * far as runtime can prove it: exact own key first (the book is untrusted
- * wire data), then case-insensitively, then by id SUFFIX — dsh spells some
- * models short (`k3`) where the registry namespaces them (`kimi-k3`).
- * Several suffix candidates (e.g. `k3` vs a hypothetical `other-k3`) are
- * ambiguous and price nothing.
- */
+/** One branch's lookup hit: exact own key first (the book is untrusted wire
+ * data), then case-insensitively, then by id suffix — dsh spells some models
+ * short (`k3`) where the registry namespaces them (`kimi-k3`). Several suffix candidates are ambiguous and price nothing. */
 function lookupFace(models: Record<string, PriceTriple>, model: string): { mid: string; rate: PriceTriple } | null {
   if (Object.hasOwn(models, model)) return { mid: model, rate: models[model] }
   const m = model.toLowerCase()
@@ -219,28 +157,20 @@ function lookupFace(models: Record<string, PriceTriple>, model: string): { mid: 
 }
 
 /**
- * One billed model's price: the USD rates plus the registry face — the
- * models.dev provider id and branch model id spelling — they resolved from
- * (what the stats board prints as the listing source).
+ * One billed model's price and registry face. The dsh provider id prices by
+ * model id (exact, case-insensitive, or suffix); a provider the book does not
+ * carry falls back to the model-side index.
  *
- * Resolution: the dsh provider id goes through modelsDevProviderOf (unmapped
- * ids pass through) and prices by model id — exact, case-insensitive, or
- * suffix. A provider the book does not carry falls back to the model-side
- * resolution index, which names the vendor from data (org segment, own-vendor
- * SDK, id prefix, lone carrier) — never from a per-model hardcode. The one
- * vendor-level seam: a `deepseek-` model id prices from DeepSeek's own
- * registry branch first — its listing is the first-party price book (cache
- * rates included), while the model-side tiers can hand the same id to a
- * self-named hosting provider whose flat listing bills cache hits as plain
- * input (azure's `deepseek-v4-pro`, issue #93) — the same specialness the
- * peak/off-peak split already grants DeepSeek.
+ * The one vendor-level seam: a `deepseek-` model id prices from DeepSeek's own
+ * branch first, since its listing is the first-party book with cache rates,
+ * while the model-side tiers can hand the same id to a self-named host that
+ * bills cache hits as plain input (azure's `deepseek-v4-pro`, issue #93).
  */
 export function priceFaceOf(book: ModelBook | null | undefined, provider: string, model: string): PriceFace | null {
   if (book === null || book === undefined) return null
   const registryPid = modelsDevProviderOf(provider)
   const direct = branchOf(book.prices, registryPid)
-  // A carried provider's own branch is final — an unknown model there prices
-  // null (no cross-provider guess).
+  // A carried provider's own branch is final: an unknown model there prices null.
   if (direct !== null) {
     const found = lookupFace(direct, model)
     return found === null ? null : { pid: registryPid, mid: found.mid, rate: found.rate }
@@ -256,20 +186,12 @@ export function priceFaceOf(book: ModelBook | null | undefined, provider: string
   return cand === null ? null : { pid: cand.pid, mid: cand.mid, rate: cand.rate }
 }
 
-/** The book's rates for one folded (provider, model) bucket ({@link priceFaceOf} without the face). */
 export function priceOf(book: ModelBook | null | undefined, provider: string, model: string): PriceTriple | null {
   return priceFaceOf(book, provider, model)?.rate ?? null
 }
 
-/**
- * Price the session's cumulative billed-token totals. Cache reads bill at
- * the hit rate, uncached input at the miss rate, cache writes at the write
- * rate, output (reasoning included) at the out rate; `peak` buckets price
- * at twice the book rate for DeepSeek (the book lists that provider's
- * off-peak rates — the Host splits the period-based list at fold time).
- * Null when nothing was priced (no usage folded, no book yet, or no model
- * the book prices), so the cell can show a dash.
- */
+/** Price the session's cumulative billed totals; `peak` buckets double for
+ * DeepSeek only. Null when nothing was priced, so the cell can show a dash. */
 export function estimateSessionCost(
   usage: SessionCostUsage | null | undefined,
   book: ModelBook | null | undefined,
@@ -281,9 +203,7 @@ export function estimateSessionCost(
   for (const provider of Object.keys(usage)) {
     const models = asRecord(usage[provider])
     if (models === null) continue
-    // The doubled peak period is DeepSeek's alone (shared/providers): the
-    // book lists its off-peak rates, so only the peak bucket multiplies —
-    // every other provider bills every bucket at book price.
+    // The doubled peak period is DeepSeek's alone.
     const deepseek = isDeepSeekProvider(provider)
     for (const model of Object.keys(models)) {
       const rate = priceOf(book, provider, model)
@@ -302,12 +222,6 @@ export function estimateSessionCost(
   return any ? toCurrency(total, currency) : null
 }
 
-/**
- * The scope's billed-token total: uncached input + cache read/write + output,
- * summed over every billed model and pricing period — the token face of the
- * same buckets the cost estimate prices. Hostile branches skip, the same
- * re-proving the estimator applies.
- */
 export function billedTokensOf(usage: SessionCostUsage | null | undefined): number {
   if (usage === null || usage === undefined) return 0
   let total = 0
@@ -327,12 +241,8 @@ export function billedTokensOf(usage: SessionCostUsage | null | undefined): numb
   return total
 }
 
-/**
- * Accumulate one usage's buckets into `out`, summing per (provider, model,
- * period). Hostile branches skip (the same re-proving the estimator applies
- * — the merge is a boundary too); true when any bucket record merged, even
- * an all-zero one (the estimator prices it as $0, never a dash).
- */
+/** Accumulate one usage's buckets into `out`. True when any bucket record
+ * merged, even an all-zero one, so the estimator prices it as $0 not a dash. */
 function mergeInto(out: SessionCostUsage, usage: SessionCostUsage | null | undefined): boolean {
   if (usage === null || usage === undefined) return false
   let any = false
@@ -361,12 +271,8 @@ function mergeInto(out: SessionCostUsage, usage: SessionCostUsage | null | undef
   return any
 }
 
-/**
- * Deep-merge session-cost usages into one — the stats board's total-cost
- * scope (the current agent's usage plus every subagent session's) and the
- * subagent fold's accumulation. Null when NO side carried a bucket record,
- * so the caller keeps its dash.
- */
+/** Deep-merge session-cost usages into one — the stats board's total-cost scope
+ * and the subagent fold. Null when no side carried a bucket record. */
 export function mergeCostUsage(...usages: (SessionCostUsage | null | undefined)[]): SessionCostUsage | null {
   const out: SessionCostUsage = {}
   let any = false

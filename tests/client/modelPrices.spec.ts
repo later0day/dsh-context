@@ -1,7 +1,5 @@
-// The model-price book (src/client/modelPrices.ts): the boundary sanitizer
-// over the models.dev payload (every field re-proved, junk entries dropped
-// whole) and the fetch store (kick on first subscribe, visible failure with
-// a backed-off automatic retry, test-loader injection).
+// The model-price book (src/client/modelPrices.ts): the boundary sanitizer over the models.dev payload and the
+// fetch store (kick on first subscribe, visible failure with a backed-off automatic retry, test-loader injection).
 
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, test, vi } from 'vitest'
@@ -117,8 +115,7 @@ describe('the price store', () => {
     assert.deepEqual(getModelPricesSnap(), { book: null, failed: false })
     const seen: ModelPricesSnap[] = []
     const un = subscribeModelPrices(() => seen.push(getModelPricesSnap()))
-    // A second subscription in the same tick finds the fetch already in
-    // flight and never re-kicks.
+    // A second subscription in the same tick finds the fetch already in flight and never re-kicks.
     const un2 = subscribeModelPrices(() => {})
     await settle()
     assert.equal(calls, 1)
@@ -153,6 +150,26 @@ describe('the price store', () => {
     assert.equal(calls, 3)
     assert.equal(getModelPricesSnap().failed, false, 'a successful retry clears the failure')
     assert.ok(getModelPricesSnap().book !== null)
+  })
+
+  test('the retry cycle stops once its last subscriber leaves, and a new subscribe kicks it again', async () => {
+    let calls = 0
+    setModelPricesLoader(() => {
+      calls++
+      return Promise.reject(new Error('down'))
+    })
+    const off = subscribeModelPrices(() => {})
+    await settle()
+    assert.equal(calls, 1)
+    off()
+    // The armed retry fires once, finds nobody subscribed, and ends the cycle.
+    await vi.advanceTimersByTimeAsync(30_000)
+    assert.equal(calls, 1, 'the idle cycle reaches no loader')
+    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    assert.equal(calls, 1, 'no poll happens without a subscriber')
+    subscribeModelPrices(() => {})
+    await settle()
+    assert.equal(calls, 2, 'a fresh subscribe kicks a fresh read')
   })
 
   test('a rejected fetch backs off too and stays capped', async () => {

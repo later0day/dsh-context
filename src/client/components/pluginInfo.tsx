@@ -1,8 +1,5 @@
-/**
-  * PluginInfo — the card beside Context stats introducing the plugin. Metadata is baked in from package.json via tsdown `define` (see
-  * meta.ts); one live npm-registry check (latestVersion.ts, 1-hour TTL) appends an `↑ vX.Y.Z` chip when newer.
-  * Row labels lead with site marks: the simple-icons artwork (the set the harness's own SiteGlyph draws from), riding currentColor.
- */
+/** The card beside Context stats introducing the plugin. Metadata is baked in from package.json via tsdown `define`;
+ * one live npm-registry check appends an `↑ vX.Y.Z` chip when newer. */
 
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 import { IconSettings } from '../primitives'
@@ -12,9 +9,7 @@ import { PLUGIN_NAME, PLUGIN_REPO, PLUGIN_REPO_SHORT, PLUGIN_VERSION } from '../
 import { openPluginSettings } from '../settingsJump'
 import type { ViewKit } from '../viewkit'
 
-// The marks fill their 24-unit box edge to edge; the -2 inset leaves the same
-// ~8% margin the harness's SiteGlyph leaves for its site marks (SiteGlyph
-// itself is not exported, so the artwork rides the package directly).
+// The marks fill their 24-unit box edge to edge, so the -2 inset restores the harness SiteGlyph's ~8% margin.
 function SiteMark({ icon }: { icon: SimpleIcon }): ReactElement {
   return (
     <svg width={12} height={12} className="lc-pi-labelicon" viewBox="-2 -2 28 28" fill="none" aria-hidden>
@@ -25,8 +20,7 @@ function SiteMark({ icon }: { icon: SimpleIcon }): ReactElement {
 
 export function makePluginInfo(kit: ViewKit): () => ReactElement {
   const { t } = kit
-  // `title` carries the untruncated value: at narrow card widths the row's
-  // ellipsis can cut the repo or name short, and the hover text recovers it.
+  // `title` carries the untruncated value, which the row's ellipsis can cut at narrow widths.
   const row = (icon: ReactElement, label: string, value: ReactNode, href: string, hint: string) => (
     <a className="lc-pi-row group/pi" href={href} target="_blank" rel="noreferrer">
       <div className="lc-pi-label">{icon}{label}</div>
@@ -38,8 +32,7 @@ export function makePluginInfo(kit: ViewKit): () => ReactElement {
     useEffect(() => {
       if (PLUGIN_VERSION.includes('-dev')) return
       let on = true
-      // Fire-and-forget: fetchLatestVersion never rejects (every failure
-      // narrows to null), and the `on` flag drops late results.
+      // fetchLatestVersion never rejects (every failure narrows to null); the `on` flag drops late results.
       void fetchLatestVersion().then((v) => { if (on && v) setLatest(v) })
       return () => { on = false }
     }, [])
@@ -47,8 +40,7 @@ export function makePluginInfo(kit: ViewKit): () => ReactElement {
     const nameText = PLUGIN_NAME + ' (v' + PLUGIN_VERSION + ')'
     const nameValue: ReactNode[] = [nameText]
     if (update) nameValue.push(<span key="update" className="lc-pi-update">{'↑ v' + update}</span>)
-    // The quarter-share card of the head row (the stats card takes 3 parts): its rows
-    // ellipsize and recover values on hover, so a 240px floor suffices.
+    // Its rows ellipsize and recover values on hover, so a 240px floor suffices.
     return (
       <div className="lc-card flex-1 min-w-[min(240px,100%)]">
         <div className="lc-card-title">

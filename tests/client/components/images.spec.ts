@@ -1,7 +1,7 @@
-// images.tsx — imageRefOf narrowing (pure) plus ImageCard and the
-// AttachmentLightbox rendered with real React (portal to document.body).
+// ImagesCard (src/client/components/images.tsx): the preview it renders is the platform ImageLightbox, whose dialog
+// behavior is covered upstream, so only the plugin-owned open/close wiring is pinned here.
 
-import { act, createElement as h } from 'react'
+import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test, vi } from 'vitest'
 import { imageRefOf, makeImageCard } from '../../../src/client/components/images'
@@ -12,11 +12,7 @@ import { click, flush, keydown, makeKit, mount, query, queryAll } from '../helpe
 const kit = makeKit()
 const ImageCard = makeImageCard(kit)
 
-async function mousedown(el: Element): Promise<void> {
-  await act(async () => {
-    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
-  })
-}
+const dialog = (): Element | null => document.body.querySelector('[role=dialog]')
 
 describe('imageRefOf', () => {
   test('rejects non-objects and non-image blocks', () => {
@@ -120,7 +116,7 @@ describe('ImageCard metadata', () => {
     assert.ok(rows[2].getAttribute('title')!.includes('384'))
     assert.equal(rows[0].getAttribute('title'), null)
     await click(card)
-    assert.equal(queryAll(document.body, '.lc-att-lightbox').length, 0)
+    assert.equal(dialog(), null)
     await m.unmount()
   })
 
@@ -198,7 +194,7 @@ describe('ImageCard loading', () => {
   })
 })
 
-describe('AttachmentLightbox', () => {
+describe('ImageLightbox wiring', () => {
   async function mountOpenable() {
     const load = () => Promise.resolve('blob:x')
     const m = await mount(h(ImageCard, { attachment: FULL, load }))
@@ -206,60 +202,24 @@ describe('AttachmentLightbox', () => {
     return m
   }
 
-  test('click opens the body portal; Escape closes it and restores focus', async () => {
+  test('click opens the body-portaled dialog; Escape closes it', async () => {
     const m = await mountOpenable()
-    const card = query(m.container, '.lc-att-item')
-    card.focus()
-    assert.equal(document.activeElement, card)
-    await click(card)
-    const box = query(document.body, '.lc-att-lightbox')
-    assert.equal(box.getAttribute('role'), 'dialog')
+    await click(query(m.container, '.lc-att-item'))
+    const box = dialog()!
     assert.equal(box.getAttribute('aria-label'), 'Image preview')
-    assert.equal(query<HTMLImageElement>(box, '.lc-att-lightbox-img').getAttribute('src'), 'blob:x')
-    const close = query(box, '.lc-att-lightbox-close')
-    assert.equal(close.getAttribute('aria-label'), 'Close')
-    assert.ok(query(box, 'svg') instanceof SVGElement) // real IconCloseOutline16
-    assert.equal(document.activeElement, close) // focus moved into the dialog
-    await keydown('Enter') // non-Escape keys keep it open
-    assert.equal(queryAll(document.body, '.lc-att-lightbox').length, 1)
+    assert.equal(query<HTMLImageElement>(box, 'img').getAttribute('src'), 'blob:x')
+    assert.equal(query(box, 'button').getAttribute('aria-label'), 'Close')
     await keydown('Escape')
-    assert.equal(queryAll(document.body, '.lc-att-lightbox').length, 0)
-    assert.equal(document.activeElement, card) // focus restored to the opener
+    assert.equal(dialog(), null)
     await m.unmount()
   })
 
-  test('mask mousedown closes the lightbox', async () => {
+  test('the close control closes the lightbox', async () => {
     const m = await mountOpenable()
     await click(query(m.container, '.lc-att-item'))
-    await mousedown(query(document.body, '.lc-att-lightbox-mask'))
-    assert.equal(queryAll(document.body, '.lc-att-lightbox').length, 0)
+    await click(query(dialog()!, 'button'))
+    assert.equal(dialog(), null)
     await m.unmount()
-  })
-
-  test('the close button closes the lightbox', async () => {
-    const m = await mountOpenable()
-    await click(query(m.container, '.lc-att-item'))
-    await click(query(document.body, '.lc-att-lightbox-close'))
-    assert.equal(queryAll(document.body, '.lc-att-lightbox').length, 0)
-    await m.unmount()
-  })
-
-  test('without a focused opener there is nothing to restore to', async () => {
-    // jsdom always reports <body> as activeElement; force the null arm of the
-    // `instanceof HTMLElement` guard.
-    const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, 'activeElement')
-    Object.defineProperty(document, 'activeElement', { get: () => null, configurable: true })
-    try {
-      const m = await mountOpenable()
-      await click(query(m.container, '.lc-att-item'))
-      assert.equal(queryAll(document.body, '.lc-att-lightbox').length, 1)
-      await keydown('Escape')
-      assert.equal(queryAll(document.body, '.lc-att-lightbox').length, 0)
-      await m.unmount()
-    } finally {
-      delete (document as { activeElement?: unknown }).activeElement
-      if (descriptor) Object.defineProperty(Document.prototype, 'activeElement', descriptor)
-    }
   })
 
   test('switching the attachment while open closes the preview', async () => {
@@ -267,10 +227,9 @@ describe('AttachmentLightbox', () => {
     const m = await mount(h(ImageCard, { attachment: FULL, load }))
     await flush()
     await click(query(m.container, '.lc-att-item'))
-    assert.equal(queryAll(document.body, '.lc-att-lightbox').length, 1)
-    // New attachment with a pending load: src resets, preview drops out.
+    assert.ok(dialog() !== null)
     await m.update(h(ImageCard, { attachment: { ...FULL, attachmentId: 'a2' }, load: () => new Promise<string>(() => {}) }))
-    assert.equal(queryAll(document.body, '.lc-att-lightbox').length, 0)
+    assert.equal(dialog(), null)
     await m.unmount()
   })
 })

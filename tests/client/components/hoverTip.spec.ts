@@ -1,15 +1,9 @@
-// The dashboard's hover tip (src/client/components/hoverTip.tsx): one fixed
-// bubble portaled to <body>, driven by delegated zone events — show on
-// anchor hover/focus, re-anchor on switch, hide on leave/blur/scroll/unmount,
-// with viewport clamping and side flipping in the measure pass.
-
 import { act, createElement as h, type ReactElement } from 'react'
 import assert from 'node:assert/strict'
 import { afterEach, describe, test } from 'vitest'
 import { useHoverTip } from '../../../src/client/components/hoverTip'
 import { flush, mount, query, type Mounted } from '../helpers/kit'
 
-/** A tip zone with a pair of anchors (A carries a child span) and a plain non-anchor. */
 function Zone(): ReactElement {
   const { zoneProps, bubble } = useHoverTip()
   return h(
@@ -33,8 +27,7 @@ async function mouseout(target: Element, relatedTarget: EventTarget | null): Pro
   await act(async () => { target.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget })) })
 }
 
-// React implements onFocus/onBlur (and their captures) over the bubbling
-// focusin/focusout pair, so the specs drive those natively.
+// React implements onFocus/onBlur (and their captures) over the bubbling focusin/focusout pair, so the specs drive those natively.
 async function focusIn(target: Element): Promise<void> {
   await act(async () => { target.dispatchEvent(new FocusEvent('focusin', { bubbles: true })) })
 }
@@ -93,7 +86,6 @@ describe('useHoverTip', () => {
     assert.equal(bubble()?.style.cssText, shown, 'same anchor keeps the measured spot')
     assert.equal(a.getAttribute('aria-describedby'), 'lc-hovertip-bubble')
 
-    // A → B: leaving A toward B does not hide; B's mouseover re-anchors.
     await mouseout(a, b)
     assert.ok(bubble() !== null, 'anchor-to-anchor movement never hides')
     await mouseover(b)

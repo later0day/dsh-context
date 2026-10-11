@@ -1,6 +1,5 @@
-// Unit tests for the runtime register() attribution hook (src/host/attribution.ts)
-// against a REAL cordis Context: plugin fibers read `ctx.tools` (firing the
-// internal/get waterfall) and call `register()` on a fake tools service.
+// The runtime register() attribution hook (src/host/attribution.ts) against a REAL cordis Context:
+// plugin fibers read `ctx.tools` (firing the internal/get waterfall) and call `register()` on a fake tools service.
 
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -10,7 +9,6 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { UNKNOWN_TOOL_SOURCE } from '../../src/shared/types'
 import { callerPackageFrom, createToolAttribution, packageNameFrom, type ToolAttribution } from '../../src/host/attribution'
 
-/** Render an absolute fs path as a `file://` URL for synthetic stack frames. */
 const fileUrl = (file: string) => 'file:///' + file.replace(/\\/g, '/')
 
 /** Absolute path of this spec file (a file inside the dsh-context package). */
@@ -20,12 +18,9 @@ const specFile = path.normalize(fileURLToPath(import.meta.url))
  * registry); reading it yields the wrapped underlying service instance. */
 const CORDIS_ORIGINAL = Symbol.for('cordis.original')
 
-/**
- * A tracked tools service shaped like dsh's ToolRuntime: a real Service
+/** A tracked tools service shaped like dsh's ToolRuntime: a real Service
  * subclass whose `register` is a PROTOTYPE method — the shape that makes
- * cordis hand out a fresh traced proxy (closing over the reader's context)
- * on every `ctx.tools` property read.
- */
+ * cordis hand out a fresh traced proxy (closing over the reader's context) on every `ctx.tools` property read. */
 class TrackedTools extends Service {
   layers = { global: { tools: new Map() } }
   constructor(ctx: Context) { super(ctx, 'tools') }
@@ -211,8 +206,7 @@ describe('createToolAttribution', () => {
     const first = createToolAttribution(app)
     void first
     // The second hook incarnation (a reload) peels the first wrapper back to
-    // the original: a registration records into the NEW hook only, and the
-    // original register still runs exactly once.
+    // the original: a registration records into the NEW hook only, and the original register still runs exactly once.
     const second = createToolAttribution(app)
     await app.plugin({
       name: 'provider-b',

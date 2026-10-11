@@ -1,9 +1,6 @@
-// The shape-driven readers (src/host/logShapes.ts): the log spellings the
-// fold reconciles — the embedded assistant stream's first token, the
-// replacement op's endpoints, and the raw chunk token test. Hostile shapes
-// are pinned beside the happy paths: a malformed record must read as
-// "nothing here", never throw (the projection registry drives the fold with
-// no error boundary of its own).
+// The shape-driven readers (src/host/logShapes.ts): the embedded assistant stream's first token, the
+// replacement op's endpoints, and the raw chunk token test. Hostile shapes are pinned beside the happy
+// paths — a malformed record reads as "nothing here", never throws (the registry drives the fold with no error boundary).
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
@@ -43,8 +40,7 @@ describe('decodeTallyOfStream', () => {
   })
 
   test('a later block closes the previous one even when its own kind is unknown', () => {
-    // The unknown marker still ends the reasoning span; its own interval is
-    // lost and it counts nothing.
+    // The unknown marker still ends the reasoning span; its own interval is lost and it counts nothing.
     assert.deepEqual(decodeTallyOfStream([chunk(1000, 'reasoning'), chunk(1400, 'image')], 1900), {
       spans: { reasoning: 400, text: 0, toolarg: 0 },
       blocks: { reasoning: 1, text: 0, toolarg: 0 },
@@ -83,8 +79,7 @@ describe('decodeTallyOfStream', () => {
   })
 
   test('a backwards marker clamps to a zero span instead of a negative one', () => {
-    // The text block's interval is negative → 0; the reasoning block is last,
-    // so it owns the tail to endTime.
+    // The text block's interval is negative → 0; the reasoning block is last, so it owns the tail to endTime.
     assert.deepEqual(decodeTallyOfStream([chunk(1000, 'text'), chunk(900, 'reasoning')], 950), {
       spans: { reasoning: 50, text: 0, toolarg: 0 },
       blocks: { reasoning: 1, text: 1, toolarg: 0 },

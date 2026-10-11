@@ -1,12 +1,7 @@
-// Staging + probe helpers for the compat matrix (matrix.spec.ts): stage the
-// REAL harness sources at a baseline tag, boot the plugin's BUILT host entry
-// on the tag's real registry + vendored cordis, and read the tag's client
-// seams straight from its sources.
-//
-// The registry probe runs as a small spawned driver INSIDE the staging dir,
-// so the bare `@deepseek-ai/cordis` import resolves to the cordis release
-// that harness line vendors (not this repo's) — one process per baseline,
-// reported as one JSON line.
+// Staging + probe helpers for the compat matrix (matrix.spec.ts): stage the REAL harness sources at a baseline tag, boot the plugin's BUILT
+// host entry on the tag's real registry + vendored cordis, and read the tag's client seams straight from its sources. The registry probe
+// runs as a small spawned driver INSIDE the staging dir, so the bare `@deepseek-ai/cordis` import resolves to the cordis release that
+// harness line vendors (not this repo's) — one process per baseline, reported as one JSON line.
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -85,21 +80,14 @@ export function ensureHostDeps(baseline: Baseline): void {
   if (run.status !== 0) throw new Error(`npm install ${JSON.stringify(deps)} failed: ${(run.stderr ?? '').trim().slice(0, 300)}`)
 }
 
-/** The tag's settings namespace pattern, read off the file the baseline names (null when absent). */
-export function namespacePatternOf(baseline: Baseline, file: string): RegExp | null {
-  const source = dshShow(baseline.tag, file)
-  const match = /^const NAMESPACE_PATTERN = \/(.+)\/([gimsuy]*)$/m.exec(source)
-  return match === null ? null : new RegExp(match[1], match[2])
-}
-
 export interface DriverReport {
   registered: boolean
   keys: string[]
   gateOk: boolean
   coldMatches: boolean
-  /** V4 tool-registry changes survive the real registry's cache/read paths. */
   developerTokens: number | null
   developerRequestTokens: number | null
+  /** V4 tool-registry `developer/message` changes survive the real cache/read paths. */
   developerRestoreMatches: boolean
   /** Issue #44: hostile gateway usage keeps the served values schema-valid on the REAL registry. */
   hostileSnapshotOk: boolean
@@ -113,12 +101,9 @@ export interface DriverReport {
   poisonedSnapshotThrows: boolean
 }
 
-/**
- * The staged host driver: runs INSIDE the baseline's staging dir, applies the
+/** The staged host driver: runs INSIDE the baseline's staging dir, applies the
  * plugin's real host entry into the tag's real registry, drives a canonical
- * log through the registry's own snapshot / checkpoint / restore paths, and
- * reports as one JSON line.
- */
+ * log through the registry's own snapshot / checkpoint / restore paths, and reports as one JSON line. */
 function driverSource(pluginUrl: string, developerMessages: boolean): string {
   return `
 import { Context } from '@deepseek-ai/cordis'
@@ -195,8 +180,7 @@ if (${developerMessages}) {
 // A mis-accounting gateway's figures (negative uncached input from
 // cached_tokens > prompt_tokens, fractional counts, string buckets, a NaN a
 // hostile direct-drive could supply) ride the durable log legally; the
-// plugin's served values must stay schema-valid through the registry's own
-// strict parse on every later delivery.
+// plugin's served values must stay schema-valid through the registry's own strict parse on every later delivery.
 const hostile = [
   ev(12, 'step/start'),
   ev(13, 'assistant/message', { turn: 1, step: 2, message: { content: [{ type: 'text', text: 'h1' }] }, usage: { inputTokens: -80, cacheReadTokens: 150.7, cacheWriteTokens: '10', outputTokens: 22.4 } }),
@@ -301,51 +285,39 @@ export function bundleRequires(): string[] {
   return [...new Set([...source.matchAll(/require\("([^"]+)"\)/g)].map(m => m[1]))]
 }
 
-/**
- * The slot registrations the client half mounts on EVERY baseline (identical
- * spellings in each generation's sources). The preferences card seat and the
- * settings transport are asserted separately, per generation — the matrix
- * spec pins them to the baseline's `settings` seam (`settings.plugin.item` +
- * `settingsScope` through V3, the Plugins page's `plugins.bundle.config` +
- * `configForms` from the Config-form generation on).
- */
+/** The slot registrations the client half mounts on EVERY baseline (identical
+ * spellings in each generation's sources). */
 export const SLOT_SEAMS = [
   'conversation.view',
   'conversation.chat.assistant-actions',
   'conversation.input.overlay',
 ] as const
 
-/**
- * The ui-primitives icon seams the client bundle renders, as [modern, legacy]
- * name pairs: the vocabulary renamed across the range (`…Outline16`/`…14`
- * through 0.1.5, `…OutlineRegular`/`…OutlineMedium` from 0.1.6), and a
- * missing name is `undefined` at the browser's runtime — React error #130.
- * `src/client/primitives.ts` resolves whichever spelling the running
- * generation serves; each pair must exist in at least one spelling per tag.
- */
+/** The ui-primitives icon seams the client bundle renders: every supported
+ * line ships the `…OutlineRegular`/`…OutlineMedium` vocabulary, and a missing
+ * name is `undefined` at the browser's runtime — React error #130.
+ * `src/client/primitives.ts` resolves each by name; every one must exist per tag. */
 export const ICON_SEAMS = [
-  ['IconBranchOutlineRegular', 'IconBranchOutline16'],
-  ['IconPlusOutlineRegular', 'IconPlusOutline16'],
-  ['IconCheckOutlineRegular', 'IconCheckOutline16'],
-  ['IconCopyOutlineRegular', 'IconCopyOutline16'],
-  ['IconCloseOutlineRegular', 'IconCloseOutline16'],
-  ['IconSettingsOutlineMedium', 'IconSettingsOutline14'],
-  ['IconChevronDownOutlineMedium', 'IconChevronDownOutline14'],
+  'IconBranchOutlineRegular',
+  'IconPlusOutlineRegular',
+  'IconCheckOutlineRegular',
+  'IconCopyOutlineRegular',
+  'IconCloseOutlineRegular',
+  'IconSettingsOutlineMedium',
+  'IconChevronDownOutlineMedium',
+  'IconChevronUpOutlineMedium',
+  'IconSearchOutlineRegular',
 ] as const
 
-/**
- * The event families the host fold switches on (src/host/fold.ts) — the UNION
- * over every supported generation (developer/message is V4-only). The
- * per-baseline probe asserts the baseline's own `foldEventTypes` subset, and
- * a matrix test asserts this union equals the baselines' union — a fold case
- * added without a baseline list fails loudly instead of going unprobed.
- */
-export const FOLD_EVENT_TYPES = [
-  'request/header', 'request/context', 'step/start', 'step/end',
-  'user/message', 'developer/message', 'tool/call', 'tool/result', 'assistant/message',
-  'assistant/attempt', 'tool/ptc-dispatch',
-  'plan/mode', 'compaction/summary', 'compaction/prune', 'system/message',
-] as const
+/** The event families the host fold actually switches on, read out of `src/host/fold.ts` so the
+ * matrix can never check a hand-copied list against itself. Throws when the labels are not found,
+ * so a refactor that moves the switch fails loudly instead of going vacuously green. */
+export function foldEventTypesFromSource(): readonly string[] {
+  const source = readFileSync(join(REPO, 'src', 'host', 'fold.ts'), 'utf8')
+  const labels = [...source.matchAll(/^\s*case '([a-z-]+\/[a-z-]+)':/gm)].map(m => m[1])
+  if (labels.length === 0) throw new Error('fold.ts: no event case labels found — the matrix cannot verify the baseline lists')
+  return [...new Set(labels)].sort()
+}
 
 /** The tag's durable-event vocabulary (packages/core/session/src/known-event-types.ts). */
 export async function knownEventTypesOf(baseline: Baseline): Promise<ReadonlySet<string>> {

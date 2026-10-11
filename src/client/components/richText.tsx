@@ -1,10 +1,5 @@
-/**
-  * RichText — the raw/markdown body for the Context browser's detail sections. Markdown renders via the harness's shared MarkdownText (GFM,
-  * sanitized, resolved from the platform module table — zero plugin-side markdown dependency); raw is a line-numbered `<pre>`. The Raw/MD
-  * switch sits at a section head's right edge (RichSwitch; per-card mode via useRichMode), with the copy-raw control (RichCopy) and the
-  * find-in-text control (useRichFind) beside it. Find wraps matches in DOM-level `<mark>` elements over the rendered body — the same lens
-  * in both modes, no markdown AST work — and the section remounts the body on a text change so React never reconciles over mutated nodes.
- */
+/** The raw/markdown body for the Context browser's detail sections: MarkdownText for `md` (the harness's shared GFM
+ * renderer), a line-numbered `<pre>` for raw. */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type RefObject } from 'react'
 import { MarkdownText, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -13,11 +8,7 @@ import type { ViewKit } from '../viewkit'
 
 export type RichMode = 'raw' | 'md'
 
-/**
- * The Markdown chrome the harness primitives serve as a required `labels`
- * prop. Typed locally so the plugin typechecks without a primitives
- * dependency.
- */
+/** The `labels` prop MarkdownText requires, typed locally so the plugin needs no primitives dependency. */
 interface MarkdownChrome {
   code: { copyLabel: string; copiedLabel: string }
   footnotes: string
@@ -33,21 +24,17 @@ export interface RichKit {
   useRichFind: (text: string, mode: RichMode) => RichFind
 }
 
-/** Per-section find-in-text state and controls, wired by the section head. */
 export interface RichFind {
-  /** The head toggle button (magnifier), placed beside the copy control. */
   button: ReactElement
-  /** The find bar row, rendered between head and body; null while closed. */
   bar: ReactElement | null
   /** Key for the body wrapper: a text change remounts the body so React never diffs over the injected marks. */
   bodyKey: string
-  /** Ref for the body wrapper the marks are scoped to. */
   bodyRef: RefObject<HTMLDivElement>
 }
 
 /** Settle window for the query: rapid typing or deleting rescans the body once, not per keystroke. */
 const FIND_DEBOUNCE_MS = 150
-/** Cap on rendered marks: a one-character query in a huge body must not flood the DOM (the counter reports the cap with a '+'). */
+/** Cap on rendered marks: a one-character query must not flood the DOM (the counter reports the cap with a '+'). */
 const FIND_MAX_MARKS = 500
 
 interface FindMarks {
@@ -56,11 +43,8 @@ interface FindMarks {
   restore: () => void
 }
 
-/**
- * Wrap every case-insensitive occurrence of `query` under `root` in a `<mark>`, flag the active one and scroll it into view. The
- * restore puts the ORIGINAL text nodes back with their original values (splitText keeps the first node in place, so React's own
- * node references survive the whole cycle); created nodes are removed.
- */
+/** Wrap every case-insensitive occurrence of `query` under `root` in a `<mark>`. The restore puts the original text nodes
+ * back with their values (splitText keeps the first node in place, so React's node references survive). */
 function markMatches(root: HTMLElement, query: string, active: number): FindMarks {
   const needle = query.toLowerCase()
   const texts: Text[] = []
@@ -70,7 +54,7 @@ function markMatches(root: HTMLElement, query: string, active: number): FindMark
   const marks: HTMLElement[] = []
   let capped = false
   for (const textNode of texts) {
-    // CharacterData.data (not nodeValue) is non-nullable; an empty haystack simply never matches.
+    // CharacterData.data (not nodeValue) is non-nullable, so an empty haystack never matches.
     const full = textNode.data
     const created: Node[] = []
     let rest = textNode
@@ -112,9 +96,6 @@ export function makeRichText(kit: ViewKit): RichKit {
   const { t } = kit
 
   function useRichMode(): [RichMode, (mode: RichMode) => void] {
-    // Markdown is the default view: the detail cards hold prose (prompts,
-    // descriptions, messages), which reads better rendered; raw stays one
-    // click away for exact source inspection.
     const [mode, setMode] = useState<RichMode>('md')
     return [mode, setMode]
   }
@@ -123,22 +104,21 @@ export function makeRichText(kit: ViewKit): RichKit {
     const seg = (m: RichMode, label: string, tip: string) => (
       <button
         type="button"
-        className={'lc-rich-seg-btn' + (props.mode === m ? ' lc-rich-seg-on' : '')}
+        className={'lc-gran-btn' + (props.mode === m ? ' lc-gran-on' : '')}
         title={tip}
         onClick={() => { props.onPick(m) }}
       >{label}</button>
     )
     return (
-      <span className="lc-rich-seg">
+      <span className="lc-gran">
         {seg('raw', t('rich.raw'), t('rich.toRaw'))}
         {seg('md', t('rich.md'), t('rich.toMd'))}
       </span>
     )
   }
 
-  // One block per source line: the number is a counter-fed ::before glued to
-  // its own line across soft wraps, and pseudo content never reaches the
-  // clipboard, so selecting the body still copies the exact source text.
+  // One block per source line: the number is a counter-fed ::before glued to its line across soft wraps, and pseudo
+  // content never reaches the clipboard.
   function RawText(props: { text: string }): ReactElement {
     const lines = useMemo(() => {
       const parts = props.text.split('\n')
@@ -153,11 +133,7 @@ export function makeRichText(kit: ViewKit): RichKit {
     )
   }
 
-  // Icon-only copy of the section's exact source (always the raw text, never
-  // the rendered markdown). The write and its transient confirmation follow
-  // the harness's own code-block control: a rejected host write claims no
-  // success, a second click during the window is a no-op, and the glyph
-  // resets after a beat.
+  // Always the raw source, never the rendered markdown; the write and its confirmation follow the harness's own code-block control.
   function RichCopy(props: { text: string }): ReactElement {
     const [copied, setCopied] = useState(false)
     const onCopy = useCallback(() => {
@@ -183,8 +159,7 @@ export function makeRichText(kit: ViewKit): RichKit {
   }
 
   function RichText(props: { text: string; mode: RichMode }): ReactElement {
-    // Reference-stable per locale: a fresh object identity would discard the
-    // renderer's cached elements on every render (0.1.2+ faces).
+    // Reference-stable per locale: `labels` is a MarkdownText dependency, so a fresh object would re-parse the Markdown on every render.
     const mdLabels = useMemo<MarkdownChrome>(() => ({
       code: { copyLabel: t('rich.md.copy'), copiedLabel: t('rich.md.copied') },
       footnotes: t('rich.md.footnotes'),
@@ -195,9 +170,7 @@ export function makeRichText(kit: ViewKit): RichKit {
     return <RawText text={props.text} />
   }
 
-  // Find-in-text (ctrl+f style), scoped to one section's body. The query is debounced before the scan; Enter/Shift+Enter (or the
-  // chevrons) cycle the active match, Escape closes. The lens lives in the hook so a reopened bar finds the query it left, and the
-  // mark effect keys on text AND mode so the lens follows a body swap (step pick or Raw/MD switch) instead of going stale.
+  // Find-in-text (ctrl+f style), scoped to one section's body; the mark effect keys on text AND mode so the lens follows a body swap.
   function useRichFind(text: string, mode: RichMode): RichFind {
     const [open, setOpen] = useState(false)
     const [query, setQuery] = useState('')
