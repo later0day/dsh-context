@@ -3,11 +3,8 @@
  * current session; a failed read renders the tallies unenriched. */
 
 import type { SkillInfo } from '../shared/types'
+import { SKILLS_ROUTE } from './apiRoutes'
 import { asRecord } from './services'
-
-// The skills route of host/skills.ts, re-declared here: the client bundle
-// inlines every import and the host module must never reach it.
-const SKILLS_ROUTE = '/api/dsh-context/skills'
 
 /** Narrow the route's payload: the name is the join key and must prove itself; path and source ride only when proved. */
 export function skillInfoListOf(value: unknown): SkillInfo[] | null {

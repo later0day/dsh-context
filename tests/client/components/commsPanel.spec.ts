@@ -38,9 +38,12 @@ const COMMS: CommsRow[] = [
 function detailsOf(over: Partial<FleetDetailState> = {}): FleetDetailState {
   return {
     landed: new Map(),
+    fullLanded: new Map(),
     pending: new Set(),
+    fullPending: new Set(),
     scanned: new Set(),
     request: vi.fn(),
+    requestFull: vi.fn(),
     scan: vi.fn(),
     refresh: vi.fn(),
     ...over,
@@ -54,6 +57,8 @@ function propsOf(over: Partial<CommsPanelProps> = {}): CommsPanelProps {
     comms: COMMS,
     labelOf: id => ({ root: 'Main Agent', w1: 'worker-bee' })[id] ?? id,
     onPin: () => {},
+    pickId: null,
+    onPickClear: () => {},
     t: kit.t,
     fmt: kit.fmt,
     ...over,
@@ -183,6 +188,32 @@ describe('CommsPanel — the timeline', () => {
     const m = await mount(h(CommsPanel, propsOf({ details, comms: [] })))
     assert.equal(queryAll(m.container, 'select').length, 0)
     assert.ok(!text(m.container).includes(DICT_EN['fleet.comms.truncated']))
+    await m.unmount()
+  })
+
+  test('a picked agent narrows the timeline; the pick chip clears it', async () => {
+    const clears: boolean[] = []
+    const m = await mount(h(CommsPanel, propsOf({
+      details: detailsOf({ landed: landedAll, scanned: scannedAll }),
+      pickId: 'root',
+      onPickClear: () => { clears.push(true) },
+    })))
+    // The pick governs: the dropdown steps aside, the chip names the label.
+    assert.equal(queryAll(m.container, 'select').length, 0)
+    assert.equal(queryAll(m.container, '.lc-comms-row').length, 3)
+    assert.ok(text(query(m.container, '.lc-tasks-filter')).includes('Main Agent'))
+    await click(query(m.container, '.lc-tasks-filter'))
+    assert.deepEqual([...clears], [true])
+    await m.unmount()
+  })
+
+  test('a picked agent without traffic names it', async () => {
+    const m = await mount(h(CommsPanel, propsOf({
+      details: detailsOf({ landed: landedAll, scanned: scannedAll }),
+      pickId: 'w9',
+    })))
+    assert.equal(queryAll(m.container, '.lc-comms-row').length, 0)
+    assert.ok(text(m.container).includes(DICT_EN['fleet.comms.noMatch']))
     await m.unmount()
   })
 })

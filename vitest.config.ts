@@ -19,6 +19,8 @@ export default defineConfig({
           name: 'client',
           include: ['tests/client/**/*.spec.ts'],
           environment: 'jsdom',
+          // One jsdom environment per worker instead of one per file: ~30% off the coverage suite's runtime. Client-only — the host project fails under this pool.
+          pool: 'vmThreads',
           setupFiles: ['tests/client/setup.ts'],
           server: {
             deps: {

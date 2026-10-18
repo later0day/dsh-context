@@ -32,6 +32,8 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
       captured.markdownProps = props
       return React.createElement('div', null, String(props.text ?? ''))
     },
+    // The JSON body's tree inspector (the detail sections' auto-detected third mode).
+    JsonTree: () => React.createElement('div', null, 'json-tree'),
     // The rich-text copy control's glyphs and clipboard writer; the Plugin Info card's settings gear.
     IconCopyOutlineRegular: () => React.createElement('span', null),
     IconCheckOutlineRegular: () => React.createElement('span', null),

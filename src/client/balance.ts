@@ -4,11 +4,8 @@
  * spinner or an error where a pill should be. */
 
 import type { PlatformBalance, PlatformBalanceEntry } from '../shared/types'
+import { BALANCE_ROUTE } from './apiRoutes'
 import { asRecord } from './services'
-
-// The balance route of host/balance.ts, re-declared because the client bundle inlines every import;
-// same-origin POST under the harness's authenticated `/api` fence.
-const BALANCE_ROUTE = '/api/dsh-context/balance'
 
 const STORAGE_KEY = 'dsh-context:platform-balance'
 

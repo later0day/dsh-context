@@ -9,6 +9,9 @@
  * `ctx.sessionQuery.observeSession` (live-preferred, so one code path serves live and cold
  * sessions alike), and every read admitted by the shared cold-read gate. Extraction is
  * display-only and total: unknown event types and malformed payloads drop whole, never throw.
+ *
+ * The default body reads excerpts; a `full: true` body lifts the prompt/reply excerpt caps —
+ * the task card's opened sections fetch that on demand, one whole-log read either way.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -19,11 +22,19 @@ import { type ConnectionHostFace, registerPostRoute } from './connection'
 /** The plugin's fleet route, under the authenticated `/api` fence. */
 export const FLEET_ROUTE = '/api/dsh-context/fleet'
 
-/** Payload caps: the route serves inspector excerpts, not transcripts. */
+/** Excerpt-mode payload caps: the fold's default read serves inspector excerpts, not transcripts. */
 const MESSAGES_MAX = 40
 const MESSAGE_TEXT_MAX = 400
 const PROMPT_TEXT_MAX = 1600
 const REPLY_TEXT_MAX = 300
+/** The full read's only bound on prompt and reply — DSH itself never truncates either (the whole
+ * log is already in hand), but a corrupted log should never flood a client that asked for text. */
+const FULL_TEXT_MAX = 100_000
+
+/** Whether the request asked for the task card's full read (unclipped prompt and reply). */
+function fullOf(body: unknown): boolean {
+  return asRecord(body)?.full === true
+}
 
 interface SessionQueryFace {
   observeSession?(id: string, options: unknown): Promise<unknown>
@@ -133,7 +144,7 @@ function rosterMemberOf(data: Record<string, unknown>): FleetMemberInfo | null {
 }
 
 /** The newest assistant text of the log — the agent's latest report-back. */
-function lastReplyOf(events: readonly unknown[]): { time: number; text: string; cut: boolean } | null {
+function lastReplyOf(events: readonly unknown[], max: number): { time: number; text: string; cut: boolean } | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = asRecord(events[i])
     if (ev === null || ev.type !== 'assistant/message') continue
@@ -147,15 +158,18 @@ function lastReplyOf(events: readonly unknown[]): { time: number; text: string; 
     }
     if (text.trim() === '') continue
     const time = typeof ev.time === 'number' && Number.isFinite(ev.time) ? ev.time : 0
-    const cut = clip(text, REPLY_TEXT_MAX)
+    const cut = clip(text, max)
     return { time, text: cut.text, cut: cut.cut }
   }
   return null
 }
 
 /** Fold one session's durable events into its Fleet detail. Total over hostile input: any
- * malformed entry drops alone. */
-export function fleetDetailOfEvents(events: readonly unknown[]): FleetDetail {
+ * malformed entry drops alone. `full` lifts the prompt/reply excerpt caps — the task card's
+ * opened read — leaving only the hostile-payload bound; every other cap is display-bound and stands. */
+export function fleetDetailOfEvents(events: readonly unknown[], full = false): FleetDetail {
+  const promptMax = full ? FULL_TEXT_MAX : PROMPT_TEXT_MAX
+  const replyMax = full ? FULL_TEXT_MAX : REPLY_TEXT_MAX
   let descriptor: FleetDescriptor | undefined
   let initialPrompt: string | undefined
   let truncated = false
@@ -192,7 +206,7 @@ export function fleetDetailOfEvents(events: readonly unknown[]): FleetDetail {
     if (initialPrompt === undefined && isPlainPrompt(asRecord(data.source))) {
       const text = textOfContent(data.content).replace(REMINDER_PREFIX, '')
       if (text.trim() !== '') {
-        const cut = clip(text, PROMPT_TEXT_MAX)
+        const cut = clip(text, promptMax)
         initialPrompt = cut.text
         if (cut.cut) truncated = true
       }
@@ -204,7 +218,7 @@ export function fleetDetailOfEvents(events: readonly unknown[]): FleetDetail {
     messages.length = MESSAGES_MAX
     truncated = true
   }
-  const reply = lastReplyOf(events)
+  const reply = lastReplyOf(events, replyMax)
   if (reply !== null && reply.cut) truncated = true
   return {
     ...(descriptor !== undefined ? { descriptor } : {}),
@@ -222,9 +236,11 @@ export function watchFleetChannel(ctx: Context, coldReads: ColdReadGate = makeCo
   ctx.inject(['connection'], (c) => {
     const handler = async (request: Request): Promise<Response> => {
       let sessionId: unknown
+      let full = false
       try {
         const body: unknown = await request.json()
         sessionId = asRecord(body)?.sessionId
+        full = fullOf(body)
       } catch {
         return failure('dsh-context/bad-request', 'body is not JSON')
       }
@@ -242,7 +258,7 @@ export function watchFleetChannel(ctx: Context, coldReads: ColdReadGate = makeCo
           const events = (observation as { events?: unknown } | null)?.events
           if (!Array.isArray(events)) return null
           try {
-            return fleetDetailOfEvents(events)
+            return fleetDetailOfEvents(events, full)
           } finally {
             const dispose = (observation as { [Symbol.dispose]?: unknown } | null)?.[Symbol.dispose]
             if (typeof dispose === 'function') dispose.call(observation)

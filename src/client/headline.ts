@@ -4,6 +4,7 @@
 
 import type { ContextBreakdown, ContextPressure, ContextTimeline } from '../shared/types'
 import { anchoredParts, officialParts, type PartsPart } from './categories'
+import { reserveGeometry, type ContextReserve } from './reserve'
 
 export interface Headline {
   tokens: number
@@ -12,6 +13,8 @@ export interface Headline {
   /** Composition parts: `value` is the provider-anchored bar width (the ring's fill), `raw` the official
    *  heuristic count the legend and tooltips show. */
   parts: PartsPart[]
+  /** Absent when the window reserves nothing (reserve.ts). */
+  reserve?: ContextReserve
 }
 
 /**
@@ -59,5 +62,6 @@ export function headlineOf(
     officialParts(current, breakdown),
     occupancyTokens !== null && tokens > 0 ? tokens : null,
   )
-  return { tokens, window, pct, parts }
+  const reserve = reserveGeometry(window, data.maxOutputTokens)
+  return { tokens, window, pct, parts, ...(reserve !== undefined ? { reserve } : {}) }
 }

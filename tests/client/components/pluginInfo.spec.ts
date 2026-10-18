@@ -6,9 +6,7 @@ import { flush, makeKit, mount, query, queryAll, text } from '../helpers/kit'
 
 const kit = makeKit()
 
-type FetchBody = { version?: unknown }
-
-function stubFetchOk(body: FetchBody) {
+function stubFetchOk(body: { version?: unknown }) {
   const fetchMock = vi.fn((_input: unknown) => Promise.resolve({ ok: true, json: () => Promise.resolve(body) }))
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
@@ -84,46 +82,5 @@ describe('PluginInfo', () => {
     await flush()
     assert.equal(queryAll(m.container, '.lc-pi-update').length, 0)
     await m.unmount()
-  })
-
-  test('every registry failing narrows to null and renders no chip', async () => {
-    const fetchMock = vi.fn(() => Promise.resolve({ ok: false, json: () => Promise.resolve(null) }))
-    vi.stubGlobal('fetch', fetchMock)
-    const PluginInfo = await loadPluginInfo('1.0.0')
-    const m = await mount(h(PluginInfo, {}))
-    await flush()
-    // Both registries (official npm then npmmirror) are tried before giving up.
-    assert.equal(fetchMock.mock.calls.length, 2)
-    assert.equal(queryAll(m.container, '.lc-pi-update').length, 0)
-    await m.unmount()
-  })
-
-  test('falls back to npmmirror when the official registry fails', async () => {
-    const fetchMock = vi.fn((input: unknown) => {
-      const url = String(input)
-      if (url.startsWith('https://registry.npmjs.org/')) {
-        return Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
-      }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ version: '1.1.0' }) })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const PluginInfo = await loadPluginInfo('1.0.0')
-    const m = await mount(h(PluginInfo, {}))
-    await flush()
-    assert.equal(fetchMock.mock.calls.length, 2)
-    assert.equal(query(m.container, '.lc-pi-update').textContent, '↑ v1.1.0')
-    await m.unmount()
-  })
-
-  test('unmounting before the answer lands drops the late result', async () => {
-    let resolveFetch: ((res: { ok: boolean; json: () => Promise<FetchBody> }) => void) | null = null
-    vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => { resolveFetch = resolve })))
-    const PluginInfo = await loadPluginInfo('1.0.0')
-    const m = await mount(h(PluginInfo, {}))
-    await m.unmount()
-    resolveFetch!({ ok: true, json: () => Promise.resolve({ version: '2.0.0' }) })
-    await flush()
-    // No state update after unmount, no act warning, no chip anywhere.
-    assert.equal(queryAll(document.body, '.lc-pi-update').length, 0)
   })
 })

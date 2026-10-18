@@ -77,9 +77,9 @@ describe('fleetDetailOf — the sanitizing parse', () => {
   })
 })
 
-function stubRoute(handler: (body: string) => unknown): void {
+function stubRoute(handler: (body: Record<string, unknown>) => unknown): void {
   vi.stubGlobal('fetch', (_url: unknown, init: { body: string }) => {
-    const out = handler(init.body)
+    const out = handler(JSON.parse(init.body) as Record<string, unknown>)
     return Promise.resolve({ ok: true, json: () => Promise.resolve(out) } as Response)
   })
 }
@@ -96,6 +96,17 @@ describe('makeFleetDetailFetcher', () => {
 
     stubRoute(() => ({ ok: true, value: null }))
     assert.equal(await makeFleetDetailFetcher('s1')!(), null)
+  })
+
+  test('a full request posts the full flag; the excerpt read stays flagless', async () => {
+    const bodies: Record<string, unknown>[] = []
+    stubRoute((body) => {
+      bodies.push(body)
+      return { ok: true, value: null }
+    })
+    await makeFleetDetailFetcher('s1', true)!()
+    await makeFleetDetailFetcher('s1')!()
+    assert.deepEqual(bodies, [{ full: true, sessionId: 's1' }, { sessionId: 's1' }])
   })
 
   test('transport failures and malformed payloads reject', async () => {
@@ -157,6 +168,24 @@ describe('FleetDetailCache', () => {
     const cache = new FleetDetailCache()
     assert.equal(await cache.fetch('', 1), null)
     assert.equal(reads, 0)
+  })
+
+  test('the full ledger runs beside the excerpt ledger', async () => {
+    const routes: string[] = []
+    vi.stubGlobal('fetch', (_url: unknown, init: { body: string }) => {
+      routes.push(init.body)
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, value: null }) } as Response)
+    })
+    const cache = new FleetDetailCache()
+    await Promise.all([cache.fetch('s1', 5), cache.fetch('s1', 5, true)])
+    assert.equal(routes.length, 2, 'separate ledgers, separate reads')
+    // Each ledger dedupes on its own; invalidate drops both.
+    await cache.fetch('s1', 3)
+    await cache.fetch('s1', 3, true)
+    assert.equal(routes.length, 2)
+    cache.invalidate('s1')
+    await Promise.all([cache.fetch('s1', 3), cache.fetch('s1', 3, true)])
+    assert.equal(routes.length, 4)
   })
 })
 

@@ -2,14 +2,14 @@ import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import { makeRequestDetail } from '../../../src/client/components/requestDetail'
-import { makeStackedBar } from '../../../src/client/components/stackedBar'
+import { makeStackedBar, makeLegend } from '../../../src/client/components/stackedBar'
 import type { RequestRecord, ContextEventRecord, SurfaceNode } from '../../../src/shared/types'
 import type { ConversationNodeLike } from '../../../src/client/services'
 import type { StepBrief } from '../../../src/client/brief'
 import { makeKit, mount, click, queryAll, query, surfaceNode, text } from '../helpers/kit'
 
 const kit = makeKit()
-const RequestDetail = makeRequestDetail(kit, makeStackedBar(kit))
+const RequestDetail = makeRequestDetail(kit, makeStackedBar(kit), makeLegend(kit))
 
 function req(over: Partial<RequestRecord>): RequestRecord {
   return {
@@ -23,6 +23,12 @@ function req(over: Partial<RequestRecord>): RequestRecord {
 /** Full-category fixture so every row renders a non-zero figure. */
 const FULL = { system: 100, tools: 200, user: 300, inject: 50, assistant: 400, tool: 250, total: 1300 }
 
+/** A category chip's anatomy — dot, label, figures — by each child's base class (a delta chip's figures add a
+ *  sign modifier). Pinned structurally: a child added, removed or reordered fails here in either mode. */
+const CHIP_ANATOMY = ['', 'lc-chip-label', 'lc-chip-nums']
+const anatomy = (container: HTMLElement): string[][] =>
+  queryAll(container, '.lc-legend .lc-chip').map(c => Array.from(c.children).map(el => el.className.split(' ')[0]))
+
 describe('RequestDetail header', () => {
   test('null request renders nothing', async () => {
     const m = await mount(h(RequestDetail, { request: null }))
@@ -30,7 +36,7 @@ describe('RequestDetail header', () => {
     await m.unmount()
   })
 
-  test('step detail: title, time, usage chips, per-category rows', async () => {
+  test('step detail: title, time, usage chips, per-category chips', async () => {
     const m = await mount(h(RequestDetail, {
       request: req({ prompt: 1000, output: 120, cacheRead: 500 }),
     }))
@@ -45,15 +51,14 @@ describe('RequestDetail header', () => {
     const ms = await mount(h(RequestDetail, { request: req({}), stepsOf: (turn) => (turn === 1 ? 7 : 1) }))
     assert.ok(text(query(ms.container, '.lc-detail-head')).includes('Turn 1 · Step 1 of 7'))
     await ms.unmount()
-    const rows = queryAll(m.container, '.lc-detail-row')
-    assert.equal(rows.length, 7)
-    assert.ok(text(rows[0]).includes('System Prompt'))
-    assert.ok(text(rows[0]).includes('≈100'))
-    const pcts = queryAll(m.container, '.lc-detail-pct').map(el => text(el))
+    const chips = queryAll(m.container, '.lc-legend .lc-chip')
+    assert.equal(chips.length, 7)
+    assert.ok(text(chips[0]).includes('System Prompt'))
+    assert.ok(text(chips[0]).includes('≈100'))
+    const pcts = queryAll(m.container, '.lc-chip-nums em').map(el => text(el))
     assert.ok(pcts.some(p => p.endsWith('%')), 'percentages rendered when total > 0')
-    const fills = queryAll<HTMLElement>(m.container, '.lc-bar-fill')
-    assert.equal(fills.length, 7, 'one fill per row in cumulative mode')
-    assert.ok(fills[0].style.width !== '0%', 'non-zero categories fill the track')
+    assert.equal(pcts[0], '8%', 'the share rides the used total: 100 of 1300')
+    assert.deepEqual(anatomy(m.container), Array.from({ length: 7 }, () => CHIP_ANATOMY))
     await m.unmount()
   })
 
@@ -139,7 +144,7 @@ describe('RequestDetail header', () => {
 })
 
 describe('RequestDetail delta mode', () => {
-  test('signed deltas vs the previous record: net chip, diverging rows, no usage chips', async () => {
+  test('signed deltas vs the previous record: net chip, signed chips, no usage chips', async () => {
     const request = req({ system: 150, tools: 200, user: 250, inject: 0, assistant: 300, tool: 350, total: 1250, prompt: 900 })
     const prev = req({ ...FULL, inject: 0 })
     const m = await mount(h(RequestDetail, { request, prev }))
@@ -151,22 +156,14 @@ describe('RequestDetail delta mode', () => {
     assert.ok(text(metric).includes('Δ 0'))
     assert.ok(!metric.className.includes('lc-detail-metric-up'))
     assert.ok(!metric.className.includes('lc-detail-metric-down'))
-    const zeros = queryAll(m.container, '.lc-bar-zero')
-    assert.equal(zeros.length, 7, 'every delta row carries the zero line')
-    const upFills = queryAll(m.container, '.lc-bar-fill-up')
-    const downFills = queryAll(m.container, '.lc-bar-fill-down')
-    assert.equal(upFills.length, 2, 'system +50, tool +100')
-    assert.equal(downFills.length, 2, 'user -50, assistant -100')
-    // maxAbs = 100 (assistant/tool): tool fills the full half-track, system half of it.
-    assert.equal((upFills[1] as HTMLElement).style.width, '50%')
-    assert.equal((upFills[0] as HTMLElement).style.width, '25%')
-    const nums = queryAll(m.container, '.lc-detail-num')
-    assert.ok(text(nums[0]).includes('+50'))
-    assert.ok(nums[0].className.includes('lc-detail-num-up'))
-    assert.ok(text(nums[2]).includes('-50'))
-    assert.ok(nums[2].className.includes('lc-detail-num-down'))
-    assert.ok(!nums[1].className.includes('lc-detail-num-up'), 'zero delta is neutral')
-    assert.ok(queryAll(m.container, '.lc-detail-pct').every(el => text(el) === ''), 'no percentages in delta mode')
+    const figs = queryAll(m.container, '.lc-chip-nums')
+    assert.ok(text(figs[0]).includes('+50'))
+    assert.ok(figs[0].className.includes('lc-chip-nums-up'))
+    assert.ok(text(figs[2]).includes('-50'))
+    assert.ok(figs[2].className.includes('lc-chip-nums-down'))
+    assert.ok(!figs[1].className.includes('lc-chip-nums-up'), 'zero delta is neutral')
+    assert.equal(queryAll(m.container, '.lc-chip-nums em').length, 0, 'a signed change carries no share')
+    assert.deepEqual(anatomy(m.container), Array.from({ length: 7 }, () => CHIP_ANATOMY), 'delta chips carry no diverging bar')
     await m.unmount()
   })
 
@@ -175,7 +172,8 @@ describe('RequestDetail delta mode', () => {
     const metric = query(m.container, '.lc-detail-metric')
     assert.ok(metric.className.includes('lc-detail-metric-up'))
     assert.ok(text(metric).includes('Δ +1.3k'))
-    assert.equal(queryAll(m.container, '.lc-bar-fill-down').length, 0)
+    assert.equal(queryAll(m.container, '.lc-chip-nums-down').length, 0)
+    assert.equal(queryAll(m.container, '.lc-chip-nums-up').length, 6, 'every non-zero category reads up')
     await m.unmount()
 
     const m2 = await mount(h(RequestDetail, {
@@ -185,25 +183,25 @@ describe('RequestDetail delta mode', () => {
     const metric2 = query(m2.container, '.lc-detail-metric')
     assert.ok(metric2.className.includes('lc-detail-metric-down'))
     assert.ok(text(metric2).includes('Δ -1.3k'))
-    assert.equal(queryAll(m2.container, '.lc-bar-fill-up').length, 0)
-    assert.equal(queryAll(m2.container, '.lc-bar-fill-down').length, 6)
+    assert.equal(queryAll(m2.container, '.lc-chip-nums-up').length, 0)
+    assert.equal(queryAll(m2.container, '.lc-chip-nums-down').length, 6)
     await m2.unmount()
   })
 
-  test('cumulative rows with a zero total render zero-width fills and no percentages', async () => {
+  test('cumulative chips with a zero total render zero figures and no shares', async () => {
     const m = await mount(h(RequestDetail, {
       request: req({ system: 0, tools: 0, user: 0, inject: 0, assistant: 0, tool: 0, total: 0 }),
     }))
-    for (const fill of queryAll<HTMLElement>(m.container, '.lc-bar-fill')) {
-      assert.equal(fill.style.width, '0%')
-    }
-    assert.ok(queryAll(m.container, '.lc-detail-pct').every(el => text(el) === ''))
+    const figs = queryAll(m.container, '.lc-chip-nums').map(el => text(el))
+    assert.equal(figs.length, 7)
+    assert.ok(figs.every(f => f === '≈0'))
+    assert.equal(queryAll(m.container, '.lc-chip-nums em').length, 0)
     await m.unmount()
   })
 })
 
 describe('RequestDetail composition bar hover-link', () => {
-  test('the mirrored hoverKey dims the bar, lights the matching segment and detail row; the tip stays off', async () => {
+  test('the mirrored hoverKey dims the bar, lights the matching segment and chip; the tip stays off', async () => {
     const m = await mount(h(RequestDetail, { request: req({}), hoverKey: 'tools' }))
     const bar = query(m.container, '.lc-stacked')
     assert.ok(bar.className.includes('lc-stacked-dim'), 'a mirrored hover dims the bar')
@@ -211,24 +209,24 @@ describe('RequestDetail composition bar hover-link', () => {
     assert.equal(segs.length, 6, 'all six categories render')
     assert.ok(segs[1].className.includes('lc-stacked-seg-on'), 'exactly the tools segment (CATS order) lights')
     assert.ok(segs.filter(s => s.className.includes('lc-stacked-seg-on')).length === 1)
-    const rows = queryAll(m.container, '.lc-detail-row')
-    assert.ok(rows[1].className.includes('lc-detail-row-on'), 'the tools row lights too')
-    assert.ok(rows.filter(r => r.className.includes('lc-detail-row-on')).length === 1)
+    const chips = queryAll(m.container, '.lc-legend .lc-chip')
+    assert.ok(chips[1].className.includes('lc-chip-on'), 'the tools chip lights too')
+    assert.ok(chips.filter(c => c.className.includes('lc-chip-on')).length === 1)
     assert.equal(queryAll(m.container, '.lc-bar-tip').length, 0, 'a mirrored hover floats no tooltip')
 
     const m2 = await mount(h(RequestDetail, { request: req({}) }))
     assert.equal(query(m2.container, '.lc-stacked').className, 'lc-stacked')
-    assert.equal(queryAll(m2.container, '.lc-detail-row-on').length, 0)
+    assert.equal(queryAll(m2.container, '.lc-chip-on').length, 0)
     assert.equal(queryAll(m2.container, '.lc-bar-tip').length, 0)
     await m2.unmount()
     await m.unmount()
   })
 
-  test('delta-mode detail rows light the matching category too', async () => {
+  test('delta-mode detail chips light the matching category too', async () => {
     const m = await mount(h(RequestDetail, { request: req({}), prev: req({ ...FULL }), hoverKey: 'user' }))
-    const rows = queryAll(m.container, '.lc-detail-row')
-    assert.ok(rows[2].className.includes('lc-detail-row-on'), 'the user row lights in delta mode')
-    assert.ok(rows.filter(r => r.className.includes('lc-detail-row-on')).length === 1)
+    const chips = queryAll(m.container, '.lc-legend .lc-chip')
+    assert.ok(chips[2].className.includes('lc-chip-on'), 'the user chip lights in delta mode')
+    assert.ok(chips.filter(c => c.className.includes('lc-chip-on')).length === 1)
     await m.unmount()
   })
 })

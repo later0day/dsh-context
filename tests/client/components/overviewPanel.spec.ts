@@ -135,7 +135,7 @@ describe('OverviewPanel', () => {
     const ctx = makeCtx({ refresh: () => { pulls++; return Promise.resolve() } })
     const { m } = await openPanel(ctx)
     assert.equal(pulls, 1, 'the baseline re-pull fires on mount')
-    assert.deepEqual(backfillPosts, ['/api/dsh-context/backfill'], 'the warm-up trigger POST fires on mount')
+    assert.deepEqual(backfillPosts, ['api/dsh-context/backfill'], 'the warm-up trigger POST fires on mount')
     assert.ok(text(m.container).includes('Context Insights'))
     // The page chrome: the section's one scroll region carries the centered
     // content column — the page heading, then the 1:1 first row (the KPI
@@ -151,7 +151,7 @@ describe('OverviewPanel', () => {
     assert.ok(query(m.container, '.lc-ov-first > .lc-card.lc-ov-usage') !== null, 'the usage chart rides the row')
     // KPI band: 2 sessions in the 30d range, 1750 tokens billed, priced cost, cache hit.
     const labels = queryAll(m.container, '.lc-stat-label').map(el => el.textContent)
-    assert.deepEqual(labels, ['Active Sessions', 'Tokens Used', 'Cost', 'Cache Hit', 'Tool Calls', 'Active Time'])
+    assert.deepEqual(labels, ['Sessions', 'Tokens Used', 'Cost', 'Cache Hit', 'Tool Calls', 'Active Time'])
     const values = queryAll(m.container, '.lc-stat-value').map(el => el.textContent)
     assert.equal(values[0], '2')
     assert.equal(values[1], '1.8k')
@@ -189,16 +189,52 @@ describe('OverviewPanel', () => {
     await m.unmount()
   })
 
-  test('archived sessions drop from every band, not just the card grid', async () => {
+  test('the coverage picker folds archived sessions in by default and its scopes split the page', async () => {
     const ctx = makeCtx()
     const { m } = await openPanel(ctx, {
       useWorkspaces: useHookOf({ ...workspacesSnapshotValue, archivedSessionIds: ['b'] }),
     })
-    const values = queryAll(m.container, '.lc-stat-value').map(el => el.textContent)
-    assert.equal(values[0], '1', 'the archived session leaves the KPI band')
-    const cards = queryAll(m.container, '.lc-ov-grid > .lc-ov-session')
+    // Default 'all': the archived session folds back into every band, tagged on its card.
+    assert.deepEqual(queryAll(m.container, '.lc-stat-label')[0].textContent, 'Sessions')
+    assert.deepEqual(queryAll(m.container, '.lc-stat-sub')[0].textContent, 'incl. 1 archived')
+    let cards = queryAll(m.container, '.lc-ov-grid > .lc-ov-session')
+    assert.equal(cards.length, 2)
+    const betaCard = cards.find(c => text(c).includes('beta session'))
+    assert.ok(betaCard !== undefined && text(betaCard).includes('Archived'), 'the archived card carries the tag')
+    const select = query<HTMLSelectElement>(m.container, 'select.lc-ov-cover')
+    assert.deepEqual([...select.options].map(o => o.textContent), ['All (show archived)', 'Hide archived', 'Archived only'])
+    // 'active' restores the lighter list; the sub-line names what the full list holds.
+    await actSelect(select, 'active')
+    assert.deepEqual(queryAll(m.container, '.lc-stat-label')[0].textContent, 'Active Sessions')
+    assert.deepEqual(queryAll(m.container, '.lc-stat-sub')[0].textContent, 'of 3 total')
+    assert.equal(queryAll(m.container, '.lc-stat-value')[0].textContent, '1', 'the archived session leaves the KPI band')
+    cards = queryAll(m.container, '.lc-ov-grid > .lc-ov-session')
     assert.equal(cards.length, 1)
     assert.ok(text(cards[0]).includes('alpha session'))
+    // 'archived' flips the split: only the tagged session in range stays.
+    await actSelect(select, 'archived')
+    assert.deepEqual(queryAll(m.container, '.lc-stat-label')[0].textContent, 'Archived Sessions')
+    assert.deepEqual(queryAll(m.container, '.lc-stat-sub')[0].textContent, 'of 3 total')
+    assert.equal(queryAll(m.container, '.lc-stat-value')[0].textContent, '1')
+    const archCards = queryAll(m.container, '.lc-ov-grid > .lc-ov-session')
+    assert.equal(archCards.length, 1)
+    assert.ok(text(archCards[0]).includes('beta session'))
+    await m.unmount()
+  })
+
+  test('an archived card click opens nothing (dsh refuses archived sessions)', async () => {
+    const opened: string[] = []
+    const ctx = new TestClientCtx({
+      services: {
+        uiWorkspace: { openSession: (id: string) => { opened.push(id) } },
+        sessions: {},
+      },
+    })
+    const { m } = await openPanel(ctx, {
+      useWorkspaces: useHookOf({ ...workspacesSnapshotValue, archivedSessionIds: ['b'] }),
+    })
+    await click(queryAll<HTMLButtonElement>(m.container, '.lc-ov-grid > .lc-ov-session').find(c => text(c).includes('beta session'))!)
+    assert.deepEqual(opened, [], 'the archived card never navigates')
     await m.unmount()
   })
 
@@ -531,7 +567,8 @@ describe('OverviewPanel', () => {
     }))
     await flush()
     assert.ok(text(m.container).includes('上下文洞察'))
-    assert.ok(text(m.container).includes('活跃会话'))
+    assert.ok(text(m.container).includes('全部会话'), 'the All default labels the sessions card and the coverage option')
+    assert.ok(text(m.container).includes('仅显示已归档'), 'the coverage options ride the zh dictionary too')
     assert.ok(text(m.container).includes('Token 统计'), 'the aggregate stats row rides the zh dictionary too')
     assert.ok(text(m.container).includes('系统提示词'), 'the Context tab\'s composition categories render in zh')
     assert.equal(query<HTMLButtonElement>(m.container, '.lc-ov-settings').title, '打开插件设置', 'the settings chip rides the zh dictionary too')
@@ -639,5 +676,14 @@ async function actType(input: HTMLInputElement, value: string): Promise<void> {
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
     setter?.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+/** Pick a coverage option through the React change path (native setter + change event, act-wrapped). */
+async function actSelect(select: HTMLSelectElement, value: string): Promise<void> {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set
+    setter?.call(select, value)
+    select.dispatchEvent(new Event('change', { bubbles: true }))
   })
 }

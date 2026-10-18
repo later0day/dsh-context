@@ -13,6 +13,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { createContextActivityDefinition } from './activity'
+import { watchAttachmentChannel } from './attachment'
 import { createToolAttribution } from './attribution'
 import { watchBalanceChannel } from './balance'
 import { watchActivityBackfill } from './backfill'
@@ -45,6 +46,8 @@ export function apply(ctx: Context, config: Config): void {
   watchBalanceChannel(ctx)
   watchSkillCatalog(ctx)
   watchFleetChannel(ctx, coldReads)
+  // Attachment previews (one click = one authorized log read) ride the same gate as every other read.
+  watchAttachmentChannel(ctx, coldReads)
   // A harness BELOW the baseline never gets the real folds (its log shapes and seam faces are
   // outside the compat matrix); fallback units serve zeroed data plus the gate record. An
   // undetectable version fails open into the normal composition below.

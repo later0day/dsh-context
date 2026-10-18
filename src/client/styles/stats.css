@@ -84,6 +84,12 @@ a.lc-flow-head:hover .lc-flow-label { color: var(--dsw-alias-label-primary); }
 .lc-flow-pill b { font-weight: 700; color: var(--dsw-alias-label-primary); }
 .lc-flow-pill-tint b { color: inherit; }
 .lc-flow-pill-dim { opacity: 0.45; }
+/* The jump pills carry the same affordance family as the clickable figure cells: a pointer, a lifted wash, and a
+   focus ring. A dim (zero-count) pill lifts to full opacity on hover, so "nothing happened yet" never hides the jump. */
+.lc-flow-pill-btn { cursor: pointer; }
+.lc-flow-pill-btn:hover { background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-label-secondary); opacity: 1; }
+.lc-flow-pill-btn:hover .lc-flow-pill-label { color: var(--dsw-alias-label-primary); }
+.lc-flow-pill-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 .lc-flow-rows { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
 .lc-flow-row { display: flex; align-items: baseline; gap: 6px; font-size: 11px; color: var(--dsw-alias-label-secondary); min-width: 0; }
 .lc-flow-row-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

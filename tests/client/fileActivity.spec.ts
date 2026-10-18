@@ -606,6 +606,10 @@ describe('glyphOf', () => {
     for (const [path, glyph, tip] of cases) assert.deepEqual(glyphOf(path, 'dir'), { glyph, tip }, path)
   })
 
+  test('a Windows-style path keys on its backslash leaf too', () => {
+    assert.deepEqual(glyphOf('C:\\repo\\.gitignore', 'text'), { glyph: '🚫', tip: 'files.glyph.ignore' })
+  })
+
   test('files resolve special names before extensions, and buckets before the fallback', () => {
     const cases: [string, string, string][] = [
       ['pnpm-lock.yaml', '🔒', 'files.glyph.lock'],
@@ -699,22 +703,29 @@ describe('glyphOf', () => {
 describe('displayPathOf', () => {
   const ws = '/Users/bw/dev/dsh-context'
 
-  test('workspace paths shorten to a ./-relative form', () => {
-    assert.equal(displayPathOf(ws + '/src/client/a.ts', ws), './src/client/a.ts')
+  test('workspace and relative paths display bare-relative; the workspace root itself keeps ./', () => {
+    assert.equal(displayPathOf(ws + '/src/client/a.ts', ws), 'src/client/a.ts')
+    // The workspace root has no relative remainder: the bare dot form stays.
     assert.equal(displayPathOf(ws, ws), './')
     assert.equal(displayPathOf(ws + '/', ws), './')
-    assert.equal(displayPathOf('tests/client/a.spec.ts', ws), './tests/client/a.spec.ts')
-    assert.equal(displayPathOf('./tests/a.ts', ws), './tests/a.ts')
+    assert.equal(displayPathOf('tests/client/a.spec.ts', ws), 'tests/client/a.spec.ts')
+    assert.equal(displayPathOf('./tests/a.ts', ws), 'tests/a.ts')
+    // A recorded absolute path carrying an embedded `./` relativizes through it too.
+    assert.equal(displayPathOf('/repo/./a.ts', '/repo'), 'a.ts')
   })
 
   test('everything else stays verbatim', () => {
     assert.equal(displayPathOf('/etc/hosts', ws), '/etc/hosts')
     assert.equal(displayPathOf(ws + '-sibling/a.ts', ws), ws + '-sibling/a.ts')
     assert.equal(displayPathOf('C:\\repo\\a.ts', ws), 'C:\\repo\\a.ts')
-    assert.equal(displayPathOf('needle', ws), './needle')
+    assert.equal(displayPathOf('needle', ws), 'needle')
     assert.equal(displayPathOf(ws + '/a.ts', undefined), ws + '/a.ts')
     // Without a known workspace a relative path is still workspace-relative by definition.
-    assert.equal(displayPathOf('needle', undefined), './needle')
+    assert.equal(displayPathOf('needle', undefined), 'needle')
+    assert.equal(displayPathOf('./needle', undefined), 'needle')
+    // A raw all-`./` degenerate leaves nothing to display: the raw form stays.
+    assert.equal(displayPathOf('./', ws), './')
+    assert.equal(displayPathOf('././', ws), '././')
   })
 })
 

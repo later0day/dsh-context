@@ -10,6 +10,7 @@ import { makeContentFetcher, makeHeaderFetcher, useHistoryFace } from '../histor
 import { useContextSession } from '../sessionData'
 import { makeDetailNote } from './detailNote'
 import { canOpenPathsOf, openPathVia, openResourceVia, workspaceOf } from '../services'
+import { makeAttachmentOpener } from '../attachmentSource'
 import { activityOf, activityOfOps, locateStepOf, previewAddressOf } from '../fileActivity'
 import type { FileEntry, FileOp } from '../fileActivity'
 import type { ContextSettings } from '../settings'
@@ -23,14 +24,17 @@ import { Donut } from './donut'
 import { makeCurrentComposition } from './currentComposition'
 import { makeEventList } from './events'
 import { makeFileCard } from './fileCard'
+import type { FileFilter } from './fileCard'
 import { makePluginInfo } from './pluginInfo'
 import { makeUpgradeGate } from './upgradeGate'
 import { makeRequestDetail } from './requestDetail'
 import { countsOfRecords, makeStatsContext, makeSubagentCost, toolTallyOf } from './statsContext'
+import type { StatsJump } from './statsContext'
 import { makeStatsTiming } from './statsTiming'
 import { makeStatsTokens } from './statsTokens'
 import { makeLegend, makeStackedBar } from './stackedBar'
 import { aggregateByTurn, attachMarkers, jumpTargetOf, makeTrendChart, turnStepsOf } from './trendChart'
+import { makeTrendOverview } from './trendOverview'
 import { assemble } from '../assemble'
 import { trendBandsOf } from '../dna'
 
@@ -44,13 +48,39 @@ const viewScroll = new Map<string, number>()
 
 const EVENT_KINDS = ['inject', 'compaction', 'prune', 'model', 'mode'] as const
 
-/** Scroll the Context Browser card to the top of the page's scrollport: the stats figures and the events card's
- * injection rows both jump into it, and neither may land below the fold. */
-function revealBrowser(root: HTMLElement | null): void {
-  /* v8 ignore start -- every render path attaches the root and draws the browser card, so the target always resolves. */
-  const browser = root?.querySelector('.lc-col-browser') ?? null
-  if (browser !== null) revealInScrollParent(browser)
+/** Scroll a landed-on card to the top of the page's scrollport: the stats jumps and the events card's injection
+ *  rows land on the browser, the stats file pills on the File Activity card, and no landing may stay below the fold. */
+function revealCard(root: HTMLElement | null, selector: string): void {
+  /* v8 ignore start -- every render path attaches the root and draws the landed-on card, so the target always resolves. */
+  const card = root?.querySelector(selector) ?? null
+  if (card !== null) revealInScrollParent(card)
   /* v8 ignore stop */
+}
+
+/** Reveal the browser card only when NO part of it is in the window's visible slice (stacked narrow
+ * layouts where the card sits below the fold): the in-card row reveal cannot be seen from there. An
+ * unconditional top-alignment would yank the page on wide layouts, where the card sits beside the reader. */
+function revealBrowserIfOffscreen(root: HTMLElement | null): void {
+  /* v8 ignore start -- every render path attaches the root and draws the browser card, so the target always resolves. */
+  if (root === null) return
+  const browser = root.querySelector('.lc-col-browser')
+  if (browser === null) return
+  const br = browser.getBoundingClientRect()
+  if (br.bottom <= 0 || br.top >= window.innerHeight) revealInScrollParent(browser)
+  /* v8 ignore stop */
+}
+
+/** The Context browser's height ceiling: the span from the first left card's top to the last card's bottom
+ * (the current-composition card plus the trend card, inter-card gap included), rounded up so the card is
+ * never shorter than the cards beside it and the cards below never move. The cards' own boxes — not the
+ * column's — keep the cap independent of the browser card stretching the row. Null — uncapped — while no
+ * usable card measurement exists (the loading frame, or a layout-less rect). */
+export function browserCapOf(cards: readonly { top: number; bottom: number }[]): number | null {
+  const first = cards.at(0)
+  const last = cards.at(-1)
+  if (first === undefined || last === undefined) return null
+  const span = last.bottom - first.top
+  return Number.isFinite(span) && span > 0 ? Math.ceil(span) : null
 }
 
 /** The trend card's reserved body: the plot lane plus an empty detail panel wearing the panel's OWN classes, so the
@@ -64,15 +94,13 @@ function TrendReserved(props: { children: ReactNode; catLabel: (cat: Category | 
         <div className="lc-detail-head" />
         <div className="lc-brief" />
         <div className="lc-stacked-wrap"><div className="lc-stacked" /></div>
-        <div className="lc-detail-rows">
+        <div className="lc-legend">
           {CATS.map(c => (
-            <div key={c.key} className="lc-detail-row">
+            <span key={c.key} className="lc-chip">
               <i style={{ background: c.color }} />
-              <span className="lc-detail-label">{props.catLabel(c.key)}</span>
-              <span className="lc-bar-track" />
-              <span className="lc-detail-num" />
-              <span className="lc-detail-pct" />
-            </div>
+              <span className="lc-chip-label">{props.catLabel(c.key)}</span>
+              <span className="lc-chip-nums" />
+            </span>
           ))}
         </div>
       </div>
@@ -92,7 +120,8 @@ export function makeContextView(
   const Legend = makeLegend(kit)
   const CurrentComposition = makeCurrentComposition(kit, StackedBar, Legend)
   const TrendChart = makeTrendChart(kit)
-  const RequestDetail = makeRequestDetail(kit, StackedBar)
+  const TrendOverview = makeTrendOverview(kit)
+  const RequestDetail = makeRequestDetail(kit, StackedBar, Legend)
   const EventList = makeEventList(kit)
   const FileCard = makeFileCard(kit, settings)
   // The stats board's subagent-cost cell reads the shared page-scope cold-head cache.
@@ -122,6 +151,10 @@ export function makeContextView(
     // DNA mode: per-item fingerprints of each request's context (dna.ts).
     const [dna, setDna] = useState(false)
     const [adaptive, setAdaptive] = useState(false)
+    // The overview face: the whole retained log as one continuous ribbon (trendOverview.tsx). Exclusive with DNA
+    // mode (per-bar fingerprints are illegible at ribbon scale) and Adaptive (the whole log IS the visible
+    // window): activating one clears the others.
+    const [overview, setOverview] = useState(false)
     const [durationCurve, setDurationCurve] = useState(() => settings.defaultDurationCurve() === 'show')
     const [focusTurn, setFocusTurn] = useState<number | null>(null)
     const [jumpSeq, setJumpSeq] = useState<number | null>(null)
@@ -167,9 +200,45 @@ export function makeContextView(
     const restoredRef = useRef<string | null>(null)
     const [catFocus, setCatFocus] = useState<CatFocus | null>(null)
     const clearCatFocus = useCallback(() => { setCatFocus(null) }, [])
-    const onFigureClick = useCallback((figure: 'skills' | 'answers'): void => {
-      setCatFocus(figure === 'skills' ? { cat: 'skill' } : { cat: 'assistant', kind: 'answer' })
-      revealBrowser(rootRef.current)
+    // One-shot File Activity kind request from the stats board's file pills (the card owns the chips otherwise).
+    const [filterFocus, setFilterFocus] = useState<FileFilter | null>(null)
+    const clearFilterFocus = useCallback(() => { setFilterFocus(null) }, [])
+
+    // The browser column's height cap (browserCapOf), re-measured per render and followed by a
+    // ResizeObserver: pane drags and card reflows change no prop.
+    const leftColRef = useRef<HTMLDivElement | null>(null)
+    const [browserCap, setBrowserCap] = useState<number | null>(null)
+    const [, setCapTick] = useState(0)
+    useLayoutEffect(() => {
+      const col = leftColRef.current
+      /* v8 ignore next 1 -- the loading frame renders no left column; every carded render attaches it. */
+      if (col === null) return
+      // The column renders exactly the composition + trend cards.
+      const next = browserCapOf([...col.children].map(el => el.getBoundingClientRect()))
+      setBrowserCap(prev => (prev === next ? prev : next))
+    })
+    /* v8 ignore start -- jsdom has neither ResizeObserver nor layout: the cap's math is pinned by browserCapOf's unit tests. */
+    useEffect(() => {
+      const col = leftColRef.current
+      if (col === null || typeof ResizeObserver !== 'function') return
+      const observer = new ResizeObserver(() => { setCapTick(tick => tick + 1) })
+      observer.observe(col)
+      for (const el of col.querySelectorAll(':scope > .lc-card')) observer.observe(el)
+      return () => { observer.disconnect() }
+    }, [data])
+    /* v8 ignore stop */
+    // The stats board's jumps: a browser key lands on its own category row (skills inject, answers, user messages),
+    // a file kind on the File Activity card's matching chip.
+    const onJump = useCallback((jump: StatsJump): void => {
+      if (jump === 'read' || jump === 'write' || jump === 'search' || jump === 'image') {
+        setFilterFocus(jump)
+        revealCard(rootRef.current, '.lc-fa-card')
+        return
+      }
+      setCatFocus(jump === 'skills'
+        ? { cat: 'skill' }
+        : jump === 'answers' ? { cat: 'assistant', kind: 'answer' } : { cat: 'user' })
+      revealCard(rootRef.current, '.lc-col-browser')
     }, [])
     // The stats board's family cell names the Agent Network card: its own tab when the preferences serve one,
     // else the right Sidebar panel that keeps the card inline. A deployment serving neither — a stripped
@@ -339,6 +408,10 @@ export function makeContextView(
         },
       [previewOpener, sessionKey, workspace],
     )
+    const openAttachment = useMemo(
+      () => makeAttachmentOpener(ctx, typeof sessionId === 'string' ? sessionId : undefined, workspace),
+      [ctx, sessionId, workspace],
+    )
     const locateFileOp = useCallback((op: FileOp): void => {
       // A nested Code-Mode op has no surface row of its own — it reveals on its parent run_code result.
       const seq = op.parent ?? op.seq
@@ -354,6 +427,7 @@ export function makeContextView(
       const next = isResponse && activeIdx + 1 < displayRequests.length ? displayRequests[activeIdx + 1] : null
       const step: number | 'live' = isResponse ? (next !== null ? next.seq : 'live') : activeReq.seq
       setNodeFocus({ step, key: 'n' + String(node.seq), cat: node.cat })
+      revealBrowserIfOffscreen(rootRef.current)
     }, [activeReq, activeIdx, displayRequests])
 
     // An injection event carries the seq of the very surface node it added (fold.ts), so its row can reveal that node
@@ -374,7 +448,7 @@ export function makeContextView(
       // Removed before any step dispatched it: there is nothing left to show.
       if (step === null) return
       setNodeFocus({ step, key: 'n' + String(ev.seq), cat: node?.cat ?? 'inject' })
-      revealBrowser(rootRef.current)
+      revealCard(rootRef.current, '.lc-col-browser')
     }, [requests, nodeOfSeq])
 
     if (!data) {
@@ -427,6 +501,27 @@ export function makeContextView(
         onHoverKey={setHoverCat}
       />
     )
+    // Both trend faces share the records + hover/select flow; only the overview's turn click pins instead of
+    // scroll-centering (there is no scroll), and the bar chart carries DNA/adaptive extras. The `key` stays out —
+    // a spread carrying it trips React's spread-key warning — and rides the faces explicitly for the per-session
+    // remount that re-anchors at the newest bars instead of inheriting stale scroll state.
+    const trendBase = {
+      // ALL retained requests (bounded by the host's maxKeptTurns/maxRequestSteps config): earlier
+      // turns/steps stay reachable via scroll or the fit width.
+      requests: displayRequests,
+      markers,
+      selectedSeq: pinnedReq ? pinnedReq.seq : null,
+      hoveredSeq,
+      activeTurn,
+      granularity,
+      mode: trendMode,
+      hoverCat: trendHoverCat,
+      focusCat,
+      durationCurve,
+      onSelect: setSelectedSeq,
+      onHover: setHoveredSeq,
+      onHoverTurn: setHoverTurn,
+    }
     const trendCard = (
       <div className="lc-card">
         <div className="lc-card-title">
@@ -436,13 +531,21 @@ export function makeContextView(
               type="button"
               className={'lc-gran-btn' + (dna ? ' lc-gran-on' : '')}
               title={t('trend.dnaTip')}
-              onClick={() => { setDna(v => !v) }}
+              onClick={() => {
+                const on = !dna
+                setDna(on)
+                if (on) setOverview(false)
+              }}
             >{t('trend.dna')}</button>
             <button
               type="button"
               className={'lc-gran-btn' + (adaptive ? ' lc-gran-on' : '')}
               title={t('trend.adaptiveHint')}
-              onClick={() => { setAdaptive(on => !on) }}
+              onClick={() => {
+                const on = !adaptive
+                setAdaptive(on)
+                if (on) setOverview(false)
+              }}
             >{t('trend.adaptive')}</button>
             <button
               type="button"
@@ -450,6 +553,16 @@ export function makeContextView(
               title={t('trend.durationTip')}
               onClick={() => { setDurationCurve(on => !on) }}
             >{t('trend.duration')}</button>
+            <button
+              type="button"
+              className={'lc-gran-btn' + (overview ? ' lc-gran-on' : '')}
+              title={t('trend.overviewTip')}
+              onClick={() => {
+                const on = !overview
+                setOverview(on)
+                if (on) { setDna(false); setAdaptive(false) }
+              }}
+            >{t('trend.overview')}</button>
           </span>
           <div className="lc-trend-ctl">
             <div className="lc-gran">
@@ -483,31 +596,34 @@ export function makeContextView(
             </TrendReserved>)
           : (
             <div>
-              <TrendChart
-                // Remount per session: re-anchors at the newest bars instead of inheriting stale scroll state.
-                key={sessionId}
-                // ALL retained requests (bounded by the host's maxKeptTurns/maxRequestSteps config): earlier turns/steps
-                // stay reachable via scroll.
-                requests={displayRequests}
-                markers={markers}
-                selectedSeq={pinnedReq ? pinnedReq.seq : null}
-                hoveredSeq={hoveredSeq}
-                activeTurn={activeTurn}
-                granularity={granularity}
-                mode={trendMode}
-                focusTurn={focusTurn}
-                hoverCat={trendHoverCat}
-                focusCat={focusCat}
-                adaptive={adaptive}
-                durationCurve={durationCurve}
-                dna={dnaBands}
-                onPickBand={revealBand}
-                onSelect={setSelectedSeq}
-                onHover={setHoveredSeq}
-                onHoverTurn={setHoverTurn}
-                onPickTurn={(turn) => { setGranularity('turn'); setFocusTurn(turn) }}
-                onFocusTurnHandled={() => { setFocusTurn(null) }}
-              />
+              {overview
+                ? (
+                  <TrendOverview
+                    key={sessionId}
+                    {...trendBase}
+                    onPickTurn={(turn) => {
+                      setGranularity('turn')
+                      // No scroll to center: pin the turn's closing record — the same seq its aggregate keeps.
+                      let seq: number | null = null
+                      for (const req of displayRequests) if ((req.turn ?? 0) === turn) seq = req.seq
+                      /* v8 ignore next 1 -- the clicked block always has records (blocks walk the same list),
+                         so the pinned seq is never null. */
+                      if (seq !== null) setSelectedSeq(seq)
+                    }}
+                  />
+                )
+                : (
+                  <TrendChart
+                    key={sessionId}
+                    {...trendBase}
+                    focusTurn={focusTurn}
+                    adaptive={adaptive}
+                    dna={dnaBands}
+                    onPickBand={revealBand}
+                    onPickTurn={(turn) => { setGranularity('turn'); setFocusTurn(turn) }}
+                    onFocusTurnHandled={() => { setFocusTurn(null) }}
+                  />
+                )}
               <RequestDetail
                 request={activeReq}
                 // Delta mode pairs the detail with the SAME previous record the chart diffs against (first bar: null).
@@ -520,6 +636,7 @@ export function makeContextView(
                 stepsOf={stepsOf}
                 onLocate={locateNode}
                 hoverKey={trendHoverCat}
+                onHoverKey={setHoverCat}
               />
             </div>
           )}
@@ -540,6 +657,7 @@ export function makeContextView(
         nodeFocus={nodeFocus}
         onNodeFocusHandled={clearNodeFocus}
         loadImage={loadImage}
+        openAttachment={openAttachment}
         detailState={source.detailState}
         onDetailRetry={source.retryDetail}
         catFocus={catFocus}
@@ -558,7 +676,7 @@ export function makeContextView(
             <StatsContext counts={counts} humanInputs={data.humanInputs} answers={data.answers} toolCalls={data.toolCalls}
               files={ioTotals} tools={toolTally}
               cost={data.cost} locale={activeLocale} sessionId={typeof sessionId === 'string' ? sessionId : undefined}
-              onFigureClick={onFigureClick} onTeamClick={hasFamilyView ? onTeamClick : undefined} />
+              onJump={onJump} onTeamClick={hasFamilyView ? onTeamClick : undefined} />
             <PluginInfo />
           </div>
         )}
@@ -568,9 +686,14 @@ export function makeContextView(
         </div>
 
         <div className="lc-cols lc-cols-main">
-          <div className="lc-col flex-1 min-w-[min(360px,100%)]">{compositionCard}{trendCard}</div>
-          {/* Stretches the browser card to the left column's height; the /context modal draws its own stack and stays content-sized. */}
-          <div className="lc-col lc-col-browser flex-1 min-w-[min(360px,100%)]">{browserCard}</div>
+          <div className="lc-col flex-1 min-w-[min(360px,100%)]" ref={leftColRef}>{compositionCard}{trendCard}</div>
+          {/* The row's stretch makes the cap the card's height, ending it flush with the left cards; the
+              /context modal draws its own stack and fills its own card. The DNA feed lays out every
+              message, so the card's rows region scrolls inside the capped card. */}
+          <div
+            className="lc-col lc-col-browser flex-1 min-w-[min(360px,100%)]"
+            style={browserCap !== null ? { maxHeight: browserCap } : undefined}
+          >{browserCard}</div>
         </div>
 
         <div className="lc-cols">
@@ -598,6 +721,7 @@ export function makeContextView(
           </div>
           <FileCard activity={fileActivity} scope={fileScope} workspace={workspace}
             onPreview={previewFile} onOpen={fileOpener} onLocate={locateFileOp}
+            filterFocus={filterFocus} onFilterFocusHandled={clearFilterFocus}
             state={source.detailState} onRetry={source.retryDetail} />
         </div>
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
-import { billedOf, rowsOfSnapshot, sessionsSnapshotOf, tokenPartsOf } from '../../src/client/overview'
+import { billedOf, coveredRowsOf, rowsOfSnapshot, sessionsSnapshotOf, tokenPartsOf } from '../../src/client/overview'
 import { mergeCostUsage } from '../../src/client/cost'
 import type { SessionCostUsage } from '../../src/shared/types'
 import { COST } from './overview.fixtures'
@@ -71,7 +71,7 @@ describe('rowsOfSnapshot', () => {
     assert.equal(rows.length, 4)
     const [b, c, d, e] = rows
     assert.deepEqual(b, {
-      id: 'b', title: 'shown', updatedAt: 5, running: true, current: true,
+      id: 'b', title: 'shown', updatedAt: 5, running: true, current: true, archived: false,
       timeline: null, activity: null, family: [null], familyCost: null,
     })
     assert.equal(c.title, 'titled')
@@ -82,7 +82,7 @@ describe('rowsOfSnapshot', () => {
     assert.equal(e.updatedAt, 0, 'a non-numeric stamp zeroes')
   })
 
-  test('archived sessions drop; a hostile archive set fails open', () => {
+  test('archived sessions are tagged, not dropped; a hostile archive set fails open', () => {
     const snap = snapshotOf([
       ['a', { displayTitle: 'live' }],
       ['b', { displayTitle: 'archived' }],
@@ -90,7 +90,10 @@ describe('rowsOfSnapshot', () => {
     ])
     const rows = rowsOfSnapshot(snap, { archivedSessionIds: ['b', 7, null] })
     assert.ok(rows !== null)
-    assert.deepEqual(rows.map(r => r.id), ['a', 'c'], 'archived ids drop; non-string entries archive nothing')
+    assert.deepEqual(rows.map(r => r.id), ['a', 'b', 'c'])
+    assert.equal(rows[1].archived, true, 'the archived id tags its row')
+    assert.equal(rows[0].archived, false)
+    assert.equal(rows[2].archived, false, 'non-string entries archive nothing')
     // Fail-open shapes: an absent seat, a bare record, a malformed set, and a throwing accessor all keep the full list.
     assert.equal(rowsOfSnapshot(snap)?.length, 3)
     assert.equal(rowsOfSnapshot(snap, null)?.length, 3)
@@ -247,7 +250,8 @@ describe('rowsOfSnapshot: the family fold', () => {
     })
   })
 
-  test('hostile descendant projections degrade to null members, never a throw', () => {    const rows = rowsOfSnapshot(snapshotOf([
+  test('hostile descendant projections degrade to null members, never a throw', () => {
+    const rows = rowsOfSnapshot(snapshotOf([
       ['root', { displayTitle: 'root', projectionValues: { contextTimeline: billedHead(1, COST) } }],
       ['kid', { origin: 'subagent', parentId: 'root', projectionValues: { contextTimeline: 7, contextActivity: 'x' } }],
       ['junk', 5 as unknown as Record<string, unknown>],
@@ -257,5 +261,20 @@ describe('rowsOfSnapshot: the family fold', () => {
     assert.equal(rows[0].family[1], null, 'the hostile head sanitizes to null in place')
     assert.equal(rows[0].activity, null, 'no member carried a ledger → the family has none')
     assert.equal(billedOf(rows[0]), 200)
+  })
+})
+
+describe('coveredRowsOf', () => {
+  test('all passes the list through; the narrow scopes split on the archived tag', () => {
+    const rows = [
+      { id: 'a', archived: false },
+      { id: 'b', archived: true },
+      { id: 'c', archived: true },
+    ] as unknown as Parameters<typeof coveredRowsOf>[0]
+    assert.equal(coveredRowsOf(rows, 'all'), rows)
+    assert.deepEqual(coveredRowsOf(rows, 'active').map(r => r.id), ['a'])
+    assert.deepEqual(coveredRowsOf(rows, 'archived').map(r => r.id), ['b', 'c'])
+    assert.equal(coveredRowsOf([], 'archived').length, 0)
+    assert.deepEqual(coveredRowsOf([], 'all'), [])
   })
 })

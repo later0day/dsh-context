@@ -71,8 +71,11 @@ describe('ContextView — the split generation (slim head + detail channel)', ()
 
     // Pending: the trend card stands in the same boxes the loaded panel uses, so its arrival changes no card's height.
     assert.equal(queryAll(m.container, '.lc-trend-lane').length, 1, 'the reserved body renders while the read is in flight')
-    assert.equal(queryAll(m.container, '.lc-trend-lane .lc-detail-rows .lc-detail-row').length, 7,
-      'the lane reserves one row per category')
+    assert.equal(queryAll(m.container, '.lc-trend-lane .lc-legend .lc-chip').length, 7,
+      'the lane reserves one chip per category')
+    const laneChip = query(m.container, '.lc-trend-lane .lc-legend .lc-chip')
+    assert.deepEqual(Array.from(laneChip.children).map(el => el.className.split(' ')[0]), ['', 'lc-chip-label', 'lc-chip-nums'],
+      'the reserved chips wear the legend chip anatomy, so the panels measure alike')
     assert.equal(queryAll(m.container, '.lc-trend-lane .lc-detail-metrics').length, 0,
       'no fabricated figures in the reserved panel')
 

@@ -66,7 +66,7 @@ describe('readSkillCatalog', () => {
       },
     })
     const catalog = await readSkillCatalog('/repo/alpha', 's1')
-    assert.deepEqual(urls, ['/api/dsh-context/skills'])
+    assert.deepEqual(urls, ['api/dsh-context/skills'])
     assert.deepEqual(bodies, [{ cwd: '/repo/alpha', sessionId: 's1' }])
     assert.equal(catalog?.size, 2)
     assert.deepEqual(catalog?.get('tdd'), { name: 'tdd', description: 'Test-driven', path: '/p/tdd/SKILL.md', source: 'user-agents' })

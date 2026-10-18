@@ -36,12 +36,14 @@ export function makeOverviewCard(kit: ViewKit): (props: OverviewCardProps) => Re
       <button
         type="button"
         className={'lc-ov-session' + (row.current ? ' lc-ov-session-current' : '')}
-        onClick={() => { props.onOpen(row.id) }}
+        aria-disabled={row.archived || undefined}
+        onClick={() => { if (!row.archived) props.onOpen(row.id) }}
       >
         <span className="lc-ov-session-head">
           {row.running && <span className="lc-ov-running" title={t('ov.running')} />}
           <span className="lc-ov-session-title" title={row.title}>{row.title}</span>
           {row.current && <span className="lc-ov-current">{t('ov.current')}</span>}
+          {row.archived && <span className="lc-ov-archived" title={t('ov.card.archivedTip')}>{t('ov.card.archived')}</span>}
           <span className="lc-ov-session-times">
             <span className="lc-ov-session-time">{relativeTime(t, row.updatedAt, props.now)}</span>
             {created !== undefined && <span className="lc-ov-session-created">{created}</span>}

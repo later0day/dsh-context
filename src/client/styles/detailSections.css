@@ -46,6 +46,13 @@
 .lc-find-mark { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 25%, transparent); color: inherit; border-radius: 2px; }
 .lc-find-mark-on { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 65%, transparent); }
 .lc-ts-desc-md { padding: 4px 10px; color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 1.55; word-break: break-word; overflow-wrap: anywhere; min-width: 0; max-height: 320px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+/* The JsonTree root paints its own layer background and scrolls horizontally on long lines; the wrapper only caps the height, matching the other section bodies. */
+.lc-ts-desc-json { max-height: 320px; overflow-y: auto; scrollbar-width: thin; }
+/* Chrome-DevTools parity: an expanded row drops its inline preview (the children below carry that content),
+ * plus the comma that would strand behind it. The tree renders from the shell's bundle, where Vite scopes the
+ * primitives' css modules as `_<local>_<hash>_<line>`, so the match rides the local name as a substring; a
+ * naming change only brings the preview back, never breaking the layout. */
+.lc-ts-desc-json [role=treeitem][aria-expanded="true"] > [class*="_summary"] > :is([class*="_preview"], [class*="_punctuation"]) { display: none; }
 /* The shared renderer sizes for chat bubbles: inside a card the base sits one step ABOVE the raw text (13px proportional ≈ 12px mono) and headings collapse to a weight-only bump. Inline code keeps the full size too, because the renderer shrinks it to 0.875em and its `font` shorthand would drag in a line-height taller than the paragraph. */
 .lc-ts-desc-md > div { font-size: 13px; line-height: 1.55; }
 .lc-ts-desc-md div :is(h1, h2, h3, h4, h5, h6) { font-size: 13px; font-weight: 600; margin: 10px 0 4px; }

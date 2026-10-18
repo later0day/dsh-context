@@ -1,5 +1,5 @@
-import { memo, useState, type ChangeEvent, type ComponentType, type MouseEvent, type ReactElement } from 'react'
-import { absPathOf, displayPathOf, glyphOf } from '../fileActivity'
+import { memo, useEffect, useState, type ChangeEvent, type ComponentType, type MouseEvent, type ReactElement } from 'react'
+import { absPathOf, baseNameOf, displayPathOf, glyphOf } from '../fileActivity'
 import type { FileActivity, FileEntry, FileOp, FileOpKind } from '../fileActivity'
 import type { ContextSettings, DefaultFileSort } from '../settings'
 import type { DetailState } from '../timelineSource'
@@ -12,6 +12,10 @@ export interface FileCardProps {
   activity: FileActivity
   scope: string
   workspace?: string
+  /** One-shot kind request from the stats board's file pills: the chip band follows it, and the request is handed
+   *  back via `onFilterFocusHandled` so the same kind can jump again. Absent = the chips stay the card's own state. */
+  filterFocus?: FileFilter | null
+  onFilterFocusHandled?: () => void
   /** Returns whether the preview column took the file, so a refusal falls through to the system opener; absent = no preview column. */
   onPreview?: (entry: FileEntry) => boolean
   onOpen?: (absPath: string) => void
@@ -52,20 +56,39 @@ export function makeFileCard(kit: ViewKit, settings: ContextSettings): Component
     const [query, setQuery] = useState('')
     const [openPath, setOpenPath] = useState<string | null>(null)
 
+    // A stats-board jump re-points the chip band: the card drops its own lens and open row, so the landing is the
+    // frontier the click promised. The request is handed back so an unchanged kind can fire again.
+    const filterFocus = props.filterFocus
+    useEffect(() => {
+      if (filterFocus === null || filterFocus === undefined) return
+      setFilter(filterFocus)
+      setQuery('')
+      setOpenPath(null)
+      if (props.onFilterFocusHandled !== undefined) props.onFilterFocusHandled()
+    }, [filterFocus, props.onFilterFocusHandled])
+
     const q = query.trim().toLowerCase()
-    // Display form of an entry's path: './'-relative inside the workspace, verbatim outside — except search rows,
+    // Display form of an entry's path: bare workspace-relative inside the workspace, verbatim outside — except search rows,
     // whose "path" is a pattern.
     const displayOf = (e: FileEntry): string => (e.pattern === true ? e.path : displayPathOf(e.path, props.workspace))
     // Count sort magnitude: the selected kind's own ops under a kind chip, else the file's overall op count.
     const countOf = (e: FileEntry): number =>
       filter === 'read' ? e.reads : filter === 'write' ? e.writes : filter === 'search' ? e.searches : e.ops.length
+    // Name sort: the displayed last segment leads, the full path breaks ties between same-named files.
+    const byName = (a: FileEntry, b: FileEntry): number => {
+      const an = baseNameOf(displayOf(a))
+      const bn = baseNameOf(displayOf(b))
+      return an !== bn ? (an < bn ? -1 : 1) : (a.path < b.path ? -1 : 1)
+    }
     const shown = activity.entries
       .filter(e => matches(e, filter) && (q === '' || displayOf(e).toLowerCase().includes(q)))
       .sort((a, b) => sort === 'count'
         ? (countOf(b) - countOf(a)) || (b.ops[0].seq - a.ops[0].seq)
         : sort === 'latest'
           ? b.ops[0].seq - a.ops[0].seq
-          : (a.path < b.path ? -1 : 1))
+          : sort === 'name'
+            ? byName(a, b)
+            : (a.path < b.path ? -1 : 1))
 
     const chips: { key: FileFilter; files: number; ops: number }[] = [
       {
@@ -107,7 +130,7 @@ export function makeFileCard(kit: ViewKit, settings: ContextSettings): Component
     )
 
     return (
-      <div className="lc-card lc-col flex-1 min-w-[min(360px,100%)]">
+      <div className="lc-card lc-fa-card lc-col flex-1 min-w-[min(360px,100%)]">
         <div className="lc-card-title">
           <span className="lc-card-title-text">{t('files.title')}</span>
           <span className="lc-card-sub">{props.scope}</span>
@@ -150,7 +173,7 @@ export function makeFileCard(kit: ViewKit, settings: ContextSettings): Component
               </span>
             ) : null}
             <span className="lc-gran lc-fa-sort" role="group" title={t('files.sortTip')}>
-              {(['count', 'latest', 'path'] as const).map(k => (
+              {(['count', 'latest', 'path', 'name'] as const).map(k => (
                 <button
                   key={k}
                   type="button"

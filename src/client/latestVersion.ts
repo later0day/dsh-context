@@ -1,7 +1,8 @@
-/** Lazy 1h TTL check for the Plugin-info card: npm first, npmmirror as fallback, one at a time; all
+/** Lazy 1h TTL check for the update hints: npm first, npmmirror as fallback, one at a time; all
  *  sources failing resolves null. */
 
-import { PLUGIN_NAME } from './meta'
+import { useEffect, useState } from 'react'
+import { PLUGIN_NAME, PLUGIN_VERSION } from './meta'
 
 const REGISTRY_HOSTS = [
   'https://registry.npmjs.org',
@@ -47,4 +48,18 @@ export function isNewerVersion(latest: string, current: string): boolean {
     if (x !== y) return x > y
   }
   return false
+}
+
+/** The newer registry version for this build, or null — the read behind every surface's update hint. A dev
+ *  build never asks; the 1h TTL cache answers every later mount from the first fetch. */
+export function useNewerVersion(): string | null {
+  const [latest, setLatest] = useState<string | null>(null)
+  useEffect(() => {
+    if (PLUGIN_VERSION.includes('-dev')) return
+    let on = true
+    // fetchLatestVersion never rejects (every failure narrows to null); the `on` flag drops late results.
+    void fetchLatestVersion().then((v) => { if (on && v) setLatest(v) })
+    return () => { on = false }
+  }, [])
+  return latest !== null && isNewerVersion(latest, PLUGIN_VERSION) ? latest : null
 }

@@ -101,11 +101,17 @@ export function useFleetModel(
 export interface FleetDetailState {
   /** Landed reads keyed by session id; a null detail means the route served nothing (absent or failed). */
   landed: ReadonlyMap<string, { detail: FleetDetail | null; updatedAt: number }>
+  /** Landed full reads (unclipped prompt/reply) keyed by session id — the task board's opened card. */
+  fullLanded: ReadonlyMap<string, FleetDetail | null>
   /** Reads requested but not yet landed. */
   pending: ReadonlySet<string>
+  /** Full reads requested but not yet landed. */
+  fullPending: ReadonlySet<string>
   /** Sessions the comms panel's scan/refresh claimed — inspector reads alone never join this set. */
   scanned: ReadonlySet<string>
   request(id: string, updatedAt: number): void
+  /** Read one session's unclipped detail on demand (a task row's opened card); freshness rides the excerpt ledger's stamp. */
+  requestFull(id: string): void
   /** Read every node's detail (the comms panel's scan). */
   scan(nodes: readonly AgentNode[]): void
   /** Drop every requested entry's cache line and read again. */
@@ -158,6 +164,31 @@ export function useFleetDetails(cache: FleetDetailCache = sharedCache): FleetDet
     })
   }
 
+  // The full reads share the excerpt machinery's anatomy but ride their own state maps — an
+  // on-demand read must never make the scan's landed entries disagree with the comms ledger.
+  const [fullLanded, setFullLanded] = useState<ReadonlyMap<string, FleetDetail | null>>(new Map())
+  const [fullPending, setFullPending] = useState<ReadonlySet<string>>(new Set())
+  const fullRequested = useRef<Set<string>>(new Set())
+
+  const requestFull = (id: string): void => {
+    if (fullRequested.current.has(id)) return
+    // One full read per session per mount: the cache dedupes by stamp, but a settled excerpt
+    // ledger line keeps serving an OLDER stamp — the card's opened read asks for the log the
+    // excerpt landed at, not the freshest possible one, so a re-fold restarts it.
+    fullRequested.current.add(id)
+    setFullPending(prev => prev.has(id) ? prev : new Set(prev).add(id))
+    void cache.fetch(id, requested.current.get(id) ?? 0, true).then((detail) => {
+      if (!mounted.current) return
+      setFullLanded(prev => prev.get(id) === detail ? prev : new Map(prev).set(id, detail))
+      setFullPending((prev) => {
+        if (!prev.has(id)) return prev
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    })
+  }
+
   const claim = (nodes: readonly AgentNode[]): void => {
     setScanned((prev) => {
       const next = new Set(prev)
@@ -176,9 +207,9 @@ export function useFleetDetails(cache: FleetDetailCache = sharedCache): FleetDet
     for (const n of nodes) {
       cache.invalidate(n.id)
       requested.current.delete(n.id)
+      fullRequested.current.delete(n.id)
       request(n.id, n.updatedAt)
     }
   }
-
-  return { landed, pending, scanned, request, scan, refresh }
+  return { landed, fullLanded, pending, fullPending, scanned, request, requestFull, scan, refresh }
 }

@@ -11,7 +11,7 @@ import { DICT_EN } from '../../../src/client/i18n'
 import { resetTimelineDetailStores } from '../../../src/client/timelineSource'
 import { TestClientCtx, asClientCtx } from '../helpers/harness'
 import { click, makeKit, mount, query, queryAll, text, until } from '../helpers/kit'
-import { projectionsFor, richTimeline, timeline } from './contextViewHarness'
+import { makeScroller, mountInScroller, projectionsFor, richTimeline, timeline } from './contextViewHarness'
 
 const kit = makeKit()
 
@@ -114,6 +114,56 @@ describe('FleetView — the agent family on its own page', () => {
     assert.equal(queryAll(m.container, '.lc-agents').length, 0)
     assert.ok(text(query(m.container, '.lc-foot')).startsWith(DICT_EN['footer'].slice(0, 24)))
     await m.unmount()
+    ctx.dispose()
+  })
+})
+
+describe('FleetView — the shared scrollport claim', () => {
+  test("mount lands at the top: the chat's bottom-anchored scrollTop does not survive the tab switch", async () => {
+    const scroller = makeScroller()
+    scroller.scrollTop = 3491
+    const ctx = new TestClientCtx({ services: { sessions: selfOnly('sv-fleet') } })
+    const View = makeView(ctx)
+    const m = await mountInScroller(
+      h(View, { sessionId: 'sv-fleet', useProjection: projectionsFor(richTimeline({ timing: TIMING })) }),
+      scroller,
+    )
+
+    assert.equal(scroller.scrollTop, 0, 'the inherited position reset pre-paint')
+    await m.unmount()
+    ctx.dispose()
+  })
+
+  test('a session switch inside the tab re-claims the top', async () => {
+    const scroller = makeScroller()
+    const ctx = new TestClientCtx({ services: { sessions: selfOnly('sv-fleet') } })
+    const View = makeView(ctx)
+    const m = await mountInScroller(
+      h(View, { sessionId: 'sv-fleet', useProjection: projectionsFor(richTimeline({ timing: TIMING })) }),
+      scroller,
+    )
+    scroller.scrollTop = 300
+    await m.update(h(View, { sessionId: 'sv-other', useProjection: projectionsFor(richTimeline({ timing: TIMING })) }))
+
+    assert.equal(scroller.scrollTop, 0, 'the next session lands at the top again')
+    await m.unmount()
+    ctx.dispose()
+  })
+
+  test('a scrolled-away position does not come back: every entry re-claims the top', async () => {
+    const props = { sessionId: 'sv-roundtrip', useProjection: projectionsFor(richTimeline({ timing: TIMING })) }
+    const ctx = new TestClientCtx({ services: { sessions: selfOnly('sv-roundtrip') } })
+    const View = makeView(ctx)
+    const scroller1 = makeScroller()
+    const m1 = await mountInScroller(h(View, props), scroller1)
+    scroller1.scrollTop = 120
+    await m1.unmount()
+
+    const scroller2 = makeScroller()
+    scroller2.scrollTop = 55
+    const m2 = await mountInScroller(h(View, props), scroller2)
+    assert.equal(scroller2.scrollTop, 0, 'the page is a dashboard: it opens at its top again')
+    await m2.unmount()
     ctx.dispose()
   })
 })

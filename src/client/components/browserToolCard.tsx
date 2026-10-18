@@ -4,10 +4,11 @@ import { useMemo, useState, type ChangeEvent, type ReactElement, type ReactNode 
 import type { SurfaceNode } from '../../shared/types'
 import type { ConversationNodeLike } from '../services'
 import { parseCallArgs } from '../callSummary'
-import { imageRefOf } from './images'
-import type { ImageKit } from './images'
+import { attachmentOf } from '../../shared/attachment'
+import type { AttachmentRef } from '../../shared/attachment'
+import type { AttachmentKit } from './attachments'
 import type { RichKit } from './richText'
-import type { ImageRefLike } from '../services'
+import { Section } from './section'
 import { typeOf, paramsOf } from './browserSchema'
 import type { ParamSchema } from './browserSchema'
 
@@ -32,29 +33,6 @@ function ParamRow(props: {
   )
 }
 
-function Section(props: {
-  label: string
-  labelClass?: string
-  /** Fold the head's trailing group onto a second line under width pressure (rich-text heads; the call-name head must stay one-line). */
-  foldHead?: boolean
-  count?: number
-  actions?: ReactNode
-  meta?: ReactNode
-  children: ReactNode
-}): ReactElement {
-  const right = props.actions !== undefined || props.meta !== undefined
-  return (
-    <div className="lc-ts-card">
-      <div className={'lc-ts-card-head' + (props.foldHead === true ? ' lc-ts-card-head-wrap' : '')}>
-        <b className={props.labelClass} title={props.label}>{props.label}</b>
-        {right ? <span className="lc-ts-card-right">{props.meta}{props.actions}</span> : null}
-        {props.count !== undefined ? <span className="lc-ts-card-count">{props.count}</span> : null}
-      </div>
-      {props.children}
-    </div>
-  )
-}
-
 function lineCountOf(text: string): number {
   return text.split(/\r\n|\r|\n/).length
 }
@@ -66,7 +44,7 @@ export function TextSection(props: {
   lines: (n: number) => string
 }): ReactElement {
   const { rich } = props
-  const [mode, setMode] = rich.useRichMode()
+  const [mode, setMode, json] = rich.useRichMode(props.text)
   const find = rich.useRichFind(props.text, mode)
   const lineCount = useMemo(() => lineCountOf(props.text), [props.text])
   return (
@@ -74,7 +52,7 @@ export function TextSection(props: {
       label={props.label}
       foldHead
       actions={<>
-        <rich.RichSwitch mode={mode} onPick={setMode} />
+        <rich.RichSwitch mode={mode} json={json} onPick={setMode} />
         <rich.RichCopy text={props.text} />
         {find.button}
       </>}
@@ -190,40 +168,39 @@ export interface DetailLabels {
   content: string
   result: string
   summary: string
-  images: string
   other: string
   lines: (n: number) => string
   callState: (err: boolean, exit: number | null) => ReactNode
 }
 
-/** Both block vocabularies normalize here — raw durable blocks (`type`) and snapshot assistant blocks (`kind`).
- * Consecutive images group into one grid; nested tool-result blocks flatten into the same flow. */
+/** Both block vocabularies normalize here — raw durable blocks (`type`) and snapshot assistant
+ * blocks (`kind`). Every attachment block collects into ONE ordered attachment group, rendered where
+ * the first of them sits (the chat's own arrangement: attachments above the text); nested
+ * tool-result blocks flatten into the same flow. */
 export function BlocksBody(props: {
   blocks: readonly unknown[]
   textLabel: string
   rich: RichKit
-  img: ImageKit
+  att: AttachmentKit
   labels: DetailLabels
 }): ReactElement {
-  const { rich, img, labels } = props
+  const { rich, att, labels } = props
   const out: ReactNode[] = []
-  let images: ImageRefLike[] = []
-  const flushImages = (): void => {
-    if (images.length === 0) return
-    const group = images
-    images = []
-    out.push(
-      <Section key={'img' + String(out.length)} label={labels.images} count={group.length}>
-        <div className="lc-att-grid">
-          {group.map((a, i) => <img.Card key={`${a.attachmentId}:${i}`} attachment={a} load={img.load} />)}
-        </div>
-      </Section>,
-    )
-  }
-  for (const b of props.blocks) {
-    const image = imageRefOf(b)
-    if (image !== null) { images.push(image); continue }
-    flushImages()
+  const refs = props.blocks.map(attachmentOf)
+  const attachments = refs.filter((ref): ref is AttachmentRef => ref !== null)
+  const firstAt = refs.findIndex(ref => ref !== null)
+  for (const [i, b] of props.blocks.entries()) {
+    if (i === firstAt) {
+      out.push(
+        <att.Section
+          key={'att' + String(out.length)}
+          attachments={attachments}
+          load={att.load}
+          open={att.open}
+        />,
+      )
+    }
+    if (refs[i] !== null) continue
     const blk = b !== null && typeof b === 'object'
       ? b as { type?: unknown; kind?: unknown; text?: unknown; name?: unknown; argsRaw?: unknown; arguments?: unknown; content?: unknown }
       : null
@@ -255,14 +232,13 @@ export function BlocksBody(props: {
         blocks={blk.content as unknown[]}
         textLabel={labels.result}
         rich={rich}
-        img={img}
+        att={att}
         labels={labels}
       />)
       continue
     }
     out.push(<Section key={out.length} label={labels.other}><pre className="lc-ts-desc-body lc-br-dim">{JSON.stringify(b, null, 2)}</pre></Section>)
   }
-  flushImages()
   return <>{out}</>
 }
 

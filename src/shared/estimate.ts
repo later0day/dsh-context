@@ -1,12 +1,19 @@
 /** Token heuristics shared by the host fold and the client boundary, mirroring the harness
- * token-meter's fixed density (4 chars ≈ 1 token, +4 role framing) on both sides. */
+ * token-meter's fixed density (4 chars ≈ 1 token, +4 per content block, +4 role framing) on both
+ * sides. */
 
 const CHARS_PER_TOKEN = 4
 const ROLE_OVERHEAD = 4
+const BLOCK_OVERHEAD = 4
 
 export function estimateSystemTokens(text: unknown): number {
   if (typeof text !== 'string' || text.length === 0) return 0
   return Math.ceil(text.length / CHARS_PER_TOKEN) + ROLE_OVERHEAD
+}
+
+/** Price one text block exactly like the harness meter's text arm. */
+export function estimateTextTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN) + BLOCK_OVERHEAD
 }
 
 /** Price a `system/message` payload exactly like the harness's `estimateSystemMessage`: text

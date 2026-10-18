@@ -196,9 +196,8 @@ describe('kpisOf', () => {
         } as unknown as ContextTimeline,
       }),
     ]
-    const kpi = kpisOf(rows, 5, prices, 'usd')
+    const kpi = kpisOf(rows, prices, 'usd')
     assert.equal(kpi.sessions, 2)
-    assert.equal(kpi.listed, 5)
     assert.equal(kpi.tokens, 200)
     assert.equal(kpi.turns, 5)
     assert.ok(kpi.cost !== null && Math.abs(kpi.cost - 390e-6) < 1e-12, 'the DeepSeek peak bucket doubles: 2 × (50×0.1 + 100×1 + 10×1 + 40×2) per 1M')
@@ -229,7 +228,7 @@ describe('kpisOf', () => {
       }),
       rowOf(),
     ]
-    const kpi = kpisOf(rows, 3, prices, 'usd')
+    const kpi = kpisOf(rows, prices, 'usd')
     assert.equal(kpi.costSessions, 1, 'only the priced session counts toward the cost cell')
     assert.equal(kpi.usageSessions, 2, 'both billed sessions feed the cache-hit rate')
     assert.ok(kpi.cost !== null && Math.abs(kpi.cost - 390e-6) < 1e-12, 'the unpriced session adds nothing to the estimate')
@@ -238,7 +237,7 @@ describe('kpisOf', () => {
   })
 
   test('an unbilled set zeroes and dashes', () => {
-    const kpi = kpisOf([rowOf()], 1, null, 'cny')
+    const kpi = kpisOf([rowOf()], null, 'cny')
     assert.equal(kpi.tokens, 0)
     assert.equal(kpi.turns, 0)
     assert.equal(kpi.cost, null)

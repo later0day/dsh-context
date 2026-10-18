@@ -491,6 +491,51 @@ describe('client entry: placement gating', () => {
   })
 })
 
+describe('client entry: second-mount guard', () => {
+  test('a ledger already seating the jump marker skips the whole apply', () => {
+    const sources: unknown[] = []
+    const ctx = new TestClientCtx({ services: { inputTriggers: { registerSource: (src: unknown) => {
+      sources.push(src)
+      return () => {
+        const i = sources.indexOf(src)
+        if (i >= 0) sources.splice(i, 1)
+      }
+    } } } })
+    applyTo(ctx)
+    const first = ctx.slots.of('conversation.view').length
+    assert.ok(first > 0, 'the first mount registers')
+    assert.equal(sources.length, 1, 'the first mount registers the /context source')
+    // The second mount of the same bundle — the static profile bundle plus a dynamic-runner run in one page.
+    applyTo(ctx)
+    assert.equal(ctx.slots.of('conversation.view').length, first, 'no second tab is seated')
+    assert.equal(ctx.slots.of('conversation.chat.assistant-actions').length, 1)
+    assert.equal(ctx.slots.of('conversation.input.overlay').length, 1)
+    assert.equal(ctx.slots.of('main').length, 1)
+    assert.equal(ctx.slots.of('sidebar.panellist').length, 1)
+    assert.equal(sources.length, 1, 'no second /context source')
+    ctx.dispose()
+  })
+
+  test('a ledger seating foreign entries only fails open into a full mount', () => {
+    const ctx = new TestClientCtx()
+    ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'feedback' }, () => null)
+    applyTo(ctx)
+    assert.equal(ctx.slots.of('conversation.view').length, 2, 'the tabs register')
+    assert.equal(ctx.slots.of('conversation.chat.assistant-actions').length, 2, 'the jump registers beside the foreign row')
+    ctx.dispose()
+  })
+
+  test('a hostile ledger face fails open into a full mount', () => {
+    const ctx = new TestClientCtx()
+    ;(ctx.slots as unknown as { entries: () => never }).entries = () => {
+      throw new Error('boom')
+    }
+    applyTo(ctx)
+    assert.equal(ctx.slots.of('conversation.view').length, 2)
+    ctx.dispose()
+  })
+})
+
 describe('client entry: dispose', () => {
   test('a full apply unwinds dictionaries and the command source', () => {
     const sources: unknown[] = []

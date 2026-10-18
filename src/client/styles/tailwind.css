@@ -14,9 +14,10 @@
  * - dsh styles itself through CSS modules and `--ds-*`/`--dsw-*` tokens, so generic names like
  *   `flex`/`gap-2` cannot collide; the flat `lc-*` namespace is the plugin's own chrome.
  *
- * tailwindcss / @tailwindcss/node / @tailwindcss/oxide are pinned to one exact version (as is
- * lightningcss): the config process loads this compiler alongside lightningcss's native binding, and
- * two copies of any native set in that realm break the napi calls.
+ * @tailwindcss/node / @tailwindcss/oxide are pinned to one exact version (as is lightningcss): the
+ * config process loads this compiler alongside lightningcss's native binding, and two copies of any
+ * native set in that realm break the napi calls. `tailwindcss` itself is not a direct dependency —
+ * @tailwindcss/node pulls it at that same exact version, so the pin holds with no second entry.
  */
 @theme static {
   --spacing: 4px;

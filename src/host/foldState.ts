@@ -36,6 +36,9 @@ export interface TimelineState {
   provider?: string
   lastModel?: string
   contextWindow?: number
+  /** The newest `request/header` envelope's routed output cap (dsh materializes the adapter default
+   * into it). Last-wins: a header omitting the cap clears it. */
+  maxOutputTokens?: number
   requests: RequestRecord[]
   /** The number of turn runs in `requests` (a run = consecutive records sharing one `turn`). Maintained
    * incrementally at the single append site and recomputed when a trim replaces the array, so the retention

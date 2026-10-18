@@ -84,6 +84,13 @@ export function buttonByText(container: ParentNode, label: string): HTMLElement 
   return hit
 }
 
+/** A bare shared-scrollport stand-in for views that probe `[data-conversation-scroll]`. */
+export function makeScroller(): HTMLElement {
+  const scroller = document.createElement('div')
+  scroller.setAttribute('data-conversation-scroll', '')
+  return scroller
+}
+
 /** Mount inside a `[data-conversation-scroll]` scroller so the view's shared-scrollport probes find it. */
 export async function mountInScroller(el: ReactElement, scroller: HTMLElement) {
   const inner = document.createElement('div')

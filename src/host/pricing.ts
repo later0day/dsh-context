@@ -6,6 +6,7 @@
  * (shared/imageTokens.ts), falling back to the meter's JSON price.
  */
 
+import { estimateTextTokens } from '../shared/estimate'
 import { estimateImageTokens } from '../shared/imageTokens'
 
 const CHARS_PER_TOKEN = 4
@@ -42,7 +43,7 @@ function estimateBlocks(blocks: unknown): number {
     switch (block.type) {
       case 'text':
       case 'reasoning':
-        tokens += Math.ceil((block.text || '').length / CHARS_PER_TOKEN) + BLOCK_OVERHEAD
+        tokens += estimateTextTokens(block.text || '')
         break
       case 'tool-call':
         tokens += Math.ceil((block.name || '').length / CHARS_PER_TOKEN)

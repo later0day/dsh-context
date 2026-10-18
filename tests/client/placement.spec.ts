@@ -109,4 +109,26 @@ describe('watchPlacement', () => {
     assert.doesNotThrow(() => { settings.set('defaultPlacement', 'tab') })
     assert.doesNotThrow(() => { dispose() })
   })
+
+  test('a disposerless mount is still counted as mounted — later publishes never register a second copy', () => {
+    const settings = createContextSettings()
+    let tabs = 0
+    let sidebars = 0
+    watchPlacement(settings, {
+      // A face that seats the seat but hands back no disposer (a stripped or foreign `slots`).
+      tab: () => { tabs += 1; return undefined },
+      sidebar: () => { sidebars += 1; return undefined },
+    })
+    assert.equal(tabs, 1)
+    assert.equal(sidebars, 1)
+    // Unrelated preference publishes leave the mounted sides alone.
+    settings.set('defaultGranularity', 'turn')
+    settings.set('defaultPlacement', 'tab')
+    assert.equal(tabs, 1, 'the tab is never mounted twice')
+    assert.equal(sidebars, 1, 'the sidebar unwound once and does not come back on its own')
+    // The dropped side can come back, and comes back exactly once.
+    settings.set('defaultPlacement', 'all')
+    assert.equal(tabs, 1)
+    assert.equal(sidebars, 2)
+  })
 })

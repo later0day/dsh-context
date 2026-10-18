@@ -21,22 +21,44 @@ describe('buildTimelineView unknown-model shape', () => {
     assert.equal(view.model, undefined)
     assert.equal(view.provider, undefined)
     assert.equal(view.contextWindow, undefined)
+    assert.equal(view.maxOutputTokens, undefined)
     assert.ok(!('model' in view), 'no own `model` key')
     assert.ok(!('provider' in view), 'no own `provider` key')
     assert.ok(!('contextWindow' in view), 'no own `contextWindow` key')
+    assert.ok(!('maxOutputTokens' in view), 'no own `maxOutputTokens` key')
     assertPlainJson(view)
   })
 
   test('known scalars ride their own keys once a request names them', () => {
     const { view } = driveTimeline([
-      header(1, { config: { model: 'deepseek-v4-flash', provider: 'deepseek' } }),
+      header(1, { config: { model: 'deepseek-v4-flash', provider: 'deepseek', maxTokens: 256000 } }),
       requestContext(2, { provider: 'deepseek', model: 'deepseek-v4-flash', contextWindow: 128000 }),
       userMessage(3, [{ type: 'text', text: 'hi' }]),
     ])
     assert.equal(view.model, 'deepseek-v4-flash')
     assert.equal(view.provider, 'deepseek')
     assert.equal(view.contextWindow, 128000)
+    assert.equal(view.maxOutputTokens, 256000)
     assertPlainJson(view)
+  })
+
+  test('the routed output cap is LAST-WINS across headers, exactly as the compaction backend reads it', () => {
+    // A later header without a cap clears it (dsh's `reservedCompletionTokens` falls back to zero, not
+    // to the previous envelope), and a hostile cap never lands in the persisted state.
+    const cleared = driveTimeline([
+      header(1, { config: { model: 'm', provider: 'p', maxTokens: 256000 } }),
+      header(2, { config: { model: 'm', provider: 'p' }, reason: 'change' }),
+    ])
+    assert.equal(cleared.view.maxOutputTokens, undefined)
+    for (const maxTokens of ['256000', -1, 0, Number.NaN, Number.POSITIVE_INFINITY, null] as const) {
+      const { view } = driveTimeline([header(1, { config: { model: 'm', provider: 'p', maxTokens } })])
+      assert.equal(view.maxOutputTokens, undefined, String(maxTokens))
+    }
+    const kept = driveTimeline([
+      header(1, { config: { model: 'm', provider: 'p', maxTokens: 8000 } }),
+      header(2, { config: { model: 'm', provider: 'p', maxTokens: 256000 }, reason: 'change' }),
+    ])
+    assert.equal(kept.view.maxOutputTokens, 256000)
   })
 })
 

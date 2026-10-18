@@ -1,10 +1,11 @@
 import { act, createElement as h } from 'react'
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
+import type { UseChatLike } from '../../../src/client/services'
 import { DICT_EN } from '../../../src/client/i18n'
 import { TestClientCtx } from '../helpers/harness'
 import { click, flush, hover, mount, query, queryAll, text, unhover } from '../helpers/kit'
-import { buttonByText, makeView, mountRich, projectionsFor, T0, timeline } from './contextViewHarness'
+import { buttonByText, makeView, mountRich, projectionsFor, richTimeline, T0, timeline } from './contextViewHarness'
 
 describe('ContextView — interactions', () => {
   test('renders the rich tab: stats, chart bars, markers, events, nodes, browser', async () => {
@@ -20,6 +21,44 @@ describe('ContextView — interactions', () => {
     // Turn strip partitions the two turn groups (turn 1 + the turn-less 0).
     assert.deepEqual(queryAll(m.container, '.lc-turn-label').map(el => text(el)), ['1', '0'])
     await m.unmount()
+  })
+
+  test('the browser column caps at the left cards\' full extent, flush with the column, live', async () => {
+    // jsdom has no layout: stand in rects for the two left cards only, laid out card + 7px gap, then grow
+    // them so the re-measure arm runs.
+    const orig = Element.prototype.getBoundingClientRect
+    let cardH = 100
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const box = orig.call(this)
+      const parent = this.parentElement
+      if (!this.classList.contains('lc-card') || parent === null
+        || !parent.classList.contains('lc-col') || parent.classList.contains('lc-col-browser')) return box
+      const top = 100 + [...parent.children].indexOf(this) * (cardH + 7)
+      return { ...box, top, bottom: top + cardH }
+    } as never
+    try {
+      // One View instance across the update, so the second render re-measures in place.
+      const View = makeView(new TestClientCtx())
+      const el = () => h(View, {
+        sessionId: 'sv-cap',
+        useProjection: projectionsFor(richTimeline(), {
+          contextHeaders: { headers: [{ seq: 1, time: T0, system: 'SYS', tools: [{ name: 'bash', tokens: 12, description: 'run' }] }] },
+        }),
+        useChat: (sel => sel({ legacy: { nodes: [] } })) as UseChatLike,
+      })
+      const m = await mount(el())
+      const col = query<HTMLElement>(m.container, '.lc-col-browser')
+      assert.equal(col.style.maxHeight, '207px', 'two 100px cards and their 7px gap')
+      // The cap only ceilings the card — the card's rows region scrolls; the column never does.
+      assert.equal(col.style.overflowY, '')
+      assert.ok(query(m.container, '.lc-br-scroll') !== null)
+      cardH = 150
+      await m.update(el())
+      assert.equal(col.style.maxHeight, '307px', 'the cap follows the grown cards on the next render')
+      await m.unmount()
+    } finally {
+      Element.prototype.getBoundingClientRect = orig
+    }
   })
 
   test('bar hover previews in the browser; hover loss on a granularity switch falls back', async () => {
@@ -142,7 +181,7 @@ describe('ContextView — interactions', () => {
     const detailBar = query(m.container, '.lc-detail .lc-stacked')
     assert.ok(detailBar.className.includes('lc-stacked-dim'))
     assert.ok(queryAll(detailBar, '.lc-stacked-seg-on').length === 1)
-    assert.ok(queryAll(m.container, '.lc-detail-row-on').length === 1, 'the matching detail row lights too')
+    assert.ok(queryAll(m.container, '.lc-detail .lc-chip-on').length === 1, 'the matching detail chip lights too')
 
     await unhover(toolsRow)
     assert.equal(query(m.container, '.lc-chart').hasAttribute('data-catdim'), false)
@@ -153,6 +192,20 @@ describe('ContextView — interactions', () => {
     assert.equal(query(m.container, '.lc-chart').hasAttribute('data-catdim'), false)
     assert.ok(!query(m.container, '.lc-detail .lc-stacked').className.includes('lc-stacked-dim'))
     await unhover(query(m.container, '.lc-stacked-free'))
+    await m.unmount()
+  })
+
+  test('trend panel chip hover feeds the shared category state back to the composition legend', async () => {
+    const m = await mountRich('sv-link-chip')
+    // The panel's chips are hover SOURCES, exactly as the composition legend's are; "tools" is the second chip.
+    const chip = queryAll(m.container, '.lc-detail .lc-legend .lc-chip')[1]
+    await hover(chip)
+    assert.equal(query(m.container, '.lc-chart').getAttribute('data-catdim'), 'tools')
+    const comp = queryAll(m.container, '.lc-card').find(c => text(c).includes(DICT_EN['overview.title']))
+    assert.ok(comp !== undefined)
+    assert.equal(queryAll(comp, '.lc-legend .lc-chip-on').length, 1, 'the composition legend chip lights with it')
+    await unhover(chip)
+    assert.equal(query(m.container, '.lc-chart').hasAttribute('data-catdim'), false)
     await m.unmount()
   })
 

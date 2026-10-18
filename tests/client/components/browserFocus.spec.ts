@@ -24,7 +24,7 @@ describe('ContextBrowser focus bridges', () => {
   })
   const convNodes: ConversationNodeLike[] = [{ kind: 'user', seq: 1, content: [{ type: 'text', text: 'focusable' }] }]
 
-  test('nodeFocus selects the step, opens the node, scrolls it into view, and clears', async () => {
+  test('nodeFocus selects the step, opens the node, reveals it within the card only, and clears', async () => {
     const scrolls: unknown[] = []
     const orig = Element.prototype.scrollIntoView
     Element.prototype.scrollIntoView = function (this: Element, arg?: unknown) { scrolls.push(arg) } as never
@@ -40,7 +40,7 @@ describe('ContextBrowser focus bridges', () => {
       const onRows = queryAll(m.container, '.lc-br-elem-on')
       assert.equal(onRows.length, 1)
       assert.ok(text(onRows[0]).includes('focusable'))
-      assert.deepEqual(scrolls, [{ block: 'nearest' }], 'the open row scrolled into view')
+      assert.deepEqual(scrolls, [], 'the open row reveals inside the card — never a scrollIntoView that could drag the page')
       // A step focus switches the assembled view.
       await m.update(h(Browser, props({
         data, headers, convNodes,

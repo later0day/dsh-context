@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import {
   memberIdByName,
+  teammateNameOf,
   tasksOfOwner,
   teamMemberOf,
   teamOf,
@@ -93,6 +94,18 @@ describe('fleetTeam helpers', () => {
     assert.equal(teamMemberOf(team, 'w1')?.name, 'worker-bee')
     assert.equal(teamMemberOf(team, 'nobody'), null)
     assert.equal(teamMemberOf(null, 'w1'), null)
+  })
+
+  test('teammateNameOf names teammates only: the lead, the self card, and outsiders stay plain', () => {
+    const current = { isCurrent: true, id: 'w1' } as never
+    const teammate = { isCurrent: false, id: 'w1' } as never
+    const lead = { isCurrent: false, id: 'root' } as never
+    const outsider = { isCurrent: false, id: 's9' } as never
+    assert.equal(teammateNameOf(team, teammate), 'worker-bee')
+    assert.equal(teammateNameOf(team, current), undefined)
+    assert.equal(teammateNameOf(team, lead), undefined, 'the lead card keeps the session title')
+    assert.equal(teammateNameOf(team, outsider), undefined)
+    assert.equal(teammateNameOf(null, teammate), undefined)
   })
 
   test('memberIdByName joins the task board onto roster names', () => {

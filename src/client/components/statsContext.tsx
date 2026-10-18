@@ -133,11 +133,34 @@ export function toolTallyOf(nodes: readonly SurfaceNode[]): [string, number][] {
   return [...tally].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
 }
 
+/** Every jump the board offers, resolved by the caller (contextView.tsx owns both bridges): the session figures and
+ *  the user-input pill open a Context Browser category, the file pills land on the File Activity card's own chips. */
+export type StatsJump = 'skills' | 'answers' | 'inputs' | 'read' | 'write' | 'search' | 'image'
+
+/** Each jump's action tip — the fired cell's `title`, phrased as what the click does. */
+const JUMP_TIPS: Record<StatsJump, string> = {
+  skills: 'stats.skillsJump',
+  answers: 'stats.answersJump',
+  inputs: 'stats.humanInputsJump',
+  read: 'stats.filesJump',
+  write: 'stats.filesJump',
+  search: 'stats.filesJump',
+  image: 'stats.filesJump',
+}
+
+interface JumpWire {
+  role: 'button'
+  tabIndex: number
+  title?: string
+  onClick: () => void
+  onKeyDown: (ev: KeyboardEvent) => void
+}
+
 interface StatsContextProps {
   counts: TimelineCounts
   humanInputs?: number
   answers?: number
-  onFigureClick?: (figure: 'skills' | 'answers') => void
+  onJump?: (jump: StatsJump) => void
   /** The family card's own view, wherever the caller serves it (contextView.tsx owns the jump). */
   onTeamClick?: () => void
   toolCalls?: number
@@ -380,35 +403,49 @@ export function makeStatsContext(
         ? <div className={className}>{body}</div>
         : <a className={className} href={href} target="_blank" rel="noreferrer noopener">{body}</a>
     }
-    const pill = (label: string, value: number, cls = '', tip?: ReactNode): ReactElement => (
-      <span key={label} className={'lc-flow-pill' + cls + (value === 0 ? ' lc-flow-pill-dim' : '') + (tip === undefined ? '' : ' lc-stat-tipped group/tip')}>
-        <span className="lc-flow-pill-label">
-          {label}
-          {tip !== undefined && <i className="lc-stat-q group-hover/tip:text-(--dsw-alias-label-primary) group-hover/tip:border-(--dsw-alias-label-primary)" aria-hidden="true">?</i>}
-        </span>
-        <b>{fmt(value)}</b>
-        {tip !== undefined && <span className="lc-tip lc-stat-tip group-hover/tip:opacity-100" role="tooltip">{tip}</span>}
-      </span>
-    )
-    const onFigureClick = props.onFigureClick
-    const figure = (key: 'skills' | 'answers', value: number, label: string, tip: string): ReactElement => (
-      <span
-        key={key}
-        role={onFigureClick === undefined ? undefined : 'button'}
-        tabIndex={onFigureClick === undefined ? undefined : 0}
-        className={'lc-flow-kv' + (onFigureClick === undefined ? '' : ' lc-flow-kv-btn')}
-        title={onFigureClick === undefined ? undefined : tip}
-        onClick={onFigureClick === undefined ? undefined : () => { onFigureClick(key) }}
-        onKeyDown={onFigureClick === undefined ? undefined : (ev: KeyboardEvent) => {
+    const onJump = props.onJump
+    const jumpWire = (key: StatsJump, hint = true): JumpWire | undefined => {
+      const relay = onJump
+      if (relay === undefined) return undefined
+      return {
+        role: 'button',
+        tabIndex: 0,
+        title: hint ? t(JUMP_TIPS[key]) : undefined,
+        onClick: () => { relay(key) },
+        onKeyDown: (ev: KeyboardEvent) => {
           if (ev.key !== 'Enter' && ev.key !== ' ') return
           ev.preventDefault()
-          onFigureClick(key)
-        }}
-      >
-        <b>{fmt(value)}</b>
-        <i>{label}</i>
-      </span>
-    )
+          relay(key)
+        },
+      }
+    }
+    const pill = (label: string, value: number, cls = '', tip?: ReactNode, jump?: StatsJump): ReactElement => {
+      // A pill with its own ? bubble keeps the native title off: one hover target, one hint.
+      const wire = jump !== undefined ? jumpWire(jump, tip === undefined) : undefined
+      return (
+        <span
+          key={label}
+          className={'lc-flow-pill' + cls + (wire === undefined ? '' : ' lc-flow-pill-btn') + (value === 0 ? ' lc-flow-pill-dim' : '') + (tip === undefined ? '' : ' lc-stat-tipped group/tip')}
+          {...(wire ?? {})}
+        >
+          <span className="lc-flow-pill-label">
+            {label}
+            {tip !== undefined && <i className="lc-stat-q group-hover/tip:text-(--dsw-alias-label-primary) group-hover/tip:border-(--dsw-alias-label-primary)" aria-hidden="true">?</i>}
+          </span>
+          <b>{fmt(value)}</b>
+          {tip !== undefined && <span className="lc-tip lc-stat-tip group-hover/tip:opacity-100" role="tooltip">{tip}</span>}
+        </span>
+      )
+    }
+    const figure = (key: 'skills' | 'answers', value: number, label: string): ReactElement => {
+      const wire = jumpWire(key)
+      return (
+        <span key={key} className={'lc-flow-kv' + (wire === undefined ? '' : ' lc-flow-kv-btn')} {...(wire ?? {})}>
+          <b>{fmt(value)}</b>
+          <i>{label}</i>
+        </span>
+      )
+    }
     const costPids = new Set(rows.map(r => r.face.pid).filter(p => p !== ''))
     const costHref = costPids.size === 1 ? 'https://models.dev/providers/' + [...costPids][0] + '/' : undefined
     const ownCost = estimateSessionCost(props.cost, book, currency)
@@ -456,11 +493,11 @@ export function makeStatsContext(
               {head(t('stats.io'), fmt(ioTotal))}
               {/* Searches and image reads pill only when they happened; the three zero counts stay visible. */}
               <div className="lc-flow-pills">
-                {pill(t('stats.humanInputs'), props.humanInputs ?? 0, '', t('stats.humanInputsTip'))}
-                {pill(t('files.kind.read'), props.files.reads)}
-                {pill(t('files.kind.write'), props.files.writes)}
-                {props.files.searches > 0 ? pill(t('files.kind.search'), props.files.searches) : null}
-                {props.files.images > 0 ? pill(t('files.kind.image'), props.files.images) : null}
+                {pill(t('stats.humanInputs'), props.humanInputs ?? 0, '', t('stats.humanInputsTip'), 'inputs')}
+                {pill(t('files.kind.read'), props.files.reads, '', undefined, 'read')}
+                {pill(t('files.kind.write'), props.files.writes, '', undefined, 'write')}
+                {props.files.searches > 0 ? pill(t('files.kind.search'), props.files.searches, '', undefined, 'search') : null}
+                {props.files.images > 0 ? pill(t('files.kind.image'), props.files.images, '', undefined, 'image') : null}
               </div>
             </div>
             <div className="lc-flow-node" ref={nodeRef('events')}>
@@ -478,8 +515,8 @@ export function makeStatsContext(
                 <span className="lc-flow-kv"><b>{fmt(props.counts.steps)}</b><i>{t('stats.steps')}</i></span>
               </span>
               <span className="lc-flow-self-stats">
-                {figure('skills', props.counts.skills ?? 0, t('stats.skills'), t('stats.skillsJump'))}
-                {figure('answers', props.answers ?? 0, t('stats.answers'), t('stats.answersJump'))}
+                {figure('skills', props.counts.skills ?? 0, t('stats.skills'))}
+                {figure('answers', props.answers ?? 0, t('stats.answers'))}
               </span>
             </div>
           </div>

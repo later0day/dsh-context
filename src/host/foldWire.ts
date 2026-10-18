@@ -18,6 +18,7 @@ function headFieldsOf(state: TimelineState): Snapshot {
     ...(state.model !== undefined ? { model: state.model } : {}),
     ...(state.provider !== undefined ? { provider: state.provider } : {}),
     ...(state.contextWindow !== undefined ? { contextWindow: state.contextWindow } : {}),
+    ...(state.maxOutputTokens !== undefined ? { maxOutputTokens: state.maxOutputTokens } : {}),
     current: {
       system: state.systemTokens,
       tools: state.toolsTokens,

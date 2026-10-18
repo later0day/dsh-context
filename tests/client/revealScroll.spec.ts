@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
-import { revealInScrollParent } from '../../src/client/revealScroll'
+import { revealInScrollParent, revealRowInCard } from '../../src/client/revealScroll'
 
 /** A viewport rect carrying only the top the reveal reads. */
 const top = (t: number): DOMRect => ({ top: t }) as DOMRect
@@ -71,5 +71,72 @@ describe('revealInScrollParent', () => {
       get parentElement(): never { throw new Error('boom') },
     } as unknown as Element
     assert.equal(revealInScrollParent(hostile), false)
+  })
+})
+
+describe('revealRowInCard', () => {
+  const rect = (t: number, b: number): DOMRect => ({ top: t, bottom: b }) as DOMRect
+
+  /** page > card > region > row: the region overflows (the card's rows region), every box has a fixed
+   * viewport rect, and the page — above the card — rides its own scroll to prove nothing above moves. */
+  function mounted(rowTop: number, rowBottom: number, regionOverflow = true): {
+    page: HTMLDivElement; card: HTMLDivElement; region: HTMLDivElement; row: HTMLDivElement
+  } {
+    const page = document.createElement('div')
+    const card = document.createElement('div')
+    const region = document.createElement('div')
+    const row = document.createElement('div')
+    region.appendChild(row)
+    card.appendChild(region)
+    page.appendChild(card)
+    document.body.appendChild(page)
+    Object.defineProperty(region, 'scrollHeight', { value: regionOverflow ? 600 : 300 })
+    Object.defineProperty(region, 'clientHeight', { value: regionOverflow ? 200 : 300 })
+    region.getBoundingClientRect = () => rect(0, 200)
+    row.getBoundingClientRect = () => rect(rowTop, rowBottom)
+    // Off-zero so both scroll directions land in-range (jsdom clamps scrollTop at the bounds).
+    region.scrollTop = 30
+    page.scrollTop = 55
+    return { page, card, region, row }
+  }
+
+  test('a row above the visible slice scrolls the rows region down to it', () => {
+    const { page, region, row } = mounted(-10, 20)
+    revealRowInCard(region.parentElement, row)
+    assert.equal(region.scrollTop, 20, 'the row reaches the slice top: 30 − (0 − (−10))')
+    assert.equal(page.scrollTop, 55, 'nothing above the card moves')
+  })
+
+  test('a row below the visible slice scrolls the rows region up to it', () => {
+    const { region, row } = mounted(250, 280)
+    revealRowInCard(region.parentElement, row)
+    assert.equal(region.scrollTop, 110, 'the row reaches the slice bottom: 30 + (280 − 200)')
+  })
+
+  test('a fully visible row scrolls nothing', () => {
+    const { page, region, row } = mounted(10, 60)
+    revealRowInCard(region.parentElement, row)
+    assert.equal(region.scrollTop, 30)
+    assert.equal(page.scrollTop, 55)
+  })
+
+  test('a region that does not overflow ends the walk at the card: nothing moves', () => {
+    const { page, card, region, row } = mounted(250, 280, false)
+    revealRowInCard(card, row)
+    assert.equal(region.scrollTop, 30)
+    assert.equal(card.scrollTop, 0)
+    assert.equal(page.scrollTop, 55)
+  })
+
+  test('a null card or row, or a row outside the card, does nothing', () => {
+    const { card, row } = mounted(0, 10)
+    const stranger = document.createElement('div')
+    document.body.appendChild(stranger)
+    assert.doesNotThrow(() => {
+      revealRowInCard(null, row)
+      revealRowInCard(card, null)
+      revealRowInCard(card, stranger)
+    })
+    stranger.remove()
   })
 })

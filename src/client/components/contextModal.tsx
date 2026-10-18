@@ -2,12 +2,13 @@
  * current composition and the shared browser. */
 
 import { createElement as h, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { makeAttachmentOpener } from '../attachmentSource'
 import { measureDock } from '../dockMeasure'
 import { headlineOf } from '../headline'
 import { modalStoreOf, takePendingConsume } from '../modalStore'
 import type { ClientCtx, SessionStandardProps, SessionsFace } from '../services'
 import type { ContextSettings } from '../settings'
-import { contextBreakdownOf, contextPressureOf, conversationNodesOf, headersOf, imageLoaderOf, projectionOf } from '../services'
+import { contextBreakdownOf, contextPressureOf, conversationNodesOf, headersOf, imageLoaderOf, projectionOf, workspaceOf } from '../services'
 import { makeContentFetcher, makeHeaderFetcher, useHistoryFace } from '../historyPage'
 import { useTimelineSource } from '../timelineSource'
 import type { ViewKit } from '../viewkit'
@@ -52,6 +53,10 @@ export function makeContextModal(
     const backdropRef = useRef<HTMLDivElement | null>(null)
     const loadImage = useMemo(
       () => imageLoaderOf(ctx, sessionId !== '' ? sessionId : undefined),
+      [ctx, sessionId],
+    )
+    const openAttachment = useMemo(
+      () => makeAttachmentOpener(ctx, sessionId !== '' ? sessionId : undefined, workspaceOf(ctx, sessionId !== '' ? sessionId : undefined)),
       [ctx, sessionId],
     )
 
@@ -104,7 +109,7 @@ export function makeContextModal(
 
     return (
       <div ref={backdropRef} className="lc-modal-backdrop" style={{ left: dock.left, right: dock.right }} onClick={close}>
-        <div className="lc-modal-card" onClick={(ev) => { ev.stopPropagation() }}>
+        <div className="lc-modal-card lc-modal-fill" onClick={(ev) => { ev.stopPropagation() }}>
           <div className="lc-modal-head">
             <span className="lc-modal-title">{t('tab.context')}</span>
             <button className="lc-modal-close hover:text-(--dsw-alias-label-primary) hover:bg-(--dsw-alias-bg-layer-2)" aria-label={t('cmd.close')} onClick={close}>×</button>
@@ -117,7 +122,7 @@ export function makeContextModal(
               <div className="lc-empty">{t('loading')}</div>
             )
           ) : (
-            <div>
+            <div className="lc-modal-body">
               <CurrentComposition
                 head={head}
                 subtitle={subtitle}
@@ -131,6 +136,7 @@ export function makeContextModal(
                 fetchContent={fetchContent}
                 fetchHeader={fetchHeader}
                 loadImage={loadImage}
+                openAttachment={openAttachment}
                 hoverKey={hoverCat}
                 onHoverKey={setHoverCat}
                 detailState={source.detailState}

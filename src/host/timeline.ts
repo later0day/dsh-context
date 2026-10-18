@@ -210,6 +210,7 @@ export const contextTimelineSchema = z.object({
   model: z.string().optional(),
   provider: z.string().optional(),
   contextWindow: z.number().optional(),
+  maxOutputTokens: z.number().positive().optional(),
   current: currentSchema,
   images: z.number().int().nonnegative().optional(),
   toolCalls: z.number().int().nonnegative().optional(),
@@ -254,6 +255,7 @@ const timelineStateSchema = z.object({
   provider: z.string().optional(),
   lastModel: z.string().optional(),
   contextWindow: z.number().optional(),
+  maxOutputTokens: z.number().positive().optional(),
   requests: z.array(requestRecordSchema),
   turnRuns: z.number().int().nonnegative().optional(),
   events: z.array(contextEventSchema),
@@ -307,7 +309,7 @@ export function createContextTimelineDefinition(config: Config, slim: () => bool
     // makes them refold from the durable log. A field the log can still backfill, or one the view derives at serve
     // time, must NOT bump: invalidating every in-generation row orphans the key for idle sessions, which have no
     // refresh channel until they go live again.
-    stateVersion: 27,
+    stateVersion: 28,
   }
   return definition
 }

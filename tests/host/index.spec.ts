@@ -186,7 +186,7 @@ describe('dsh-context host plugin', () => {
 
   test('the split generation with the detail route live: slim wire head + the endpoint serves the collections', async () => {
     const ctx = new Context()
-    // The plugin mounts two routes (detail + warm-up trigger); keep them by path.
+    // The plugin's own routes (detail, fleet, attachment, warm-up trigger, balance, skills); keep them by path.
     const routes = new Map<string, { fetch?: (request: Request) => Promise<Response> }>()
     ctx.provide('connection', {
       fetch: {
@@ -215,6 +215,7 @@ describe('dsh-context host plugin', () => {
     assert.equal(timeline.nodes.length, 0, 'the collections stay off the wire value')
     assert.equal(timeline.requests.length, 0)
 
+    assert.ok(routes.has('/api/dsh-context/attachment'), 'the attachment-location route registered beside the detail route')
     const route = routes.get('/api/dsh-context/detail')
     assert.ok(route !== undefined && route.fetch !== undefined, 'the detail route registered')
     const response = await route.fetch(new Request('http://dsh.test/api/dsh-context/detail', {

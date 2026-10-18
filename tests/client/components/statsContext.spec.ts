@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { afterEach, describe, test, vi, beforeEach } from 'vitest'
 import { countsOfRecords, flowCurve, makeStatsContext, makeSubagentCost, measureFlow, toolTallyOf } from '../../../src/client/components/statsContext'
 import type { SubagentStats } from '../../../src/client/components/statsContext'
+import { DICT_EN } from '../../../src/client/i18n'
 import { makeAgentHeads } from '../../../src/client/agentHeads'
 import { resetModelPrices, setModelPricesLoader } from '../../../src/client/modelPrices'
 import type { ContextEventRecord, ContextTimeline, RequestRecord, SessionCostUsage, SurfaceNode } from '../../../src/shared/types'
@@ -573,7 +574,7 @@ describe('StatsContext', () => {
     await m.unmount()
   })
 
-  test('the second-row figures fire onFigureClick on click and keyboard', async () => {
+  test('the second-row figures fire their jump on click and keyboard', async () => {
     const calls: string[] = []
     const m = await mount(h(StatsContext, {
       counts: NO_COUNTS,
@@ -581,13 +582,13 @@ describe('StatsContext', () => {
       files: NO_FILES,
       tools: [],
       locale: 'en',
-      onFigureClick: (f) => { calls.push(f) },
+      onJump: (j) => { calls.push(j) },
     }))
     await flush()
     const cells = queryAll(m.container, '.lc-flow-kv-btn')
     assert.equal(cells.length, 2)
     assert.equal(cells[0].getAttribute('role'), 'button')
-    assert.ok(cells[0].getAttribute('title') !== null && cells[0].getAttribute('title') !== '', 'the jump tip rides')
+    assert.equal(cells[0].getAttribute('title'), DICT_EN['stats.skillsJump'])
     await click(cells[0])
     assert.deepEqual(calls, ['skills'])
     cells[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
@@ -597,11 +598,43 @@ describe('StatsContext', () => {
     await m.unmount()
   })
 
-  test('without onFigureClick the figure cells stay inert', async () => {
-    const m = await mount(h(StatsContext, { counts: NO_COUNTS, answers: 1, files: NO_FILES, tools: [], locale: 'en' }))
+  test('the input and file pills fire their jumps on click and keyboard', async () => {
+    const calls: string[] = []
+    const m = await mount(h(StatsContext, {
+      counts: NO_COUNTS,
+      humanInputs: 2,
+      files: { reads: 18, writes: 13, searches: 4, images: 9 },
+      tools: [],
+      locale: 'en',
+      onJump: (j) => { calls.push(j) },
+    }))
+    await flush()
+    // The inputs node's pills in render order, each a jump button carrying its own action tip.
+    const pills = queryAll(flowNodes(m.container)[0], '.lc-flow-pill')
+    // The ? bubble is the inputs pill's own hover hint, so only the file pills carry the native action title.
+    assert.deepEqual(pills.map(el => el.getAttribute('title')),
+      [null, DICT_EN['stats.filesJump'], DICT_EN['stats.filesJump'], DICT_EN['stats.filesJump'], DICT_EN['stats.filesJump']])
+    assert.ok(text(pills[0]).includes(DICT_EN['stats.humanInputsTip']), 'the metric bubble stays')
+    assert.ok(pills.every(el => el.getAttribute('role') === 'button'), 'every pill jumps')
+    await click(pills[0])
+    await click(pills[1])
+    assert.deepEqual(calls, ['inputs', 'read'])
+    pills[3].dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }))
+    assert.deepEqual(calls, ['inputs', 'read', 'search'])
+    pills[4].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    assert.deepEqual(calls, ['inputs', 'read', 'search', 'image'])
+    pills[4].dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true }))
+    assert.deepEqual(calls, ['inputs', 'read', 'search', 'image'])
+    await m.unmount()
+  })
+
+  test('without the relay the figure cells and pills stay inert', async () => {
+    const m = await mount(h(StatsContext, { counts: NO_COUNTS, answers: 1, humanInputs: 1, files: NO_FILES, tools: [], locale: 'en' }))
     await flush()
     const cells = queryAll(m.container, '.lc-flow-kv')
     assert.ok(cells.every(c => c.getAttribute('role') === null && !c.className.includes('lc-flow-kv-btn')))
+    const pills = queryAll(flowNodes(m.container)[0], '.lc-flow-pill')
+    assert.ok(pills.every(c => c.getAttribute('role') === null && !c.className.includes('lc-flow-pill-btn')))
     await m.unmount()
   })
 })

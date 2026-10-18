@@ -1,24 +1,42 @@
 import { act, createElement as h } from 'react'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, test, vi } from 'vitest'
-import { makeRichText } from '../../../src/client/components/richText'
+import { jsonOf, makeRichText } from '../../../src/client/components/richText'
 import type { RichMode } from '../../../src/client/components/richText'
-import { click, makeKit, mount, query, queryAll } from '../helpers/kit'
+import { click, hover, makeKit, mount, query, queryAll } from '../helpers/kit'
 
 const kit = makeKit()
 const { RichText, RichSwitch, useRichMode } = makeRichText(kit)
 
 const SAMPLE = '# Title\n\nsome **bold** text'
+const JSON_SAMPLE = '{"name": "dsh", "meta": {"tags": ["a", "b"], "ver": 2}}'
 
 /** The raw body re-joined from its rendered line spans, i.e. the exact source text. */
 function rawText(container: ParentNode): string {
   return queryAll(container, '.lc-ts-line').map(line => line.textContent).join('\n')
 }
 
+/** The selector hiding an expanded row's inline preview and stranded comma, straight from the shipped stylesheet. */
+function expandedRowPreviewSelector(): string {
+  const css = readFileSync(join(process.cwd(), 'src/client/styles/detailSections.css'), 'utf8')
+  const rule = /^(\.lc-ts-desc-json[^{}]*\[class\*="_summary"\][^{}]*)\{[^}]*display:\s*none[^}]*\}/m.exec(css)
+  assert.ok(rule !== null, 'detailSections.css lost the expanded-row preview rule')
+  return rule[1].trim()
+}
+
+/** A row's direct child carrying one of the JsonTree locals (the preview's descendants carry punctuation too). */
+function directChildWith(parent: Element, local: string): HTMLElement {
+  const el = [...parent.children].find(child => (child.getAttribute('class') ?? '').includes(`_${local}`))
+  assert.ok(el instanceof HTMLElement, `no direct child with the ${local} local`)
+  return el
+}
+
 /** Harness wiring the hook to the switch and the body, like the detail cards do. */
 function Harness(props: { text: string }) {
-  const [mode, setMode] = useRichMode()
-  return h('div', {}, h(RichSwitch, { mode, onPick: setMode }), h(RichText, { text: props.text, mode }))
+  const [mode, setMode, json] = useRichMode(props.text)
+  return h('div', {}, h(RichSwitch, { mode, json, onPick: setMode }), h(RichText, { text: props.text, mode }))
 }
 
 describe('RichText', () => {
@@ -50,6 +68,97 @@ describe('RichText', () => {
     assert.deepEqual(queryAll(m.container, '.lc-ts-line').map(line => line.textContent), [''])
     await m.unmount()
   })
+
+  test('json mode renders the tree two levels deep and restores the previously focused element', async () => {
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    const m = await mount(h(RichText, { text: JSON_SAMPLE, mode: 'json' }))
+    const tree = query(m.container, '.lc-ts-desc-json [role=tree]')
+    assert.equal(tree.getAttribute('aria-label'), 'JSON Content')
+    // Root entries plus the auto-opened second level: name, meta, and meta's own children.
+    const rows = queryAll(m.container, '[role=treeitem]')
+    assert.equal(rows.length, 4)
+    assert.match(rows.map(r => r.textContent).join('|'), /tags/)
+    assert.equal(document.activeElement, outside, 'the second-level auto-open never steals focus')
+    // A hover seats the row's copy action, titled through the localized copyButtonTitle.
+    await hover(rows[0])
+    const copy = query(m.container, '[data-json-copy-button]')
+    assert.equal(copy.getAttribute('title'), 'Copy value; right-click for copy options')
+    outside.remove()
+    await m.unmount()
+  })
+
+  test('the expanded-row preview rule matches both the shell build and test css-module spellings', async () => {
+    const m = await mount(h(RichText, { text: '{"a": {"tags": ["x"]}, "b": 2}', mode: 'json' }))
+    const rule = expandedRowPreviewSelector()
+    const expandedRow = query(m.container, '[role=treeitem][aria-expanded=true]')
+    const summary = directChildWith(expandedRow, 'summary')
+    const label = directChildWith(summary, 'label')
+    const preview = directChildWith(summary, 'preview')
+    const comma = directChildWith(summary, 'punctuation')
+    // The shell's Vite build appends the source line; the test transform stops at the hash.
+    const spellings: [string, (local: string) => string][] = [
+      ['test transform', local => `_${local}_h4sh`],
+      ['shell build', local => `_${local}_h4sh_98`],
+    ]
+    for (const [name, scope] of spellings) {
+      expandedRow.className = scope('row')
+      summary.className = scope('summary')
+      label.className = scope('label')
+      preview.className = scope('preview')
+      comma.className = scope('punctuation')
+      assert.equal(preview.matches(rule), true, `${name}: the preview hides`)
+      assert.equal(comma.matches(rule), true, `${name}: the stranded comma hides`)
+      assert.equal(label.matches(rule), false, `${name}: the field label stays`)
+    }
+    // A collapsed expandable row keeps its preview under the same rule.
+    const collapsedRow = queryAll(m.container, '[role=treeitem][aria-expanded=false]')
+      .find(row => row.querySelector('[data-json-expander]') !== null)
+    assert.ok(collapsedRow !== undefined)
+    assert.equal(directChildWith(directChildWith(collapsedRow, 'summary'), 'preview').matches(rule), false)
+    await m.unmount()
+  })
+
+  test('json mode caps the second-level auto-open at 100 nodes', async () => {
+    const wide = JSON.stringify(Object.fromEntries(Array.from({ length: 101 }, (_, i) => [`k${i}`, { v: i }])))
+    const m = await mount(h(RichText, { text: wide, mode: 'json' }))
+    const open = queryAll(m.container, '[data-json-expander][aria-expanded=true]')
+    assert.equal(open.length, 100)
+    await m.unmount()
+  })
+
+  test('a data swap keeps a still-keyed node expanded without re-toggling it', async () => {
+    const m = await mount(h(RichText, { text: '{"a": {"x": 1}}', mode: 'json' }))
+    assert.equal(queryAll(m.container, '[role=treeitem]').length, 2)
+    await m.update(h(RichText, { text: '{"a": {"y": 2}}', mode: 'json' }))
+    const rows = queryAll(m.container, '[role=treeitem]')
+    assert.equal(rows.length, 2, 'the swap did not collapse or double-toggle the keyed node')
+    assert.match(rows[1].textContent ?? '', /y/)
+    await m.unmount()
+  })
+
+  test('json mode on a text that no longer parses degrades to markdown', async () => {
+    const m = await mount(h(RichText, { text: '{not json', mode: 'json' }))
+    assert.ok(query(m.container, '.lc-ts-desc-md'))
+    assert.equal(queryAll(m.container, '[role=tree]').length, 0)
+    await m.unmount()
+  })
+})
+
+describe('jsonOf', () => {
+  test('parses whole-text objects and arrays, primitives inside brackets included', () => {
+    assert.deepEqual(jsonOf('{"a": 1}'), { a: 1 })
+    assert.deepEqual(jsonOf('  [1, "x"]\n'), [1, 'x'])
+    assert.deepEqual(jsonOf('{}'), {})
+  })
+
+  test('rejects non-bracket leads, broken payloads, and trailing garbage', () => {
+    assert.equal(jsonOf('plain text'), null)
+    assert.equal(jsonOf('"quoted"'), null)
+    assert.equal(jsonOf('{not json'), null)
+    assert.equal(jsonOf('{"a": 1} extra'), null)
+  })
 })
 
 describe('RichSwitch', () => {
@@ -77,6 +186,18 @@ describe('RichSwitch', () => {
     assert.ok(!buttons[1].className.includes('lc-gran-on'))
     await m.unmount()
   })
+
+  test('a JSON-detected body swaps the markdown segment for the JSON one', async () => {
+    const m = await mount(h(RichSwitch, { mode: 'json', json: true, onPick: () => {} }))
+    const buttons = queryAll(m.container, '.lc-gran-btn')
+    assert.equal(buttons.length, 2)
+    assert.equal(buttons[0].textContent, 'Raw')
+    assert.equal(buttons[1].textContent, 'JSON')
+    assert.equal(buttons[1].getAttribute('title'), 'View as JSON Tree')
+    assert.ok(buttons[1].className.includes('lc-gran-on'))
+    assert.equal(queryAll(m.container, '.lc-gran-btn').filter(b => b.textContent === 'Markdown').length, 0)
+    await m.unmount()
+  })
 })
 
 describe('useRichMode', () => {
@@ -88,6 +209,27 @@ describe('useRichMode', () => {
     assert.equal(rawText(m.container), SAMPLE)
     await click(queryAll(m.container, '.lc-gran-btn')[1]) // back to Markdown
     assert.equal(query(m.container, '.lc-ts-desc-md h1').textContent, 'Title')
+    await m.unmount()
+  })
+
+  test('a JSON body opens on the tree, markdown unoffered; raw stays one click away', async () => {
+    const m = await mount(h(Harness, { text: JSON_SAMPLE }))
+    assert.ok(query(m.container, '.lc-ts-desc-json [role=tree]'))
+    const buttons = queryAll(m.container, '.lc-gran-btn')
+    assert.deepEqual(buttons.map(b => b.textContent), ['Raw', 'JSON'])
+    await click(buttons[0]) // Raw
+    assert.equal(rawText(m.container), JSON_SAMPLE)
+    await click(queryAll(m.container, '.lc-gran-btn')[1]) // back to the tree
+    assert.ok(query(m.container, '.lc-ts-desc-json [role=tree]'))
+    await m.unmount()
+  })
+
+  test('a stale json pick falls back to markdown when the body stops parsing', async () => {
+    const m = await mount(h(Harness, { text: JSON_SAMPLE }))
+    assert.ok(query(m.container, '.lc-ts-desc-json'))
+    await m.update(h(Harness, { text: SAMPLE }))
+    assert.ok(query(m.container, '.lc-ts-desc-md'), 'the explicit json pick did not survive a non-JSON body')
+    assert.deepEqual(queryAll(m.container, '.lc-gran-btn').map(b => b.textContent), ['Raw', 'Markdown'])
     await m.unmount()
   })
 })

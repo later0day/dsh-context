@@ -9,11 +9,8 @@
  */
 
 import type { FleetDetail, FleetDescriptor, FleetMemberInfo, FleetMessage } from '../shared/types'
+import { FLEET_ROUTE } from './apiRoutes'
 import { asRecord, numOf } from './services'
-
-// The route of host/fleet.ts, re-declared here: the client bundle inlines every import and the
-// host module must never reach it.
-const FLEET_ROUTE = '/api/dsh-context/fleet'
 
 function strings(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
@@ -96,16 +93,18 @@ export function fleetDetailOf(value: unknown): FleetDetail | null {
   }
 }
 
-/** The route reader; failures and malformed payloads reject so the caller arms its retry. */
+/** The route reader; failures and malformed payloads reject so the caller arms its retry.
+ * `full` requests the unclipped prompt/reply (the task card's opened read). */
 export function makeFleetDetailFetcher(
   sessionId: string,
+  full = false,
 ): (() => Promise<FleetDetail | null>) | undefined {
   if (sessionId === '') return undefined
   return async () => {
     const response = await fetch(FLEET_ROUTE, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId }),
+      body: JSON.stringify({ ...(full ? { full: true } : {}), sessionId }),
     })
     if (!response.ok) throw new Error(`dsh-context: fleet route HTTP ${response.status}`)
     const r = asRecord(await response.json())
@@ -124,24 +123,28 @@ interface FleetDetailEntry {
 
 /** The page-scope read ledger. `fetch` dedupes per (id, updatedAt): same stamp returns the same
  * promise, a NEWER stamp refetches once, and a settled failure stays cached so a broken session
- * never hammers the route per render. */
+ * never hammers the route per render. The `full` ledger runs beside the excerpt one — the task
+ * board's opened card fetches unclipped prompt/reply on demand, and the scan never pays for it. */
 export class FleetDetailCache {
   private readonly entries = new Map<string, FleetDetailEntry>()
+  private readonly fullEntries = new Map<string, FleetDetailEntry>()
 
-  fetch(id: string, updatedAt: number): Promise<FleetDetail | null> {
-    const known = this.entries.get(id)
+  fetch(id: string, updatedAt: number, full = false): Promise<FleetDetail | null> {
+    const ledger = full ? this.fullEntries : this.entries
+    const known = ledger.get(id)
     if (known !== undefined && known.updatedAt >= updatedAt) return known.pending
-    const fetcher = makeFleetDetailFetcher(id)
+    const fetcher = makeFleetDetailFetcher(id, full)
     const pending = fetcher !== undefined
       ? fetcher().catch((): FleetDetail | null => null)
       : Promise.resolve(null)
-    this.entries.set(id, { updatedAt, pending })
+    ledger.set(id, { updatedAt, pending })
     return pending
   }
 
   /** Drop one session's ledger line so the next `fetch` reads again (the comms panel's refresh). */
   invalidate(id: string): void {
     this.entries.delete(id)
+    this.fullEntries.delete(id)
   }
 }
 

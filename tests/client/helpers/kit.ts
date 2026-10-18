@@ -101,6 +101,13 @@ export function text(container: HTMLElement): string {
   return container.textContent ?? ''
 }
 
+/** A composition bar's tooltip rows — head, figure, optional note — so specs assert the
+ *  bubble's structure instead of a run-together textContent. */
+export function tipRows(tip: HTMLElement): (string | null)[] {
+  return ['.lc-bar-tip-head', '.lc-bar-tip-fig', '.lc-bar-tip-note']
+    .map(sel => tip.querySelector<HTMLElement>(sel)?.textContent ?? null)
+}
+
 export function query<T extends Element = HTMLElement>(container: ParentNode, selector: string): T {
   const el = container.querySelector<T>(selector)
   if (el === null) throw new Error(`element not found: ${selector}`)
@@ -109,6 +116,15 @@ export function query<T extends Element = HTMLElement>(container: ParentNode, se
 
 export function queryAll<T extends Element = HTMLElement>(container: ParentNode, selector: string): T[] {
   return [...container.querySelectorAll<T>(selector)]
+}
+
+/** Pin a jsdom element's boxes the way a real layout would: components that measure
+ * getBoundingClientRect get deterministic geometry (jsdom lays nothing out). */
+export function pinRect(el: Element, width: number, height = 0): void {
+  Object.defineProperty(el, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({ left: 0, top: 0, width, height, right: width, bottom: height }),
+  })
 }
 
 /** Click through act so React processes the dispatch synchronously. */

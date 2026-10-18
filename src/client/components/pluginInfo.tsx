@@ -1,10 +1,10 @@
 /** The card beside Context stats introducing the plugin. Metadata is baked in from package.json via tsdown `define`;
  * one live npm-registry check appends an `↑ vX.Y.Z` chip when newer. */
 
-import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { IconSettings } from '../primitives'
 import { siDeepseek, siGithub, type SimpleIcon } from 'simple-icons'
-import { fetchLatestVersion, isNewerVersion } from '../latestVersion'
+import { useNewerVersion } from '../latestVersion'
 import { PLUGIN_NAME, PLUGIN_REPO, PLUGIN_REPO_SHORT, PLUGIN_VERSION } from '../meta'
 import { openPluginSettings } from '../settingsJump'
 import type { ViewKit } from '../viewkit'
@@ -28,15 +28,7 @@ export function makePluginInfo(kit: ViewKit): () => ReactElement {
     </a>
   )
   return function PluginInfo(): ReactElement {
-    const [latest, setLatest] = useState<string | null>(null)
-    useEffect(() => {
-      if (PLUGIN_VERSION.includes('-dev')) return
-      let on = true
-      // fetchLatestVersion never rejects (every failure narrows to null); the `on` flag drops late results.
-      void fetchLatestVersion().then((v) => { if (on && v) setLatest(v) })
-      return () => { on = false }
-    }, [])
-    const update = latest !== null && isNewerVersion(latest, PLUGIN_VERSION) ? latest : null
+    const update = useNewerVersion()
     const nameText = PLUGIN_NAME + ' (v' + PLUGIN_VERSION + ')'
     const nameValue: ReactNode[] = [nameText]
     if (update) nameValue.push(<span key="update" className="lc-pi-update">{'↑ v' + update}</span>)
@@ -53,7 +45,7 @@ export function makePluginInfo(kit: ViewKit): () => ReactElement {
         <div className="lc-pi-grid">
           {row(<SiteMark icon={siDeepseek} />, t('plugin.name'), nameValue, PLUGIN_REPO, update !== null ? nameText + ' ↑ v' + update : nameText)}
           {row(<SiteMark icon={siGithub} />, t('plugin.github'), PLUGIN_REPO_SHORT, PLUGIN_REPO, PLUGIN_REPO_SHORT)}
-{/* Best-effort jump to this plugin's settings page — openPluginSettings silently no-ops when the host's chrome doesn't match. */}
+          {/* Best-effort jump to this plugin's preferences — openPluginSettings silently no-ops when the host's chrome doesn't match. */}
           <button type="button" className="lc-pi-row lc-pi-row-btn group/pi" onClick={() => { openPluginSettings() }}>
             <div className="lc-pi-label"><IconSettings size={12} className="lc-pi-labelicon" />{t('plugin.settings')}</div>
             <div className="lc-pi-value group-hover/pi:underline" title={t('plugin.settingsOpen')}>{t('plugin.settingsOpen')}</div>

@@ -5,7 +5,7 @@ import { cacheHitPercent } from '../format'
 import type { StepBrief } from '../brief'
 import { blockSummaryOf, callNamesOf, callSummaryOf } from '../callSummary'
 import type { ConversationNodeLike } from '../services'
-import type { StackedBarProps } from './stackedBar'
+import type { StackedBarProps, LegendProps } from './stackedBar'
 import type { ViewKit } from '../viewkit'
 
 export interface RequestDetailProps {
@@ -24,16 +24,18 @@ export interface RequestDetailProps {
   stepsOf?: (turn: number | undefined) => number
   /** Reveal a brief row's node in the Context browser; absent = rows render inert. */
   onLocate?: (node: SurfaceNode, isResponse: boolean) => void
-  /** Mirrored category hover (shared with the overview/browser): lights the composition bar's matching
-   * segment; the bar never reports hovers back. */
+  /** Category hover shared with the overview/browser and the composition legend: lights the matching bar
+   * segment and chip, and the chips report hovers back — the bar never does. */
   hoverKey?: string | null
+  onHoverKey?: (key: string | null) => void
 }
 
 export function makeRequestDetail(
   kit: ViewKit,
   StackedBar: (props: StackedBarProps) => ReactElement,
+  Legend: (props: LegendProps) => ReactElement,
 ): ComponentType<RequestDetailProps> {
-  const { t, fmt, fmtTime, catLabel, eventLabel, eventAt } = kit
+  const { t, fmt, fmtTime, eventLabel, eventAt } = kit
 
   /** One brief row: a fixed-width kind tag plus one glanceable line. The tag carries a styled, instant explanation bubble (the
    * shared `.lc-tip` chrome); the content span keeps the native title (preview + locate hint), so the two never stack.
@@ -207,16 +209,14 @@ export function makeRequestDetail(
     const prev = props.prev ?? null
     const deltas = CATS.map(c => delta ? (req[c.key] || 0) - (prev !== null ? prev[c.key] || 0 : 0) : 0)
     let net = 0
-    let maxAbs = 0
     if (delta) {
-      for (const d of deltas) {
-        net += d
-        if (Math.abs(d) > maxAbs) maxAbs = Math.abs(d)
-      }
+      for (const d of deltas) net += d
     }
     const parts = delta
       ? CATS.map((c, i) => ({ key: c.key, color: c.color, value: Math.abs(deltas[i]) }))
       : partsOf(req)
+    // Delta's chips print the signed change; the bar's own parts keep only magnitudes.
+    const legendParts = delta ? parts.map((p, i) => ({ ...p, raw: deltas[i] })) : parts
     return (
       <div className="lc-detail">
         <div className="lc-detail-head">
@@ -252,43 +252,7 @@ export function makeRequestDetail(
         {/* Mirrors the shared category hover with the tip off — a cross-card hover must not float a second tooltip
             over a bar the pointer does not rest on (same rule as the browser's own bar). */}
         <StackedBar parts={parts} height={10} hoverKey={props.hoverKey} tip={false} />
-        <div className="lc-detail-rows">
-          {CATS.map((c, i) => {
-            const v = delta ? deltas[i] : req[c.key] || 0
-            const mag = Math.abs(v)
-            return (
-              <div key={c.key} className={'lc-detail-row' + (props.hoverKey === c.key ? ' lc-detail-row-on' : '')}>
-                <i style={{ background: c.color }} />
-                <span className="lc-detail-label">{catLabel(c.key)}</span>
-                <span className="lc-bar-track">
-                  {delta ? (
-                    <>
-                      {/* Mini diverging bar echoing the chart: zero at the middle, growth fills right,
-                          shrinkage fills left, one shared scale across the rows. */}
-                      <span className="lc-bar-zero" />
-                      {v !== 0 ? (
-                        <span
-                          className={'lc-bar-fill ' + (v > 0 ? 'lc-bar-fill-up' : 'lc-bar-fill-down')}
-                          style={{ width: `${mag / maxAbs * 50}%`, background: c.color }}
-                        />
-                      ) : null}
-                    </>
-                  ) : (
-                    <span className="lc-bar-fill" style={{ width: `${req.total > 0 ? v / req.total * 100 : 0}%`, background: c.color }} />
-                  )}
-                </span>
-                {delta ? (
-                  <span className={'lc-detail-num' + (v > 0 ? ' lc-detail-num-up' : v < 0 ? ' lc-detail-num-down' : '')}>
-                    {(v > 0 ? '+' : '') + fmt(v)}
-                  </span>
-                ) : (
-                  <span className="lc-detail-num">{'≈' + fmt(v)}</span>
-                )}
-                <span className="lc-detail-pct">{!delta && req.total > 0 ? `${Math.round(v / req.total * 100)}%` : ''}</span>
-              </div>
-            )
-          })}
-        </div>
+        <Legend parts={legendParts} hoverKey={props.hoverKey} onHoverKey={props.onHoverKey} delta={delta} />
       </div>
     )
   })

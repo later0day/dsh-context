@@ -8,6 +8,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { ComponentType } from 'react'
+import type { AttachmentRef } from '../shared/attachment'
 import { estimateSystemTokens } from '../shared/estimate'
 import type { ActivityDay, ContextActivity, ContextBreakdown, ContextHeaders, ContextPressure, ContextTimeline, CostModelUsage, HeaderEpochContent, SystemPromptNode, TimingTotals, TokenUsage, ToolTimingTotals } from '../shared/types'
 
@@ -34,6 +35,29 @@ export interface SlotsService {
     registration: SlotRegistration,
     component: (props: { sessionId?: string } & Record<string, unknown>) => unknown,
   ): unknown
+  /** The slot ledger's raw entries view (`SlotCore.entries`): one stored record
+   * per seated entry, its `options` carrying the registered `id`/`order`/….
+   * Optional: an older face mounts without the second-mount guard. */
+  entries?(name: string): unknown
+}
+
+/** Whether the page's slot ledger already seats an entry with `id` on the named
+ * list slot. Reads the raw ledger (the view the session header renders), so a
+ * seated entry is one the harness would paint — exactly what a second mount of
+ * this bundle must not add. Fail-open: an absent, shape-shifted, or hostile
+ * face reports false, so the mount proceeds and never blanks a working one. */
+export function entrySeated(ctx: ClientCtx, name: string, id: string): boolean {
+  try {
+    const entries = ctx.slots.entries?.(name)
+    if (!Array.isArray(entries)) return false
+    for (const entry of entries) {
+      const options = asRecord(asRecord(entry)?.options)
+      if (options !== null && options.id === id) return true
+    }
+    return false
+  } catch {
+    return false
+  }
 }
 
 /** The harness `SidebarRightGuideEntry` subset a right-Sidebar tab type contributes. */
@@ -57,11 +81,20 @@ export interface SidebarTabsFace {
   register(definition: SidebarTabDefinitionLike): () => void
 }
 
+/** The opener's placement options the Sidebar face accepts (the harness's
+ * `SidebarRightOpenResourceOptions`): the opening type's name, and whether to
+ * claim a fresh pane instead of the resource's open occurrence. */
+export interface SidebarResourceOpenOptions {
+  kind?: string
+  preferNewPane?: boolean
+}
+
 /** The right Sidebar's navigation face (`ctx.sidebarRight`): `openResource`
- * claims a `dsh-resource://file/…` address through the shipped preview type.
- * The caller falls back to the system opener when it is absent or refuses. */
+ * claims a `dsh-resource://…` address — the shipped preview type for files,
+ * the shipped subagent type for a chat. The caller falls back to its other
+ * opener when the face is absent or refuses. */
 export interface SidebarResourceFace {
-  openResource(address: string): void
+  openResource(address: string, options?: SidebarResourceOpenOptions): void
 }
 
 /** A finalized chat node: it carries the source surface event's `seq`, so the
@@ -114,6 +147,13 @@ export function imageLoaderOf(
   } catch { /* absent or hostile service — metadata-only cards */ }
   return undefined
 }
+
+/** The named host path of one session-cited attachment (the plugin's own location route);
+ * null resolves the browser's unavailable note. */
+export type AttachmentLocator = (attachment: AttachmentRef) => Promise<string | null>
+
+/** On-click opener of one attachment's preview; false = nothing took it. */
+export type AttachmentOpener = (attachment: AttachmentRef) => Promise<boolean>
 
 /** The `useChat` seat. The selector must return a reference-stable slice: a fresh object re-renders the view on every event. */
 export type UseChatLike = <T>(selector: (snapshot: unknown) => T) => T
@@ -282,6 +322,9 @@ export function timelineOf(value: unknown): ContextTimeline | null {
     ...(typeof data.model === 'string' ? { model: data.model } : {}),
     ...(typeof data.provider === 'string' ? { provider: data.provider } : {}),
     ...(typeof data.contextWindow === 'number' ? { contextWindow: data.contextWindow } : {}),
+    ...(typeof data.maxOutputTokens === 'number' && Number.isFinite(data.maxOutputTokens) && data.maxOutputTokens > 0
+      ? { maxOutputTokens: data.maxOutputTokens }
+      : {}),
     current: {
       system: numOf(safeCurrent.system),
       tools: numOf(safeCurrent.tools),
@@ -727,7 +770,7 @@ export function openPathVia(ctx: ClientCtx): ((path: string) => void) | undefine
  * — the caller keeps its system-open degradation. `openResource` throws for an
  * unclaimed address or with no session surface, so the caller learns whether
  * the address was taken. The face is re-proved per open: a service can land or be revoked across an HMR reload. */
-export function openResourceVia(ctx: ClientCtx): ((address: string) => boolean) | undefined {
+export function openResourceVia(ctx: ClientCtx): ((address: string, options?: SidebarResourceOpenOptions) => boolean) | undefined {
   // The untrusted face is re-proved as a record with a callable `openResource`.
   const faceOf = (): SidebarResourceFace | undefined => {
     try {
@@ -740,11 +783,11 @@ export function openResourceVia(ctx: ClientCtx): ((address: string) => boolean) 
     }
   }
   if (faceOf() === undefined) return undefined
-  return (address: string): boolean => {
+  return (address: string, options?: SidebarResourceOpenOptions): boolean => {
     const face = faceOf()
     if (face === undefined) return false
     try {
-      face.openResource(address)
+      face.openResource(address, options)
       return true
     } catch {
       // No preview type claims it, or no session surface is mounted.
@@ -762,6 +805,37 @@ export function openSessionVia(ctx: ClientCtx, id: string): void {
     const open = workspace?.openSession
     if (typeof open === 'function') open.call(workspace, id)
   } catch { /* absent or hostile face — the jump is best-effort */ }
+}
+
+/** The right Sidebar's subagent-chat resource address — the shipped subagent
+ * catalog's canonical spelling for its "open in sidebar" verb, replicated
+ * verbatim (the host publishes no helper): its parser accepts only this form. */
+export function subagentChatAddressOf(address: { parentSessionId: string; childSessionId: string; mode: string }): string {
+  const query = new URLSearchParams({ parent: address.parentSessionId, mode: address.mode })
+  return `dsh-resource://subagentchat/session/${encodeURIComponent(address.childSessionId)}?${query}`
+}
+
+/** One subagent session's aside address as a family row supplies it: the direct
+ * parent is the row's own edge, and a row without its subagent projection rides
+ * the harness's own `unknown` mode. */
+export interface SubagentAddressLike {
+  parentSessionId?: string
+  childSessionId: string
+  mode?: 'one-shot' | 'continuable' | 'unknown'
+}
+
+/** Open one subagent session in the right Sidebar's chat presentation — the
+ * shipped catalog's aside verb (kind `subagentchat`, a new pane). False when
+ * the parent edge is unknown, the column absent, or the address unclaimed:
+ * the caller keeps its whole-view jump. */
+export function openChildAsideVia(ctx: ClientCtx, address: SubagentAddressLike): boolean {
+  const { parentSessionId, childSessionId, mode } = address
+  if (parentSessionId === undefined) return false
+  const open = openResourceVia(ctx)
+  return open !== undefined && open(
+    subagentChatAddressOf({ parentSessionId, childSessionId, mode: mode ?? 'unknown' }),
+    { kind: 'subagentchat', preferNewPane: true },
+  )
 }
 
 /** On-demand content for one surface-node seq: `null` when the durable log lacks the seq, rejects on transport failure. */

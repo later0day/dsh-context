@@ -275,13 +275,17 @@ describe('AgentGraph — the family tree', () => {
     assert.ok(text(inspector).includes('≈800 (96%)'))
     assert.ok(worker.classList.contains('lc-agent-hover'))
     // Lineage focus: the hovered card's own link lights up, its sibling's stays dim.
-    assert.ok(query(m.container, '.lc-agents-links').classList.contains('lc-agents-focus'))
+    assert.ok(query(m.container, '.lc-agents-canvas').classList.contains('lc-agents-focus'))
+    // The lineage's cards carry the dim's spare class; the unrelated sibling's does not.
+    assert.ok(worker.classList.contains('lc-agent-on'))
+    assert.ok(query(m.container, '[data-agent="root"]').classList.contains('lc-agent-on'))
+    assert.ok(!query(m.container, '[data-agent="done"]').classList.contains('lc-agent-on'))
     const lit = queryAll(m.container, 'g.lc-agents-on')
     assert.equal(lit.length, 1)
     await unhover(worker)
     assert.ok(text(query(m.container, '.lc-agents-inspector')).includes('Main Agent'))
     assert.equal(queryAll(m.container, 'g.lc-agents-on').length, 0)
-    assert.ok(!query(m.container, '.lc-agents-links').classList.contains('lc-agents-focus'))
+    assert.ok(!query(m.container, '.lc-agents-canvas').classList.contains('lc-agents-focus'))
 
     // Hovering the root lights its whole subtree (every link).
     await hover(query(m.container, '[data-agent="root"]'))
@@ -354,11 +358,11 @@ describe('AgentGraph — the family tree', () => {
 
   test('overflow chip when the family exceeds the cap', async () => {
     const byId: Record<string, unknown> = { root: { displayTitle: 'Main', running: false, updatedAt: 1 } }
-    for (let i = 0; i < 30; i++) byId['kid' + i] = { parentId: 'root', updatedAt: i }
+    for (let i = 0; i < 45; i++) byId['kid' + i] = { parentId: 'root', updatedAt: i }
     const View = makeView(new FakeSessions(byId))
     const m = await mount(h(View, { sessionId: 'root', self: selfStats() }))
     assert.ok(text(m.container).includes('6 more not shown'))
-    assert.ok(text(m.container).includes('31 agents'))
+    assert.ok(text(m.container).includes('46 agents'))
     await m.unmount()
   })
 
@@ -503,38 +507,97 @@ describe('AgentGraph — the family tree', () => {
   })
 })
 
-describe('AgentGraph — Fleet extras', () => {
+describe('AgentGraph — the Fleet seat', () => {
   const TEAM = {
     members: [{ id: 'root', name: 'lead', role: 'lead' as const, phase: 'active' as const }],
     tasks: [],
   }
 
-  function extras(team: import('../../../src/client/fleetTeam').FleetTeam | null) {
-    return {
-      team,
-      pinnedId: 'worker',
-      onPin: () => {},
-      detailOf: () => ({ detail: null }),
-      commsOf: () => [],
-      labelOf: (id: string) => id,
-      roster: [],
-      onFocusTask: () => {},
-    }
-  }
-
-  test('the extras team surfaces the chip when the team prop is absent; an explicit null wins', async () => {
+  test('the team prop surfaces the chip while an explicit null wins; the pin rings its card', async () => {
     const face = new FakeSessions(family())
     const View = makeView(face)
-    // extras alone: the chip reads the extras team; the pinned card rings.
-    const m = await mount(h(View, { sessionId: 'root', self: selfStats(), extras: extras(TEAM) }))
+    // The Fleet tab's own derivation seat: the chip reads the passed team, the pinned card rings.
+    const m = await mount(h(View, { sessionId: 'root', self: selfStats(), team: TEAM, pinnedId: 'worker', inspector: false }))
     assert.ok(text(m.container).includes('1 members'))
     assert.ok(query(m.container, '[data-agent="worker"]').className.includes('lc-agent-pinned'))
+    assert.equal(queryAll(m.container, '.lc-inspector').length, 0, 'the Fleet seat paints the graph alone')
     await m.unmount()
 
-    // extras with a null team hides the chip.
-    const m2 = await mount(h(View, { sessionId: 'root', self: selfStats(), extras: extras(null) }))
+    // An explicit null team hides the chip; the sidebar seat keeps its preview.
+    const m2 = await mount(h(View, { sessionId: 'root', self: selfStats(), team: null }))
     assert.ok(!text(m2.container).includes('members ·'))
+    assert.ok(query(m2.container, '.lc-inspector') !== null)
     await m2.unmount()
+  })
+
+  test('a teammate card leads with the roster name and carries the duty in a light line', async () => {
+    const face = new FakeSessions(family())
+    const View = makeView(face)
+    const team = { ...TEAM, members: [...TEAM.members, { id: 'worker', name: 'architect', role: 'teammate' as const, phase: 'active' as const }] }
+    const m = await mount(h(View, { sessionId: 'root', self: selfStats(), team, inspector: false }))
+
+    const worker = query(m.container, '[data-agent="worker"]')
+    assert.equal(text(query(worker, '.lc-agent-member')), 'architect')
+    assert.equal(text(query(worker, '.lc-agent-duty')), 'worker-bee')
+    // The self card and family outsiders keep the plain title head.
+    const self = query(m.container, '.lc-agent-card.lc-agent-self')
+    assert.equal(queryAll(self, '.lc-agent-duty').length, 0)
+    const done = query(m.container, '[data-agent="done"]')
+    assert.equal(text(query(done, '.lc-agent-label')), 'done')
+    assert.equal(queryAll(done, '.lc-agent-duty').length, 0)
+    await m.unmount()
+  })
+
+  test('select mode: a card click highlights instead of jumping', async () => {
+    const face = new FakeSessions(family())
+    const View = makeView(face)
+    const selected = new Array<string>()
+    const m = await mount(h(View, {
+      sessionId: 'root',
+      self: selfStats(),
+      team: TEAM,
+      inspector: false,
+      onSelect: (id: string) => { selected.push(id) },
+    }))
+
+    // The select-mode sub names the highlight; the open-mode copy stays with the sidebar.
+    assert.ok(text(m.container).includes(DICT_EN['agents.subSelect']))
+
+    // Every card is pickable in select mode — the current one included.
+    const self = query(m.container, '.lc-agent-card.lc-agent-self')
+    assert.equal(self.getAttribute('role'), 'button')
+    await click(self)
+
+    const worker = query(m.container, '[data-agent="worker"]')
+    await click(worker)
+    assert.deepEqual([...selected], ['root', 'worker'])
+    assert.deepEqual(face.opened, [], 'a pick never jumps')
+
+    // Enter selects; an unrelated key is inert.
+    await act(async () => {
+      query(m.container, '[data-agent="done"]').dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+      )
+    })
+    await act(async () => {
+      query(m.container, '[data-agent="done"]').dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true }),
+      )
+    })
+    assert.deepEqual([...selected], ['root', 'worker', 'done'])
+    assert.deepEqual(face.opened, [], 'no card corner jump: the boards carry the open buttons')
+    await m.unmount()
+  })
+
+  test('open mode (the sidebar seat) keeps the jump copy and the inert current card', async () => {
+    const face = new FakeSessions(family())
+    const View = makeView(face)
+    const m = await mount(h(View, { sessionId: 'root', self: selfStats() }))
+    assert.ok(text(m.container).includes(DICT_EN['agents.sub']))
+    assert.equal(query(m.container, '.lc-agent-card.lc-agent-self').getAttribute('role'), null)
+    await click(query(m.container, '[data-agent="worker"]'))
+    assert.deepEqual(face.opened, ['worker'])
+    await m.unmount()
   })
 })
 
@@ -601,7 +664,7 @@ describe('AgentGraph — cold-relative composition fetch', () => {
     const m = await mount(h(View, { sessionId: 'root', self: selfStats() }))
 
     // The cold relative fetched at mount; until the read lands it wears the pressure-only fill.
-    assert.deepEqual(rpc.calls, ['/api/dsh-context/detail:done'])
+    assert.deepEqual(rpc.calls, ['api/dsh-context/detail:done'])
     assert.equal(query(m.container, '[data-agent="done"]').querySelectorAll('.lc-agent-bar-seg').length, 1)
 
     // A snapshot tick while the read is in flight re-attaches the SAME
@@ -625,14 +688,14 @@ describe('AgentGraph — cold-relative composition fetch', () => {
       face.setState(family())
     })
     await flush()
-    assert.deepEqual(rpc.calls, ['/api/dsh-context/detail:done'])
+    assert.deepEqual(rpc.calls, ['api/dsh-context/detail:done'])
 
     // A remount (tab switch) resets the instance state but replays the
     // factory-cached read: the bar recomposes with no new request.
     await m.unmount()
     const remounted = await mount(h(View, { sessionId: 'root', self: selfStats() }))
     await flush()
-    assert.deepEqual(rpc.calls, ['/api/dsh-context/detail:done'], 'the cache never re-fetches')
+    assert.deepEqual(rpc.calls, ['api/dsh-context/detail:done'], 'the cache never re-fetches')
     const replayed = query(remounted.container, '[data-agent="done"]')
     assert.equal(replayed.querySelectorAll('.lc-agent-bar-seg').length, 6, 'the cached head replays into the fresh instance')
     await remounted.unmount()
@@ -643,14 +706,14 @@ describe('AgentGraph — cold-relative composition fetch', () => {
     const { View, face } = makeFetchingView()
     const m = await mount(h(View, { sessionId: 'root', self: selfStats() }))
     await flush()
-    assert.deepEqual(rpc.calls, ['/api/dsh-context/detail:done'])
+    assert.deepEqual(rpc.calls, ['api/dsh-context/detail:done'])
     assert.equal(query(m.container, '[data-agent="done"]').querySelectorAll('.lc-agent-bar-seg').length, 1)
     // A later snapshot tick (fresh forest, still pressure-only) re-fetches nothing.
     await act(async () => {
       face.setState(family())
     })
     await flush()
-    assert.deepEqual(rpc.calls, ['/api/dsh-context/detail:done'], 'the sticky failure never re-fetches')
+    assert.deepEqual(rpc.calls, ['api/dsh-context/detail:done'], 'the sticky failure never re-fetches')
     await m.unmount()
   })
 
@@ -660,7 +723,7 @@ describe('AgentGraph — cold-relative composition fetch', () => {
       const { View } = makeFetchingView()
       const m = await mount(h(View, { sessionId: 'root', self: selfStats() }))
       await flush()
-      assert.deepEqual(rpc.calls, ['/api/dsh-context/detail:done'])
+      assert.deepEqual(rpc.calls, ['api/dsh-context/detail:done'])
       assert.equal(query(m.container, '[data-agent="done"]').querySelectorAll('.lc-agent-bar-seg').length, 1)
       assert.ok(text(query(m.container, '[data-agent="done"]')).includes('95%'))
       await m.unmount()
@@ -699,7 +762,7 @@ describe('AgentGraph — cold-relative composition fetch', () => {
     const View = makeAgentGraph(asClientCtx(ctx), kit)
     const m = await mount(h(View, { sessionId: 'root', self: selfStats() }))
     assert.equal(query(m.container, '[data-agent="cold"]').querySelectorAll('.lc-agent-bar-seg').length, 0)
-    assert.deepEqual(rpc.calls, ['/api/dsh-context/detail:cold'])
+    assert.deepEqual(rpc.calls, ['api/dsh-context/detail:cold'])
 
     await act(async () => {
       rpc.release({ ok: true, status: 200, json: async () => ({ ok: true, value: detailValue(composedHead()) }) })

@@ -24,6 +24,14 @@ export interface ClientSeam {
   imageFaceMethod: string
   /** MarkdownText's chrome prop the plugin must hand every markdown render. */
   markdownChrome: string
+  /** The JsonTree faces the rich-text JSON body rides (src/client/components/richText.tsx): the expander DOM
+   * the two-level auto-open toggles, the summary/preview/punctuation class locals the expanded-row rule matches
+   * (detailSections.css), and the labels contract. */
+  jsonTree: {
+    /** All needles live in the primitives JsonTree source. */
+    file: string
+    needles: readonly string[]
+  }
   /** The platform module table the shell seeds (client-bundle requires must resolve). */
   platformModules: readonly string[]
   /** The faces the split timeline's on-demand detail channel rides
@@ -69,6 +77,20 @@ export interface ClientSeam {
     /** The layout's main-slot declaring source, plus the keyed declaration's spelling. */
     mainFile: string
     mainNeedle: string
+  }
+  /** The slot-ledger read the client's second-mount guard rides
+   * (`entrySeated` in src/client/services.ts, dsh-context#137): the
+   * `slots` service's raw `entries` view — the same view the session header
+   * renders — present on every supported line under the shared projection-
+   * registry contract; probed on the SERVICE that carries the call (the
+   * renderer's `SlotRegistry`, whose facade can drop it independently of the
+   * core's `SlotCore.entries`) so a rename names the seam instead of silently
+   * disabling the guard. */
+  ledger: {
+    /** The registry source declaring the entries view the plugin calls. */
+    file: string
+    /** The entries view's signature spelling in it. */
+    needle: string
   }
   /** The right Sidebar's tab seam — every supported generation ships it. The
    * plugin's registration stays an OPTIONAL deferred inject: a below-baseline
@@ -175,6 +197,19 @@ export interface Baseline {
     loaderVolatileFile: string
     loaderVolatileNeedle: string
   }
+  /** The sliced cold fold's optional faces (src/host/backfill.ts, issue #145):
+   * `sessionProjections.restore`/`hydrate`, `sessions.prepare`, and
+   * `sessionProjectionCache.write` — any absence keeps the single-shot
+   * coldSnapshot path, so the probes pin presence-as-declared: a removal
+   * names the seam instead of silently degrading the pass back to whole-log blocks. */
+  backfillFold: {
+    /** The registry source declaring `restore` and `hydrate`. */
+    registryFile: string
+    /** The session store source declaring `prepare`. */
+    storeFile: string
+    /** The projection-cache source declaring `write` and `coldSnapshot`. */
+    cacheFile: string
+  }
 }
 
 /** One support-matrix entry. Every supported line is the V4 generation, so
@@ -195,6 +230,10 @@ function baseline(id: BaselineId, tag: string, session: string): Baseline {
     client: {
       imageFaceMethod: 'imageUrl',
       markdownChrome: 'labels',
+      jsonTree: {
+        file: 'packages/client/ui-primitives/src/JsonTree.tsx',
+        needles: ['data-json-expander', 'aria-expanded', 'css.summary', 'css.preview', 'css.punctuation', 'expandTopLevel', 'copyButtonTitle'],
+      },
       platformModules: [
         'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
         '@deepseek-ai/dsh-client-store',
@@ -242,6 +281,12 @@ function baseline(id: BaselineId, tag: string, session: string): Baseline {
         mainFile: 'packages/client/ui-layout/src/client/index.ts',
         mainNeedle: "'main': { kind: 'keyed'",
       },
+      ledger: {
+        file: 'packages/client/ui-renderer/src/client/registry.ts',
+        // Truncated before the parameter list: the probe greps the tag's
+        // sources as basic regexes, where `(` and `[` open groups/classes.
+        needle: 'entries(key: keyof SlotMap',
+      },
     },
     settings: {
       serviceFile: 'packages/settings/settings/src/index.ts',
@@ -283,6 +328,11 @@ function baseline(id: BaselineId, tag: string, session: string): Baseline {
       orderAnchors: ['HARNESS_IDENTITY', 'DEPLOYMENT_PERSONA_SUFFIX'],
       loaderVolatileFile: 'vendor/loader/src/config/entry.ts',
       loaderVolatileNeedle: 'updateVolatile(ref, source)',
+    },
+    backfillFold: {
+      registryFile: 'packages/session/session-projection/src/index.ts',
+      storeFile: 'packages/core/session/src/index.ts',
+      cacheFile: 'packages/session/session-projection-cache/src/index.ts',
     },
   }
 }

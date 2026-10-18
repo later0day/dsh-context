@@ -305,7 +305,7 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
       case 'request/header': {
         const header = (data?.header ?? {}) as {
           tools?: unknown[]
-          config?: { model?: unknown; provider?: unknown }
+          config?: { model?: unknown; provider?: unknown; maxTokens?: unknown }
         }
         const tools = Array.isArray(header.tools) ? header.tools : []
         const s = ensure(['events'])
@@ -314,6 +314,14 @@ export function applyTimeline(state: TimelineState, event: TimelineEvent, bounds
         // The durable request envelope, not request/context, is the route/model source of truth.
         if (header.config && typeof header.config.model === 'string') s.model = header.config.model
         if (header.config && typeof header.config.provider === 'string') s.provider = header.config.provider
+        // The routed output cap auto-compaction reserves out of the window (the envelope's effective
+        // maxTokens, adapter default materialized). Last-wins, so a cap-less header clears it.
+        const maxOutputTokens = header.config?.maxTokens
+        if (typeof maxOutputTokens === 'number' && Number.isFinite(maxOutputTokens) && maxOutputTokens > 0) {
+          s.maxOutputTokens = maxOutputTokens
+        } else {
+          delete s.maxOutputTokens
+        }
         // A model switch has no dedicated event: it is a request header differing from the previous one, logged with
         // reason 'change' ('initial' opens a session, 'resume' reopens it).
         if ((data?.reason === 'change' || data?.reason === 'resume') && s.model && s.lastModel && s.model !== s.lastModel) {

@@ -28,6 +28,32 @@ import { buildTimelineDetail } from './foldWire'
 /** The plugin's detail route, under the authenticated `/api` fence. */
 export const DETAIL_ROUTE = '/api/dsh-context/detail'
 
+/** The yielding fold's granularity (issue #145): at ~13µs/event a chunk is a ~13ms synchronous
+ * block — sub-perceptible on any host, so a 30k-event cold fold never lands on the event loop
+ * as one uninterruptible second inside a viewing request. */
+const FOLD_YIELD_EVENTS = 1_000
+
+/** How many cold detail payloads stay cached (issue #145): one payload is bounded by the fold
+ * bounds (≲1MB at the pathological caps), the key's revision makes a stale serve structurally
+ * impossible, and a viewing page reload re-serves instead of refolding the whole log. */
+const PAYLOAD_CACHE_MAX = 4
+
+/** One cached cold payload: the fold result, the durable change token it was folded at, and the
+ * persistence instance that produced it — the same `(identity, id, revision)` trust tuple dsh's
+ * own observation reader keys its cache on, so a swapped backend can never alias a stale serve. */
+interface ColdPayload {
+  persistence: unknown
+  revision: string
+  value: unknown
+}
+
+/** The durable change token of a prepared observation (absent on a live one — a moving target
+ * must never key the cache). The brand is a string; a hostile face could answer anything. */
+function revisionOf(observation: unknown): string | undefined {
+  const revision = (observation as { revision?: unknown } | null)?.revision
+  return typeof revision === 'string' && revision !== '' ? revision : undefined
+}
+
 /** Read by the timeline unit's view at every serve. */
 export interface DetailChannelGate {
   readonly live: boolean
@@ -55,6 +81,9 @@ function failure(code: string, message: string): Response {
  * the module header). Either service unloading withdraws the route and closes the gate. */
 export function watchDetailChannel(ctx: Context, bounds: FoldBounds, coldReads: ColdReadGate = makeColdReadGate()): DetailChannelGate {
   const gate = { live: false }
+  // The cold payload cache lives in this closure: a config remount re-runs the watch, so a
+  // bounds change never serves a payload folded under different bounds.
+  const payloads = new Map<string, ColdPayload>()
   ctx.inject(['connection', 'sessions'], (c) => {
     const sessions = c.get('sessions') as SessionsHostFace | undefined
     // Bind at extraction: an unbound hand-off loses `this` on the real face.
@@ -85,7 +114,8 @@ export function watchDetailChannel(ctx: Context, bounds: FoldBounds, coldReads: 
         }
         // Cold session: observe it and fold the detail from its immutable log. The read runs
         // through the shared cold-read gate; a skip under heap pressure resolves to the same
-        // typed null as a session nothing can observe.
+        // typed null as a session nothing can observe. An unchanged log (same durable revision)
+        // re-serves the cached payload instead of refolding; the fold itself yields per chunk.
         const query = ctx.get('sessionQuery') as SessionQueryFace | undefined
         const observe = typeof query?.observeSession === 'function'
           ? query.observeSession.bind(query)
@@ -93,16 +123,39 @@ export function watchDetailChannel(ctx: Context, bounds: FoldBounds, coldReads: 
         if (observe === undefined) return reply({ ok: true, value: null })
         const value = await coldReads.admit(async () => {
           const observation = await observe(sessionId, { projectionMode: 'none' })
-          const events = (observation as { events?: unknown } | null)?.events
-          if (!Array.isArray(events)) return null
-          let state = createTimelineState()
           try {
-            for (const ev of events) state = applyTimeline(state, ev as never, bounds)
+            const persistence: unknown = ctx.get('sessionPersistence')
+            const revision = revisionOf(observation)
+            if (revision !== undefined) {
+              const hit = payloads.get(sessionId)
+              if (hit !== undefined && hit.revision === revision && hit.persistence === persistence) {
+                payloads.delete(sessionId)
+                payloads.set(sessionId, hit)
+                return hit.value
+              }
+            }
+            const events = (observation as { events?: unknown } | null)?.events
+            if (!Array.isArray(events)) return null
+            let state = createTimelineState()
+            let folded = 0
+            for (const ev of events) {
+              state = applyTimeline(state, ev as never, bounds)
+              if (++folded % FOLD_YIELD_EVENTS === 0) await new Promise(resolve => setTimeout(resolve, 0))
+            }
+            const detail = buildTimelineDetail(state, bounds)
+            if (revision !== undefined) {
+              payloads.delete(sessionId)
+              payloads.set(sessionId, { persistence, revision, value: detail })
+              for (const oldest of payloads.keys()) {
+                if (payloads.size <= PAYLOAD_CACHE_MAX) break
+                payloads.delete(oldest)
+              }
+            }
+            return detail
           } finally {
             const dispose = (observation as { [Symbol.dispose]?: unknown } | null)?.[Symbol.dispose]
             if (typeof dispose === 'function') dispose.call(observation)
           }
-          return buildTimelineDetail(state, bounds)
         })
         return reply({ ok: true, value: value ?? null })
       } catch (err) {

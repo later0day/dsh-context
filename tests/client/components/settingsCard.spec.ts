@@ -185,8 +185,9 @@ describe('PluginConfigCard (the Plugins-page seat)', () => {
       DICT_EN['files.sort.count'],
       DICT_EN['files.sort.latest'],
       DICT_EN['files.sort.path'],
+      DICT_EN['files.sort.name'],
     ])
-    await click(sortItems[2]) // 'By path'
+    await click(sortItems[3]) // 'By name'
     assert.deepEqual(calls, [
       ['defaultPlacement', 'sidebar'],
       ['insightsEntry', 'hide'],
@@ -196,7 +197,7 @@ describe('PluginConfigCard (the Plugins-page seat)', () => {
       ['defaultDurationCurve', 'hide'],
       ['defaultDeltaBase', 'turn'],
       ['defaultToolSort', 'name'],
-      ['defaultFileSort', 'path'],
+      ['defaultFileSort', 'name'],
     ])
     assert.equal(document.body.querySelector('[role="menu"]'), null)
 

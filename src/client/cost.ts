@@ -10,7 +10,7 @@
 
 import type { SessionCostUsage } from '../shared/types'
 import { isDeepSeekProvider, modelsDevProviderOf } from '../shared/providers'
-import { asRecord, numOf } from './services'
+import { asRecord, numOf, type LocaleService } from './services'
 
 export type CostCurrency = 'usd' | 'cny'
 
@@ -285,6 +285,11 @@ export function mergeCostUsage(...usages: (SessionCostUsage | null | undefined)[
 export function formatCost(amount: number, currency: CostCurrency): string {
   const symbol = currency === 'cny' ? '¥' : '$'
   return symbol + (amount >= 1 ? amount.toFixed(2) : amount.toPrecision(2))
+}
+
+/** The display currency follows the active locale — read per render: slot outlets re-render on a locale switch. */
+export function displayCurrencyOf(locale: LocaleService): CostCurrency {
+  return typeof locale.getLocale === 'function' && locale.getLocale().active === 'zh' ? 'cny' : 'usd'
 }
 
 /** Price-list figure: always two decimals (the tooltip's `¥ XX.XX` rate format). */

@@ -18,15 +18,35 @@ export function wantsConversationTabs(settings: ContextSettings): boolean {
 export function watchPlacement(settings: ContextSettings, mounts: PlacementMounts): () => void {
   let tab: (() => void) | undefined
   let sidebar: (() => void) | undefined
-  const own = (result: unknown): (() => void) | undefined =>
-    typeof result === 'function' ? result as () => void : undefined
+  // A mount is tracked by its OWN state, not by the disposer it hands back: a
+  // face registering without one (a stripped or foreign `slots`) must still
+  // count as mounted, or every later preference publish would register a second
+  // copy of the same seats (#137).
+  let tabMounted = false
+  let sidebarMounted = false
   const mount = (placement: DefaultPlacement): void => {
     const wantTab = wantsConversationTabs(settings)
     const wantSidebar = placement !== 'tab'
-    if (wantTab && tab === undefined) tab = own(mounts.tab())
-    if (!wantTab && tab !== undefined) { tab(); tab = undefined }
-    if (wantSidebar && sidebar === undefined) sidebar = own(mounts.sidebar())
-    if (!wantSidebar && sidebar !== undefined) { sidebar(); sidebar = undefined }
+    if (wantTab && !tabMounted) {
+      const result: unknown = mounts.tab()
+      tab = typeof result === 'function' ? result as () => void : undefined
+      tabMounted = true
+    }
+    if (!wantTab && tabMounted) {
+      tab?.()
+      tab = undefined
+      tabMounted = false
+    }
+    if (wantSidebar && !sidebarMounted) {
+      const result: unknown = mounts.sidebar()
+      sidebar = typeof result === 'function' ? result as () => void : undefined
+      sidebarMounted = true
+    }
+    if (!wantSidebar && sidebarMounted) {
+      sidebar?.()
+      sidebar = undefined
+      sidebarMounted = false
+    }
   }
   mount(settings.defaultPlacement())
   const unsubscribe = settings.store.subscribe(() => { mount(settings.defaultPlacement()) })
@@ -36,5 +56,7 @@ export function watchPlacement(settings: ContextSettings, mounts: PlacementMount
     sidebar?.()
     tab = undefined
     sidebar = undefined
+    tabMounted = false
+    sidebarMounted = false
   }
 }

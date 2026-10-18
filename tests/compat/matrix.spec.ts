@@ -133,6 +133,22 @@ describe.skipIf(reasons.length > 0)('compat matrix — real dsh sources per base
       }
     })
 
+    test('host: the sliced cold fold faces exist (else the backfill falls back to whole-log blocks)', () => {
+      // Issue #145: sessions over the slice threshold fold through these four
+      // faces; a missing one silently returns that session to the single-shot
+      // coldSnapshot path, so a removal must name itself here.
+      const fold = baseline.backfillFold
+      for (const [file, needle] of [
+        [fold.registryFile, '  restore('],
+        [fold.registryFile, '  hydrate('],
+        [fold.storeFile, '  prepare('],
+        [fold.cacheFile, '  async write('],
+        [fold.cacheFile, '  coldSnapshot('],
+      ] as const) {
+        assert.equal(staging.dshHasString(baseline.tag, needle, file), true, `sliced-fold seam: ${needle} in ${file}`)
+      }
+    })
+
     for (const slot of staging.SLOT_SEAMS) {
       test(`client: slot "${slot}" exists`, () => {
         assert.equal(staging.dshHasString(baseline.tag, slot, 'packages/client/*/src/**'), true)
@@ -231,8 +247,24 @@ describe.skipIf(reasons.length > 0)('compat matrix — real dsh sources per base
       assert.equal(staging.dshHasString(baseline.tag, page.mainNeedle, page.mainFile), true, 'the layout\'s keyed main panel seat')
     })
 
+    test('client: the slot-ledger read of the second-mount guard (dsh-context#137)', () => {
+      const ledger = baseline.client.ledger
+      assert.equal(
+        staging.dshHasString(baseline.tag, ledger.needle, ledger.file),
+        true,
+        'the raw SlotCore.entries view',
+      )
+    })
+
     test('client: MarkdownText chrome prop', () => {
       assert.equal(staging.dshHasString(baseline.tag, baseline.client.markdownChrome, 'packages/client/ui-primitives/src/markdown/MarkdownText.tsx'), true)
+    })
+
+    test('client: the JsonTree faces the rich-text JSON body rides', () => {
+      const tree = baseline.client.jsonTree
+      for (const needle of tree.needles) {
+        assert.equal(staging.dshHasString(baseline.tag, needle, tree.file), true, `JsonTree seam: ${needle}`)
+      }
     })
 
     test('client: the icon seams resolve on this generation (primitives.ts)', () => {

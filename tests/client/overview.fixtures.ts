@@ -15,6 +15,7 @@ export function rowOf(over: Partial<OverviewRow> = {}): OverviewRow {
     updatedAt: 100,
     running: false,
     current: false,
+    archived: false,
     timeline: null,
     activity: null,
     family: [over.timeline ?? null],

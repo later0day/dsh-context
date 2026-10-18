@@ -307,6 +307,7 @@ export const ICON_SEAMS = [
   'IconChevronDownOutlineMedium',
   'IconChevronUpOutlineMedium',
   'IconSearchOutlineRegular',
+  'FileTypeIcon',
 ] as const
 
 /** The event families the host fold actually switches on, read out of `src/host/fold.ts` so the

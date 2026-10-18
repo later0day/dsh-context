@@ -10,7 +10,7 @@ import { makeOverviewPanel } from './components/overviewPanel'
 import { makePluginConfigCard } from './components/settingsCard'
 import { watchInsightPage } from './insightPage'
 import { modalStoreOf } from './modalStore'
-import type { ClientCtx } from './services'
+import { entrySeated, type ClientCtx } from './services'
 import { createContextSettings, type ConfigFormsFace, type SettingsField } from './settings'
 import { makeContextView } from './components/contextView'
 import { makeContextJumpButton } from './components/contextJump'
@@ -45,7 +45,21 @@ import './styles/dateRange.css'
 
 const NS = 'dsh-context'
 
+/** The chat→Context jump entry doubles as this bundle's mount marker: no
+ * preference gates it, so a ledger seating it means a mount already registered
+ * the bundle's seats. */
+const JUMP_SLOT = 'conversation.chat.assistant-actions'
+const JUMP_ID = 'context-jump'
+
 function apply(ctx: ClientCtx): void {
+  // One live mount per page (dsh-context#137). Two mounts of this bundle share
+  // one slot ledger, and the client-plugin runner force-assigns a fresh
+  // shadowing priority to every registration, so the registry's same-id guard
+  // never fires across them and the session header — which renders the raw
+  // ledger and matches the active view by id — paints both copies of every
+  // seat. A marker already in the ledger means a mount is live: this one adds
+  // nothing. Fails open, so a face without the ledger view still mounts.
+  if (entrySeated(ctx, JUMP_SLOT, JUMP_ID)) return
   ctx.effect(() => {
     return ctx.locale.register(NS, { zh: DICT_ZH, en: DICT_EN })
   }, 'dsh-context: dictionaries')
@@ -83,10 +97,10 @@ function apply(ctx: ClientCtx): void {
   // Chat → Context jump: opens the right Sidebar's tab pinned to the reply's turn where served, else the
   // conversation tab (contextJump.tsx; relay and activation in viewFocus.ts).
   const ContextJump = makeContextJumpButton(ctx, kit)
-  ctx.slots.inject('conversation.chat.assistant-actions', () => {
+  ctx.slots.inject(JUMP_SLOT, () => {
     return ctx.slots.register(
       // After the shipped feedback entry (10), still inside the icon row.
-      { name: 'conversation.chat.assistant-actions', id: 'context-jump', order: 20, locale: NS },
+      { name: JUMP_SLOT, id: JUMP_ID, order: 20, locale: NS },
       props => h(ContextJump, props),
     )
   })

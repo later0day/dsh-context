@@ -4,8 +4,8 @@ import { describe, test, vi } from 'vitest'
 import { requestContextFocus, takeContextFocus } from '../../../src/client/viewFocus'
 import { DICT_EN } from '../../../src/client/i18n'
 import { TestClientCtx } from '../helpers/harness'
-import { mount, query, queryAll, text } from '../helpers/kit'
-import { buttonByText, makeView, mountInScroller, mountRich, projectionsFor, richTimeline, timeline } from './contextViewHarness'
+import { click, flush, mount, query, queryAll, text } from '../helpers/kit'
+import { buttonByText, makeView, mountInScroller, mountRich, projectionsFor, richTimeline, T0, timeline } from './contextViewHarness'
 
 describe('ContextView — chat→Context jump', () => {
   test('the relay flips the chart to turn bars, pins the reply\'s turn, and consumes itself', async () => {
@@ -91,5 +91,75 @@ describe('ContextView — chat→Context jump', () => {
     assert.ok(query(m2.container, '.lc-bar[data-seq="4"]').className.includes('lc-bar-selected'))
     await m2.unmount()
     gBCR.mockRestore()
+  })
+})
+
+describe('ContextView — the stats board\'s pill jumps', () => {
+  /** One user message, one read and one write op, so both jump families have a landing spot. */
+  function jumpTimeline(): ReturnType<typeof timeline> {
+    return timeline({
+      humanInputs: 1,
+      requests: [{ seq: 2, turn: 1, step: 1, time: T0, system: 10, tools: 20, user: 10, inject: 0, assistant: 20, tool: 0, total: 60 }],
+      nodes: [{ seq: 1, cat: 'user', tokens: 10, text: 'hello there', time: T0 }],
+      fileOps: [
+        { seq: 3, path: '/src/a.ts', kind: 'read', tool: 'read', err: false, added: 0, removed: 0, read: { start: 1, count: 3 } },
+        { seq: 4, path: '/src/a.ts', kind: 'write', tool: 'edit', err: false, added: 2, removed: 1 },
+      ],
+    })
+  }
+
+  test('the input pill opens the browser\'s user messages; a file pill picks the card\'s kind chip and scrolls it in', async () => {
+    const scroller = document.createElement('div')
+    scroller.setAttribute('data-conversation-scroll', '')
+    scroller.style.overflowY = 'auto'
+    Object.defineProperty(scroller, 'scrollHeight', { value: 900 })
+    Object.defineProperty(scroller, 'clientHeight', { value: 300 })
+    // jsdom lays out nothing: fixed viewport tops make each reveal's rect delta deterministic, shifted by the scroll the
+    // reveal itself applies — the same live geometry a real page reports (450 − 100, then 700 − 100 on top of that).
+    const gBCR = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const inScroller = !this.hasAttribute('data-conversation-scroll')
+      const top = this.hasAttribute('data-conversation-scroll') ? 100
+        : this.classList.contains('lc-col-browser') ? 450
+          : this.classList.contains('lc-fa-card') ? 700 : 0
+      return { top: inScroller ? top - scroller.scrollTop : top } as DOMRect
+    })
+    try {
+      const View = makeView(new TestClientCtx())
+      const m = await mountInScroller(h(View, { sessionId: 'sv-pilljump', useProjection: projectionsFor(jumpTimeline()) }), scroller)
+      const pill = (label: string): HTMLElement => {
+        const hit = queryAll(m.container, '.lc-flow-pill').find(el => text(el).startsWith(label))
+        if (hit === undefined) throw new Error(`pill not found: ${label}`)
+        return hit
+      }
+      const fileCard = queryAll(m.container, '.lc-card').find(c => text(c).includes(DICT_EN['files.title']))
+      assert.ok(fileCard !== undefined)
+      const chip = (label: string): HTMLElement => {
+        const hit = queryAll(fileCard, '.lc-fa-ctl .lc-gran-btn').find(b => text(b).startsWith(label))
+        if (hit === undefined) throw new Error(`chip not found: ${label}`)
+        return hit
+      }
+
+      await click(pill(DICT_EN['stats.humanInputs']))
+      await flush()
+      const open = queryAll(m.container, '.lc-br-cat-row.lc-br-cat-open')
+      assert.equal(open.length, 1)
+      assert.ok(text(open[0]).includes(DICT_EN['cat.user']), 'the user category opens')
+      assert.ok(text(open[0].parentElement as HTMLElement).includes('hello there'), 'its messages show')
+      assert.equal(scroller.scrollTop, 350, 'the browser card scrolled to the scrollport top')
+
+      await click(pill(DICT_EN['files.kind.read']))
+      await flush()
+      assert.ok(chip(DICT_EN['files.kind.read']).className.includes('lc-gran-on'))
+      assert.equal(queryAll(fileCard, '.lc-fa-row').length, 1, 'the read filter narrows the list')
+      assert.equal(scroller.scrollTop, 600, 'the File Activity card scrolled to the scrollport top')
+
+      await click(pill(DICT_EN['files.kind.write']))
+      await flush()
+      assert.ok(chip(DICT_EN['files.kind.write']).className.includes('lc-gran-on'))
+      assert.ok(!chip(DICT_EN['files.kind.read']).className.includes('lc-gran-on'), 'the previous jump is replaced')
+      await m.unmount()
+    } finally {
+      gBCR.mockRestore()
+    }
   })
 })

@@ -17,6 +17,7 @@ function rowOf(over: Partial<OverviewRow> = {}): OverviewRow {
     updatedAt: NOW - 3 * 3_600_000,
     running: false,
     current: false,
+    archived: false,
     timeline: null,
     activity: null,
     family: [over.timeline ?? null],

@@ -191,7 +191,7 @@ describe('ContextView — file activity card', () => {
     const card = queryAll(m.container, '.lc-card').find(c => text(c).includes(DICT_EN['files.title']))
     assert.ok(card !== undefined)
     const row = query(card, '.lc-fa-row')
-    assert.ok(row.querySelector('.lc-fa-path em')?.textContent === './src/')
+    assert.ok(row.querySelector('.lc-fa-path em')?.textContent === 'src/')
     const name = query(row, '.lc-fa-file')
     assert.equal(name.getAttribute('title'), DICT_EN['files.open'])
     await click(name)

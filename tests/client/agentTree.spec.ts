@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import {
+  AGENT_CARD_H,
   AGENT_TREE_LIMIT,
   agentDurationOf,
   agentForestOf,
@@ -48,6 +49,9 @@ function row(over: Record<string, unknown> = {}): Record<string, unknown> {
 function snap(byId: Record<string, unknown>): unknown {
   return { byId }
 }
+
+/** Independent pins: LEVEL = card 116 + the 64px link channel — re-derived by hand so a layout bug cannot mirror itself. */
+const LEVEL = 180
 
 describe('agentRowOf', () => {
   test('rejects non-records and re-proves every field', () => {
@@ -683,7 +687,7 @@ describe('layoutForest', () => {
     assert.equal(layout.points[0].depth, 0)
     assert.equal(layout.links.length, 0)
     assert.equal(layout.width, SLOT)
-    assert.equal(layout.height, 48 + 104 + 24)
+    assert.equal(layout.height, 48 + AGENT_CARD_H + 24)
     assert.equal(layout.cardW, SLOT - 12)
   })
 
@@ -697,13 +701,13 @@ describe('layoutForest', () => {
     assert.equal(pointOf.get('root')?.x, SLOT)
     // One row per depth level.
     assert.equal(pointOf.get('root')?.y, 48)
-    assert.equal(pointOf.get('a')?.y, 48 + 144)
-    assert.equal(pointOf.get('g')?.y, 48 + 2 * 144)
+    assert.equal(pointOf.get('a')?.y, 48 + LEVEL)
+    assert.equal(pointOf.get('g')?.y, 48 + 2 * LEVEL)
     // Links exit the parent card's bottom edge and enter the child card's top edge.
     const linkG = layout.links.find(l => l.to === 'g')
     assert.ok(linkG !== undefined)
     assert.equal(linkG.x1, pointOf.get('a')?.x)
-    assert.equal(linkG.y1, (pointOf.get('a')?.y as number) + 104)
+    assert.equal(linkG.y1, (pointOf.get('a')?.y as number) + AGENT_CARD_H)
     assert.equal(linkG.x2, pointOf.get('g')?.x)
     assert.equal(linkG.y2, pointOf.get('g')?.y)
     assert.equal(linkG.running, false)
@@ -713,7 +717,7 @@ describe('layoutForest', () => {
     assert.equal(layout.links.find(l => l.to === 'b')?.color, familyHue(1))
     assert.equal(layout.links.length, 3)
     assert.equal(layout.width, 2 * SLOT)
-    assert.equal(layout.height, 48 + 2 * 144 + 104 + 24)
+    assert.equal(layout.height, 48 + 2 * LEVEL + AGENT_CARD_H + 24)
   })
 
   test('responsive: a wide stage keeps the natural pitch', () => {
@@ -724,10 +728,11 @@ describe('layoutForest', () => {
   })
 
   test('responsive: a tighter stage compresses the slot pitch to fit exactly', () => {
+    // 600 / SLOT_MIN(190) = 3 leaves: the natural path holds at a 200px pitch.
     const forest = forestOf([['root'], ['a', 'root'], ['b', 'root'], ['c', 'root']])
-    const layout = layoutForest(forest, 500)
-    const slot = 500 / 3
-    assert.equal(layout.width, 500)
+    const layout = layoutForest(forest, 600)
+    const slot = 600 / 3
+    assert.equal(layout.width, 600)
     assert.equal(layout.cardW, slot - 12)
     const pointOf = new Map(layout.points.map(p => [p.id, p]))
     assert.equal(pointOf.get('a')?.x, slot / 2)
@@ -737,7 +742,7 @@ describe('layoutForest', () => {
   })
 
   test('responsive: a narrow stage folds the family into a single-column stack', () => {
-    // Stage 180 → perLevel = max(1, 1) = 1: cards fold one per row — a readable
+    // Stage 180 → floor(180/190) = 0, clamped to perLevel = 1: cards fold one per row — a readable
     // vertical stack instead of two crushed mini-cards; the layout still matches the stage exactly.
     const layout = layoutForest(forestOf([['root'], ['a', 'root'], ['b', 'root']]), 180)
     assert.equal(layout.width, 180)
@@ -747,34 +752,34 @@ describe('layoutForest', () => {
     assert.equal(pointOf.get('a')?.x, 90)
     assert.equal(pointOf.get('b')?.x, 90)
     assert.equal(pointOf.get('root')?.y, 48)
-    assert.equal(pointOf.get('a')?.y, 48 + 144)
-    assert.equal(pointOf.get('b')?.y, 48 + 2 * 144)
-    assert.equal(layout.height, 48 + 2 * 144 + 104 + 24)
+    assert.equal(pointOf.get('a')?.y, 48 + LEVEL)
+    assert.equal(pointOf.get('b')?.y, 48 + 2 * LEVEL)
+    assert.equal(layout.height, 48 + 2 * LEVEL + AGENT_CARD_H + 24)
   })
 
   test('responsive: a level too wide even at the minimum pitch wraps into bands', () => {
-    // Stage 300 → perLevel = floor(300/150) = 2: the 3-child level splits 2+1
-    // at a 150px cell pitch; short bands center themselves.
-    const layout = layoutForest(forestOf([['root'], ['a', 'root'], ['b', 'root'], ['c', 'root']]), 300)
+    // Stage 400 → perLevel = floor(400/190) = 2: the 3-child level splits 2+1
+    // at a 200px cell pitch; short bands center themselves.
+    const layout = layoutForest(forestOf([['root'], ['a', 'root'], ['b', 'root'], ['c', 'root']]), 400)
     const pointOf = new Map(layout.points.map(p => [p.id, p]))
-    assert.equal(pointOf.get('root')?.x, 150)
-    assert.equal(pointOf.get('a')?.x, 75)
-    assert.equal(pointOf.get('b')?.x, 75 + 150)
-    assert.equal(pointOf.get('c')?.x, 150)
+    assert.equal(pointOf.get('root')?.x, 200)
+    assert.equal(pointOf.get('a')?.x, 100)
+    assert.equal(pointOf.get('b')?.x, 100 + 200)
+    assert.equal(pointOf.get('c')?.x, 200)
     // The wrapped band is a row of its own.
     assert.equal(pointOf.get('root')?.y, 48)
-    assert.equal(pointOf.get('a')?.y, 48 + 144)
-    assert.equal(pointOf.get('c')?.y, 48 + 2 * 144)
+    assert.equal(pointOf.get('a')?.y, 48 + LEVEL)
+    assert.equal(pointOf.get('c')?.y, 48 + 2 * LEVEL)
     // Links still join every child, the cross-band one included.
     const linkC = layout.links.find(l => l.to === 'c')
     assert.ok(linkC !== undefined)
-    assert.equal(linkC.y1, 48 + 104)
-    assert.equal(linkC.y2, 48 + 2 * 144)
+    assert.equal(linkC.y1, 48 + AGENT_CARD_H)
+    assert.equal(linkC.y2, 48 + 2 * LEVEL)
     assert.equal(linkC.color, familyHue(2))
     assert.equal(layout.links.find(l => l.to === 'a')?.color, familyHue(0))
-    assert.equal(layout.width, 300)
-    assert.equal(layout.height, 48 + 2 * 144 + 104 + 24)
-    assert.equal(layout.cardW, 150 - 12)
+    assert.equal(layout.width, 400)
+    assert.equal(layout.height, 48 + 2 * LEVEL + AGENT_CARD_H + 24)
+    assert.equal(layout.cardW, 200 - 12)
   })
 
   test('responsive: full bands at an intermediate pitch fit the stage exactly', () => {
@@ -786,14 +791,14 @@ describe('layoutForest', () => {
     const pointOf = new Map(layout.points.map(p => [p.id, p]))
     assert.equal(pointOf.get('a')?.x, slot / 2)
     assert.equal(pointOf.get('c')?.x, slot / 2)
-    assert.equal(pointOf.get('d')?.y, 48 + 2 * 144)
+    assert.equal(pointOf.get('d')?.y, 48 + 2 * LEVEL)
     assert.equal(layout.width, 400)
     assert.equal(layout.links.length, 6)
     assert.equal(layout.cardW, slot - 12)
   })
 
   test('responsive: child bands interleave with later parent bands (kinship order)', () => {
-    // Stage 320 → perLevel = 2. Root's children split [p1,p2] / [p3]; p1's
+    // Stage 400 → perLevel = 2. Root's children split [p1,p2] / [p3]; p1's
     // kids' band lands right after p1's own band — BEFORE p3's band, so a family never straddles a stranger's row.
     const layout = layoutForest(forestOf([
       ['root'],
@@ -802,23 +807,23 @@ describe('layoutForest', () => {
       ['p3', 'root'],
       ['k1', 'p1'],
       ['k2', 'p1'],
-    ]), 320)
+    ]), 400)
     const pointOf = new Map(layout.points.map(p => [p.id, p]))
     assert.equal(pointOf.get('root')?.y, 48)
-    assert.equal(pointOf.get('p1')?.y, 48 + 144)
-    assert.equal(pointOf.get('k1')?.y, 48 + 2 * 144)
-    assert.equal(pointOf.get('p3')?.y, 48 + 3 * 144)
+    assert.equal(pointOf.get('p1')?.y, 48 + LEVEL)
+    assert.equal(pointOf.get('k1')?.y, 48 + 2 * LEVEL)
+    assert.equal(pointOf.get('p3')?.y, 48 + 3 * LEVEL)
     // Kinship interleave: p1's grandchildren sit between p1's band and p3's band.
     assert.ok((pointOf.get('k1')?.y as number) < (pointOf.get('p3')?.y as number))
     // Links keep their family hue through the interleave: p1's subtree is family 0, p3 is family 2.
     assert.equal(layout.links.find(l => l.to === 'k1')?.color, familyHue(0))
     assert.equal(layout.links.find(l => l.to === 'p3')?.color, familyHue(2))
-    assert.equal(layout.width, 320)
-    assert.equal(layout.height, 48 + 3 * 144 + 104 + 24)
+    assert.equal(layout.width, 400)
+    assert.equal(layout.height, 48 + 3 * LEVEL + AGENT_CARD_H + 24)
   })
 
   test('responsive: a partially filled band flushes before an overflowing sibling group', () => {
-    // Stage 300 → perLevel = 2. p1's single kid starts a band; p2's two kids
+    // Stage 400 → perLevel = 2. p1's single kid starts a band; p2's two kids
     // would overflow it, so the band flushes first (k1 alone, then k2a+k2b).
     const layout = layoutForest(forestOf([
       ['root'],
@@ -827,12 +832,12 @@ describe('layoutForest', () => {
       ['k1', 'p1'],
       ['k2a', 'p2'],
       ['k2b', 'p2'],
-    ]), 300)
+    ]), 400)
     const pointOf = new Map(layout.points.map(p => [p.id, p]))
-    assert.equal(pointOf.get('p1')?.y, 48 + 144)
-    assert.equal(pointOf.get('k1')?.y, 48 + 2 * 144)
-    assert.equal(pointOf.get('k2a')?.y, 48 + 3 * 144)
-    assert.equal(pointOf.get('k2b')?.y, 48 + 3 * 144)
+    assert.equal(pointOf.get('p1')?.y, 48 + LEVEL)
+    assert.equal(pointOf.get('k1')?.y, 48 + 2 * LEVEL)
+    assert.equal(pointOf.get('k2a')?.y, 48 + 3 * LEVEL)
+    assert.equal(pointOf.get('k2b')?.y, 48 + 3 * LEVEL)
     assert.equal(layout.links.length, 5)
     // k2a/k2b inherit p2's family hue (1), k1 inherits p1's (0).
     assert.equal(layout.links.find(l => l.to === 'k2a')?.color, familyHue(1))

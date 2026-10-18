@@ -10,6 +10,7 @@
 
 import type { FileOpRecord, RequestRecord, SurfaceNode } from '../shared/types'
 import { opsOfCall, parseCallArgs } from '../shared/fileOps'
+import { leafNameOf } from '../shared/attachment'
 // The harness's browser-safe file-address layer, inlined by the client bundle:
 // the produced address is the `dsh-resource://file/…` spelling the preview claims.
 import { fileAddressFor } from '@deepseek-ai/dsh-util-workspace-path'
@@ -152,10 +153,14 @@ function fileGlyph(base: string): FileGlyph {
   return { glyph: '📄', tip: 'files.form.text' }
 }
 
+/** The last segment of a path, either separator style, a trailing slash trimmed first. */
+export function baseNameOf(path: string): string {
+  return leafNameOf(path.endsWith('/') ? path.slice(0, -1) : path)
+}
+
 export function glyphOf(path: string, form: FileForm): FileGlyph {
   if (form === 'image') return { glyph: '🖼', tip: 'files.form.image' }
-  const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
-  const base = trimmed.slice(trimmed.lastIndexOf('/') + 1)
+  const base = baseNameOf(path)
   return form === 'dir' ? dirGlyph(base) : fileGlyph(base)
 }
 
@@ -188,16 +193,23 @@ export function previewAddressOf(
   }
 }
 
-/** The row's display path: inside the workspace (or already workspace-relative)
- * it shortens to a './'-prefixed relative; other forms stay verbatim. */
+/** The display form of a relative remainder: its repeating leading `./` drops;
+ * a raw all-`./` degenerate leaves nothing to show, so it displays as itself. */
+function bareOf(remainder: string): string {
+  const bare = remainder.replace(/^(?:\.\/)+/, '')
+  return bare !== '' ? bare : remainder
+}
+
+/** The row's display path: inside the workspace it shortens to the bare workspace-relative
+ * form, and other forms stay verbatim. */
 export function displayPathOf(path: string, workspace: string | undefined): string {
   const root = workspace !== undefined && workspace.length > 1 ? workspace.replace(/\/+$/, '') : undefined
   if (root !== undefined) {
-    if (path === root) return './'
-    if (path.startsWith(root + '/')) return './' + path.slice(root.length + 1)
+    if (path === root || path === root + '/') return './'
+    if (path.startsWith(root + '/')) return bareOf(path.slice(root.length + 1))
   }
-  if (path.startsWith('/') || DRIVE_PATH.test(path) || path.startsWith('.')) return path
-  return './' + path
+  if (path.startsWith('/') || DRIVE_PATH.test(path)) return path
+  return bareOf(path)
 }
 
 /** Fold op records into per-file activity: scope-filtered, aggregated per path, ops newest first. */

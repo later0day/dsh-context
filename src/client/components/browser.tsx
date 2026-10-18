@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
-import { UNKNOWN_TOOL_SOURCE, type Category, type ContextHeaders, type ContextTimeline, type HeaderTool, type RequestRecord, type SurfaceNode } from '../../shared/types'
+import { UNKNOWN_TOOL_SOURCE, type Category, type ContextHeaders, type ContextTimeline, type HeaderRecord, type HeaderTool, type RequestRecord, type SurfaceNode, type SystemPromptNode } from '../../shared/types'
 import { assemble } from '../assemble'
 import type { Assembled } from '../assemble'
 import { CATS, CAT_COLOR, partsOf } from '../categories'
@@ -14,13 +14,17 @@ import { makeDetailNote } from './detailNote'
 import { makeNodeText } from './nodes'
 import { turnStepsOf } from './trendChart'
 import { fetchMissNote, useFetchOnMiss } from './fetchOnMiss'
-import { imageRefOf, makeImageCard } from './images'
+import { attachmentsIn } from '../../shared/attachment'
+import { makeAttachmentSection } from './attachments'
 import { makeRichText } from './richText'
 import type { StackedBarProps } from './stackedBar'
-import type { ImageLoader } from '../services'
+import type { AttachmentOpener, ImageLoader } from '../services'
 import { TextSection, schemaTextOf, RowToolbar, ToolSchema, toolErrOf } from './browserToolCard'
+import { revealRowInCard } from '../revealScroll'
 import { NodeContent, byCatOf, nodeNameOf, msgKindsOf, reasoningTextOf, ROW_KINDS } from './browserNodes'
 import type { RowKind } from './browserNodes'
+import { MapIcon, makeBrowserTreemap } from './browserTreemap'
+import type { MapBlock } from '../treemap'
 
 export interface ContextBrowserProps {
   data: ContextTimeline
@@ -47,6 +51,8 @@ export interface ContextBrowserProps {
   onHoverKey?: (key: string | null) => void
   onOpenCat?: (cat: string | null) => void
   loadImage?: ImageLoader
+  /** On-click opener of one attachment's preview (attachmentSource.ts); absent = metadata only. */
+  openAttachment?: AttachmentOpener
   detailState?: DetailState
   onDetailRetry?: () => void
 }
@@ -94,9 +100,10 @@ export function makeContextBrowser(
 ): (props: ContextBrowserProps) => ReactElement {
   const { t, fmt, fmtTime, catLabel } = kit
   const DetailNote = makeDetailNote(kit)
+  const BrowserTreemap = makeBrowserTreemap(kit)
   const nodeText = makeNodeText(kit)
   const rich = makeRichText(kit)
-  const ImageCard = makeImageCard(kit)
+  const AttachmentSection = makeAttachmentSection(kit)
   const lineLabel = (n: number): string => t(n === 1 ? 'block.line' : 'block.lines', { n })
 
   return function ContextBrowser(props: ContextBrowserProps): ReactElement {
@@ -122,6 +129,11 @@ export function makeContextBrowser(
       }
     }
     const [dnaKey, setDnaKey] = useState<string | null>(null)
+    // The flat feed's row-hover mirror: hovering a row lights ITS band (exact node key) or band group
+    // ('tools'/'system') on the bar. A pointer hover overrides it; it never reports upward.
+    const [rowDnaKey, setRowDnaKey] = useState<string | null>(null)
+    // The block map is mount-local like the unlinked DNA toggle: a visualization lens, not shared page state.
+    const [mapOn, setMapOn] = useState(false)
     const [deltaBase, setDeltaBase] = useState<DefaultDeltaBase>(() => settings.defaultDeltaBase())
     const onOpenCat = props.onOpenCat
     const setCat = (c: string | null): void => {
@@ -174,17 +186,20 @@ export function makeContextBrowser(
     const catFocus = props.catFocus
     useEffect(() => {
       if (catFocus === null || catFocus === undefined) return
+      // A category jump has no landing spot in the DNA flat feed (no category rows): it drops back to the accordion.
+      if (dna) setDna(false)
       setSel('live')
       setCat(catFocus.cat)
       setOpenElem(null)
       setRowQuery('')
       setRowKind(catFocus.kind ?? null)
       if (props.onCatFocusHandled !== undefined) props.onCatFocusHandled()
-    }, [catFocus, props.onCatFocusHandled, onOpenCat])
+    }, [catFocus, props.onCatFocusHandled, onOpenCat, dna])
     useLayoutEffect(() => {
       if (!focusScrollRef.current) return
       focusScrollRef.current = false
-      rootRef.current?.querySelector('.lc-br-elem-on')?.scrollIntoView({ block: 'nearest' })
+      const row = rootRef.current?.querySelector('.lc-br-elem-on') ?? null
+      if (row !== null) revealRowInCard(rootRef.current, row)
     })
     // The note an un-joined open row shows, per fetch state (fetchOnMiss.tsx).
     const missNote = fetchMissNote(t, fetchContent, miss.state, miss.retry, 'browser.noContent')
@@ -233,12 +248,18 @@ export function makeContextBrowser(
       : null
     const view = assemble(data, headers, seq)
 
+    /** The tools group's element keys: the group key itself or any exact tool schema key. */
+    const toolsElemOpen = (): boolean => openElem === 'tools' || (openElem !== null && openElem.startsWith('tool:'))
+
     // The projections carry metadata only, so the selected step's content is fetched on demand (one history read per
     // open section); the system prompt rides the timeline's own `system/message` nodes, the tools the header epoch.
+    // Open-content keys: the accordion's open category, or — in the DNA flat feed — the open group/element row.
     const fetchHeader = props.fetchHeader
     const headerSeq = view.header !== null ? view.header.seq : null
     const systemSeq = view.system !== null ? view.system.seq : null
-    const contentSeq = openCat === 'system' ? systemSeq : openCat === 'tools' ? headerSeq : null
+    const sysOpen = openCat === 'system' || openElem === 'sys'
+    const toolsOpen = openCat === 'tools' || toolsElemOpen()
+    const contentSeq = sysOpen ? systemSeq : toolsOpen ? headerSeq : null
     const epoch = useFetchOnMiss(
       contentSeq,
       fetchHeader,
@@ -300,11 +321,31 @@ export function makeContextBrowser(
     // A band hover is honored only while its key names a RENDERED band: a push can drop the band under a resting pointer
     // without a mouseleave, and a dead key would leave the bar all-dimmed (the same invariant the pin's gate keeps).
     const liveDnaKey = dnaKey !== null && dnaByKey.has(dnaKey) ? dnaKey : null
+    // A row hover stays live only while DNA mode is on and its item still renders (a push can drop the
+    // hovered row and fire no mouseleave — a dead key must not dim the bar, the same invariant as liveDnaKey).
+    const rowDnaLive = dna && rowDnaKey !== null
+      && (rowDnaKey === 'tools' ? view.header !== null
+        : rowDnaKey === 'system' ? view.system !== null
+          : dnaByKey.has(rowDnaKey)) ? rowDnaKey : null
+    // A band hover brings its echoed row into view — within the rows region's own scrollport and nothing
+    // above it: the pointer rests on the bar, and a page scroll would drag it off the band mid-scrub.
+    useLayoutEffect(() => {
+      if (liveDnaKey === null) return
+      /* v8 ignore next 1 -- liveDnaKey non-null implies a mounted card: the ref always resolves. */
+      const row = rootRef.current?.querySelector('.lc-br-elem-echo') ?? null
+      /* v8 ignore next 1 -- a live band names a rendered item, so its echoed row always exists. */
+      if (row !== null) revealRowInCard(rootRef.current, row)
+    }, [liveDnaKey])
     const pickDna = (key: string): void => {
       const it = dnaByKey.get(key)
       /* v8 ignore next 1 -- the bar only reports keys of the parts it was handed; defensive. */
       if (it === undefined) return
-      setCat(it.cat)
+      openRow(it.cat, key)
+    }
+
+    /** One shared land-on-a-row sequence for every bar/map click that opens an exact row. */
+    const openRow = (c: string, key: string): void => {
+      setCat(c)
       setRowQuery('')
       setRowKind(null)
       setOpenElem(key)
@@ -327,6 +368,13 @@ export function makeContextBrowser(
     }
 
     const toggleCat = (c: string) => {
+      if (dna) {
+        // The flat feed has no category rows: system/tools land on their group rows; message categories are
+        // interleaved in the feed, so a bare category pick has no row to open (grouped map blocks filter instead).
+        if (c === 'system' && view.system !== null) { setOpenCat(c); setRowQuery(''); setOpenElem('sys') }
+        else if (c === 'tools') { setOpenCat(c); setRowQuery(''); setOpenElem('tools') }
+        return
+      }
       // Empty cats stay shut — except system/tools with no header epoch, which open to explain the degradation note.
       const openable = toolCount(c) > 0
         || ((c === 'system' || c === 'tools') && view.header === null)
@@ -341,19 +389,58 @@ export function makeContextBrowser(
       setRowKind(null)
       setOpenElem(singleKeyOf(c))
     }
-    const toggleElem = (key: string) => { setOpenElem(openElem === key ? null : key) }
+    // The flat feed's header group rows double as their category's row: opening one pins the category (bar and
+    // trend link) exactly like the accordion's category click; the tools group stays open while any of its
+    // element keys is. Message rows stay elem-scoped.
+    const toggleElem = (key: string) => {
+      if (dna && (key === 'tools' || key === 'sys')) {
+        const open = key === 'tools' ? toolsElemOpen() : openElem === key
+        setOpenElem(open ? null : key)
+        setCat(open ? null : key === 'tools' ? 'tools' : 'system')
+        if (!open) setRowQuery('')
+        return
+      }
+      setOpenElem(openElem === key ? null : key)
+    }
 
-    /** Expandable element row; `err` carries the red run-state dot right after the chevron so a failed result scans while collapsed. */
+    /** Block-map picks: a one-item block lands on its exact row (the DNA band pick's path), a multi-item
+     * block filters the category's rows to the group's tag, and the "others" fold just opens the category. */
+    const pickMapBlock = (c: string, b: MapBlock): void => {
+      if (b.elem !== undefined) {
+        openRow(c, b.elem)
+      } else {
+        setCat(c)
+        setRowKind(null)
+        setOpenElem(null)
+        setRowQuery(b.query ?? '')
+      }
+    }
+
+    /** Expandable element row; `err` carries the red run-state dot right after the chevron so a failed result scans while collapsed.
+     * `opts.open` overrides the `openElem === key` derivation for rows whose key set is wider (the flat feed's tools group);
+     * `opts.onHover` lets a DNA feed row light its own band on the composition bar. The reverse echo — a DNA band
+     * hover lighting its row — derives straight from the band key: a node or the system prompt matches its own row,
+     * a tool-schema band matches the tools group row. */
     const elemRow = (
       key: string, tag: ReactNode | null, preview: string,
       tokens: number, time: number | undefined, body: ReactNode,
       err = false, trailing: ReactNode = null,
       stamp: { turn: number; step: number; pending: boolean } | null = null,
+      opts?: { open?: boolean; onHover?: (over: boolean) => void },
     ) => {
-      const open = openElem === key
+      const open = opts?.open ?? openElem === key
+      const hover = opts?.onHover
+      const echo = dna && liveDnaKey !== null
+        && (liveDnaKey === key || (key === 'tools' && liveDnaKey.startsWith('tool:')))
       return (
-        <div key={key} className={'lc-br-elem' + (open ? ' lc-br-elem-on' : '')}>
-          <button type="button" className="lc-br-elem-row hover:bg-(--dsw-alias-interactive-bg-hover)" onClick={() => { toggleElem(key) }}>
+        <div key={key} className={'lc-br-elem' + (open ? ' lc-br-elem-on' : '') + (echo ? ' lc-br-elem-echo' : '')}>
+          <button
+            type="button"
+            className="lc-br-elem-row hover:bg-(--dsw-alias-interactive-bg-hover)"
+            onMouseEnter={hover !== undefined ? () => { hover(true) } : undefined}
+            onMouseLeave={hover !== undefined ? () => { hover(false) } : undefined}
+            onClick={() => { toggleElem(key) }}
+          >
             <span className={'lc-br-chev' + (open ? ' lc-br-chev-on' : '')} />
             {err ? <span className="lc-br-err-dot" title={t('node.failed')} /> : null}
             {tag !== null ? <span className="lc-br-tags">{tag}</span> : null}
@@ -396,6 +483,112 @@ export function makeContextBrowser(
       ))
     }
 
+    /** One message row's display facts, shared by the category bodies and the DNA flat feed, so the text
+     * filter scans exactly what the rows show — at derivation time, not per keystroke. */
+    const nodeRowOf = (n: SurfaceNode) => {
+      const conv = bySeq.get(n.seq)
+      // A `skill`-tool load reclassifies into the `skill` bucket but stays a tool result — same failure rule.
+      const rowErr = (n.cat === 'tool' || n.cat === 'skill') && toolErrOf(n, conv).err
+      let tag: string | null = null
+      let tagNames: string[] | null = null
+      let preview = nodeText(n)
+      const id = nodeNameOf(n)
+      if (n.cat === 'tool') {
+        tag = n.tool ?? '?'
+        tagNames = n.tool !== undefined ? [n.tool] : null
+        preview = callSummaryOf(conv) ?? t('node.toolResult')
+      } else if (n.cat === 'skill') {
+        tag = n.skill !== undefined ? t('node.skillTag', { name: n.skill }) : t('form.' + (n.form || 'context'))
+        preview = (n.skill === undefined && id !== '' ? id : null)
+          ?? (n.text !== undefined && n.text !== '' ? n.text : null)
+          ?? callSummaryOf(conv) ?? preview
+      } else if (n.cat === 'assistant') {
+        // The fold stamps `calls` only on TEXT-LESS replies; a reply carrying both text and calls recovers its
+        // breadcrumb through the join.
+        const names = Array.isArray(n.calls) && n.calls.length > 0 ? n.calls : callNamesOf(conv)
+        if (names.length > 0) {
+          tag = names.join(' › ')
+          tagNames = names
+          preview = (n.text !== undefined && n.text !== '' ? n.text : null)
+            ?? blockSummaryOf(conv)
+            ?? t('node.empty')
+        } else if (n.text === undefined || n.text === '') {
+          preview = blockSummaryOf(conv) ?? preview
+        }
+      } else if (n.cat === 'user') {
+        const attCount = attachmentsIn(conv?.content).length
+        if (attCount > 0 && openElem !== `n${n.seq}`) {
+          tag = t('attach.title') + (attCount > 1 ? ' ×' + String(attCount) : '')
+        }
+      } else {
+        tag = t('form.' + (n.form || 'context'))
+        if (id !== '') {
+          preview = id
+        } else if (n.text !== undefined && n.text !== '') {
+          preview = n.form === 'snapshot' ? t('node.snapshot') + n.text : n.text
+        }
+      }
+      return {
+        n,
+        conv,
+        rowErr,
+        tag,
+        tagNames,
+        preview,
+        reasoning: n.cat === 'assistant' ? reasoningTextOf(conv) : '',
+        kinds: msgKindsOf(n, conv),
+      }
+    }
+    type NodeRow = ReturnType<typeof nodeRowOf>
+
+    /** The text lens both row lists share: tag, preview, raw text, and thinking. */
+    const rowMatches = (r: NodeRow, q: string): boolean =>
+      (r.tag ?? '').toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)
+      || (typeof r.n.text === 'string' && r.n.text.toLowerCase().includes(q))
+      || r.reasoning.toLowerCase().includes(q)
+
+    /** One expandable message row — the category bodies' and the flat feed's shared renderer; `tag` composes
+     * the row's chips (the flat feed adds the category label and the prompt position) and `onHover` lights
+     * the row's own band on the bar. */
+    const messageRow = (r: NodeRow, tag: ReactNode, onHover?: (over: boolean) => void): ReactElement =>
+      elemRow(`n${r.n.seq}`, tag, r.preview, r.n.tokens, r.n.time,
+        <NodeContent
+          node={r.n}
+          conv={r.conv}
+          rich={rich}
+          att={{ Section: AttachmentSection, load: props.loadImage, open: props.openAttachment }}
+          labels={{
+            thinking: t('block.thinking'),
+            answer: t('block.answer'),
+            content: t('block.content'),
+            result: t('block.result'),
+            summary: t('block.summary'),
+            other: t('attach.other'),
+            lines: lineLabel,
+            callState: (err: boolean, exit: number | null) => (
+              <span className={'lc-ts-call-state ' + (err ? 'lc-ts-call-err' : 'lc-ts-call-ok')}>
+                <i />
+                {err
+                  ? t('call.fail') + (exit !== null ? ' · ' + t('call.exit', { n: exit }) : '')
+                  : t('call.ok')}
+              </span>
+            ),
+          }}
+          // Only the open row's body renders, so the miss note is exactly THIS join's fetch state.
+          hint={r.conv === undefined ? missNote : t('browser.noContent')}
+        />,
+        r.rowErr, null, stampFor(r.n.seq), onHover !== undefined ? { onHover } : undefined)
+
+    /** The system row's preview and content body, shared by the category body and the DNA flat feed. */
+    const systemPreviewOf = (sys: SystemPromptNode): string =>
+      headerContent.get(sys.seq)?.system?.replace(/\s+/g, ' ').trim().slice(0, 80) ?? ''
+    const systemBodyOf = (sys: SystemPromptNode): ReactNode => {
+      const content = headerContent.get(sys.seq)
+      if (content === undefined) return <div className="lc-br-note">{headerNote}</div>
+      if (content.system === undefined) return <div className="lc-br-note">{t('browser.noSystem')}</div>
+      return <TextSection label={catLabel('system')} text={content.system} rich={rich} lines={lineLabel} />
+    }
+
     const catBody = (c: string): ReactNode => {
       if (c === 'system') {
         // No prompt in force: the note must name the missing PROJECTION — no headers service versus no epoch yet.
@@ -406,9 +599,8 @@ export function makeContextBrowser(
         const content = headerContent.get(sys.seq)
         if (content === undefined) return <div className="lc-br-note">{headerNote}</div>
         if (content.system === undefined) return <div className="lc-br-note">{t('browser.noSystem')}</div>
-        return elemRow('sys', null, content.system.replace(/\s+/g, ' ').trim().slice(0, 80), breakdown.system, undefined,
-          <TextSection label={catLabel('system')} text={content.system} rich={rich} lines={lineLabel} />,
-          false, null, stampFor(sys.seq))
+        return elemRow('sys', null, systemPreviewOf(sys), breakdown.system, undefined,
+          systemBodyOf(sys), false, null, stampFor(sys.seq))
       }
       if (c === 'tools') {
         if (view.header === null) return <div className="lc-br-note">{t(headers === null ? 'browser.noHeader' : 'browser.noEpoch')}</div>
@@ -493,64 +685,7 @@ export function makeContextBrowser(
       }
       /* v8 ignore next 1 -- the body renders only when the category is open,
          which requires count > 0 ⟺ byCat[c] exists; defensive. */
-      const nodes = (byCat[c as Category] ?? []).slice().reverse()
-      // Rows derive their display facts first, so the text filter scans exactly what the rows show — at derivation time, not per keystroke.
-      const rows = nodes.map((n) => {
-        const conv = bySeq.get(n.seq)
-        // A `skill`-tool load reclassifies into the `skill` bucket but stays a tool result — same failure rule.
-        const rowErr = (n.cat === 'tool' || n.cat === 'skill') && toolErrOf(n, conv).err
-        let tag: string | null = null
-        let tagNames: string[] | null = null
-        let preview = nodeText(n)
-        const id = nodeNameOf(n)
-        if (n.cat === 'tool') {
-          tag = n.tool ?? '?'
-          tagNames = n.tool !== undefined ? [n.tool] : null
-          preview = callSummaryOf(conv) ?? t('node.toolResult')
-        } else if (n.cat === 'skill') {
-          tag = n.skill !== undefined ? t('node.skillTag', { name: n.skill }) : t('form.' + (n.form || 'context'))
-          preview = (n.skill === undefined && id !== '' ? id : null)
-            ?? (n.text !== undefined && n.text !== '' ? n.text : null)
-            ?? callSummaryOf(conv) ?? preview
-        } else if (n.cat === 'assistant') {
-          // The fold stamps `calls` only on TEXT-LESS replies; a reply carrying both text and calls recovers its
-          // breadcrumb through the join.
-          const names = Array.isArray(n.calls) && n.calls.length > 0 ? n.calls : callNamesOf(conv)
-          if (names.length > 0) {
-            tag = names.join(' › ')
-            tagNames = names
-            preview = (n.text !== undefined && n.text !== '' ? n.text : null)
-              ?? blockSummaryOf(conv)
-              ?? t('node.empty')
-          } else if (n.text === undefined || n.text === '') {
-            preview = blockSummaryOf(conv) ?? preview
-          }
-        } else if (n.cat === 'user') {
-          const imgCount = conv !== undefined && Array.isArray(conv.content)
-            ? conv.content.filter(b => imageRefOf(b) !== null).length
-            : 0
-          if (imgCount > 0 && openElem !== `n${n.seq}`) {
-            tag = t('attach.image') + (imgCount > 1 ? ' ×' + String(imgCount) : '')
-          }
-        } else {
-          tag = t('form.' + (n.form || 'context'))
-          if (id !== '') {
-            preview = id
-          } else if (n.text !== undefined && n.text !== '') {
-            preview = n.form === 'snapshot' ? t('node.snapshot') + n.text : n.text
-          }
-        }
-        return {
-          n,
-          conv,
-          rowErr,
-          tag,
-          tagNames,
-          preview,
-          reasoning: n.cat === 'assistant' ? reasoningTextOf(conv) : '',
-          kinds: msgKindsOf(n, conv),
-        }
-      })
+      const rows = (byCat[c as Category] ?? []).slice().reverse().map(nodeRowOf)
       const q = rowQuery.trim().toLowerCase()
       // Kind chips count over ALL of the shown step's rows — the step's composition, not the text-lens survivors.
       const kindCounts = c === 'assistant'
@@ -560,10 +695,7 @@ export function makeContextBrowser(
         ? rows
         : rows.filter(r =>
           (rowKind === null || r.kinds[rowKind])
-          && (q === ''
-            || (r.tag ?? '').toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)
-            || (typeof r.n.text === 'string' && r.n.text.toLowerCase().includes(q))
-            || r.reasoning.toLowerCase().includes(q)))
+          && (q === '' || rowMatches(r, q)))
       const rowctl = kindCounts === null
         ? <RowToolbar value={rowQuery} placeholder={t('browser.search.' + c)} onChange={setRowQuery} />
         : (
@@ -587,170 +719,256 @@ export function makeContextBrowser(
       return (
         <div>
           {rowctl}
-          {shown.map(({ n, conv, rowErr, tag, tagNames, preview }) => elemRow(`n${n.seq}`, rowTagNode(tag, tagNames), preview, n.tokens, n.time,
-            <NodeContent
-              node={n}
-              conv={conv}
-              rich={rich}
-              img={{ Card: ImageCard, load: props.loadImage }}
-              labels={{
-                thinking: t('block.thinking'),
-                answer: t('block.answer'),
-                content: t('block.content'),
-                result: t('block.result'),
-                summary: t('block.summary'),
-                images: t('attach.images'),
-                other: t('attach.other'),
-                lines: lineLabel,
-                callState: (err: boolean, exit: number | null) => (
-                  <span className={'lc-ts-call-state ' + (err ? 'lc-ts-call-err' : 'lc-ts-call-ok')}>
-                    <i />
-                    {err
-                      ? t('call.fail') + (exit !== null ? ' · ' + t('call.exit', { n: exit }) : '')
-                      : t('call.ok')}
-                  </span>
-                ),
-              }}
-              // Only the open row's body renders, so the miss note is exactly THIS join's fetch state.
-              hint={conv === undefined ? missNote : t('browser.noContent')}
-            />,
-            rowErr, null, stampFor(n.seq)))}
+          {shown.map(r => messageRow(r, rowTagNode(r.tag, r.tagNames)))}
+        </div>
+      )
+    }
+
+    /** The DNA feed row's category chip: the category's own color as a tinted capsule — the same
+     * color-mix idiom the delta badges and the block map's tiles use — so a row maps to its bar band at a glance. */
+    const catChip = (cat: Category | 'system' | 'tools'): ReactElement => (
+      <span
+        className="lc-br-tag"
+        style={{
+          background: `color-mix(in srgb, ${CAT_COLOR[cat]} 14%, transparent)`,
+          borderColor: `color-mix(in srgb, ${CAT_COLOR[cat]} 45%, transparent)`,
+        }}
+      >{catLabel(cat)}</span>
+    )
+
+    /** The DNA feed's header group row: one row for every tool schema, opening into the category body's
+     * toolbar and rows. It sits at the feed's bottom — the model reads the header before the messages. */
+    const toolsGroupRow = (header: HeaderRecord): ReactElement => {
+      const open = toolsElemOpen()
+      return elemRow(
+        'tools',
+        catChip('tools'),
+        t('browser.items', { n: header.tools.length }),
+        breakdown.tools,
+        undefined,
+        catBody('tools'),
+        false, null,
+        stampFor(header.seq),
+        { open, onHover: (over) => { setRowDnaKey(over ? 'tools' : null) } },
+      )
+    }
+
+    const systemRow = (sys: SystemPromptNode): ReactElement =>
+      elemRow('sys', catChip('system'), systemPreviewOf(sys),
+        breakdown.system, undefined, systemBodyOf(sys), false, null, stampFor(sys.seq),
+        { onHover: (over) => { setRowDnaKey(over ? 'system' : null) } })
+
+    /** The DNA feed: every assembled item as one flat row list in the prompt's reading order, presented
+     * bottom-up — the model reads oldest-first, so the NEWEST message is the top row and the header groups
+     * (tool schemas, system prompt) close the list. One text lens (`rowQuery`) — pinned in the card head —
+     * filters the feed's rows and the open tools group's schemas alike. */
+    const flatToolbar = (): ReactElement => (
+      <RowToolbar value={rowQuery} placeholder={t('browser.search.flat')} onChange={setRowQuery} />
+    )
+
+    const flatRows = (): ReactElement => {
+      const q = rowQuery.trim().toLowerCase()
+      const rows: ReactElement[] = []
+      // Positions count ascending in reading order; reversing the array must not renumber them.
+      const flow = view.nodes.map((n, i) => ({ r: nodeRowOf(n), pos: i + 1 })).reverse()
+      for (const { r, pos } of flow) {
+        if (q !== '' && !rowMatches(r, q)) continue
+        rows.push(messageRow(r, (
+          <>
+            {catChip(r.n.cat)}
+            <span className="lc-br-pos">#{fmt(pos)}</span>
+            {rowTagNode(r.tag, r.tagNames)}
+          </>
+        ), (over) => { setRowDnaKey(over ? 'n' + String(r.n.seq) : null) }))
+      }
+      // An empty q matches everything (String.includes('') is true), so the lens needs no short-circuit arms.
+      // A header-less surface (no epoch served) renders message bands only, so its feed carries no header rows.
+      const toolsHit = (view.header?.tools ?? []).some(tool =>
+        tool.name.toLowerCase().includes(q) || (tool.plugin ?? '').toLowerCase().includes(q))
+      const sys = view.system
+      const sysText = sys !== null ? headerContent.get(sys.seq)?.system ?? '' : ''
+      const sysHit = sys !== null && (systemPreviewOf(sys).toLowerCase().includes(q) || sysText.toLowerCase().includes(q))
+      if (view.header !== null && toolsHit) rows.push(toolsGroupRow(view.header))
+      if (sys !== null && sysHit) rows.push(systemRow(sys))
+      return (
+        <div className="lc-br-flat">
+          {rows}
+          {rows.length === 0 ? <div className="lc-br-note">{t('browser.rowNoMatch')}</div> : null}
         </div>
       )
     }
 
     return (
-      <div className="lc-card" ref={rootRef}>
-        <div className="lc-card-title">
-          <span className="lc-card-title-text">{t('browser.title')}</span>
-          <span className="lc-gran lc-br-dna-ctl" role="group" title={t('browser.dnaTip')}>
-            <button
-              type="button"
-              className={'lc-gran-btn' + (dna ? ' lc-gran-on' : '')}
-              onClick={() => { setDna(!dna) }}
+      <div className="lc-card lc-br" ref={rootRef}>
+        <div className="lc-br-head">
+          <div className="lc-card-title">
+            <span className="lc-card-title-text">{t('browser.title')}</span>
+            <span className="lc-gran lc-br-dna-ctl" role="group" title={t('browser.dnaTip')}>
+              <button
+                type="button"
+                className={'lc-gran-btn' + (dna ? ' lc-gran-on' : '')}
+                onClick={() => { setDna(!dna) }}
+              >
+                {t('browser.dna')}
+              </button>
+            </span>
+            <span className="lc-gran" role="group" title={t('browser.base.tip')}>
+              <button
+                type="button"
+                className={'lc-gran-btn' + (deltaBase === 'step' ? ' lc-gran-on' : '')}
+                onClick={() => { setDeltaBase('step') }}
+              >
+                {t('browser.base.step')}
+              </button>
+              <button
+                type="button"
+                className={'lc-gran-btn' + (deltaBase === 'turn' ? ' lc-gran-on' : '')}
+                onClick={() => { setDeltaBase('turn') }}
+              >
+                {t('browser.base.turn')}
+              </button>
+            </span>
+            <select
+              className="lc-br-pick"
+              value={seq === null ? 'live' : String(seq)}
+              onChange={(e) => { pick(e.target.value) }}
             >
-              {t('browser.dna')}
-            </button>
-          </span>
-          <span className="lc-gran" role="group" title={t('browser.base.tip')}>
-            <button
-              type="button"
-              className={'lc-gran-btn' + (deltaBase === 'step' ? ' lc-gran-on' : '')}
-              onClick={() => { setDeltaBase('step') }}
-            >
-              {t('browser.base.step')}
-            </button>
-            <button
-              type="button"
-              className={'lc-gran-btn' + (deltaBase === 'turn' ? ' lc-gran-on' : '')}
-              onClick={() => { setDeltaBase('turn') }}
-            >
-              {t('browser.base.turn')}
-            </button>
-          </span>
-          <select
-            className="lc-br-pick"
-            value={seq === null ? 'live' : String(seq)}
-            onChange={(e) => { pick(e.target.value) }}
-          >
-            <option value="live">{t('browser.live')}</option>
-            {requests.slice().reverse().map(r => (
-              <option key={r.seq} value={String(r.seq)}>
-                {t('detail.step', { t: r.turn ?? 0, s: r.step ?? 0, n: stepsOf(r.turn) })}
-              </option>
-            ))}
-          </select>
-        </div>
+              <option value="live">{t('browser.live')}</option>
+              {requests.slice().reverse().map(r => (
+                <option key={r.seq} value={String(r.seq)}>
+                  {t('detail.step', { t: r.turn ?? 0, s: r.step ?? 0, n: stepsOf(r.turn) })}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        <div className="lc-br-meta">
-          <b>{req !== null
-            ? t('detail.step', { t: req.turn ?? 0, s: req.step ?? 0, n: stepsOf(req.turn) })
-            : t('browser.liveNow')}</b>
-          {req !== null ? <span>{fmtTime(req.time)}</span> : null}
-          <span className="lc-est">{t('detail.estTotal', { n: fmt(total) })}</span>
-          {actual !== null && actual.prompt !== undefined
-            ? <span>{t('detail.actual', { n: fmt(actual.prompt) })}</span>
-            : null}
-        </div>
-
-        <div className={'lc-br-bar' + (dna ? ' lc-br-bar-dna' : '')}>
-          <StackedBar
-            parts={dnaParts ?? parts}
-            height={10}
-            // Highlight precedence: pointer hover (local in DNA mode, the shared link otherwise) over the open-category pin. In
-            // DNA mode the mirrored link is ONE-WAY: an incoming category key lights that category's bands, while band hovers stay
-            // on the bar and never report upward.
-            hoverKey={dna ? liveDnaKey ?? linkKey ?? pinKey : linkKey ?? pinKey}
-            onHoverKey={dna ? setDnaKey : linked ? props.onHoverKey : undefined}
-            tip={dna}
-            onPickKey={dna ? pickDna : undefined}
-            minBand={dna ? DNA_MIN_BAND : undefined}
-          />
-        </div>
-
-        {view.missingLive > 0
-          ? <div className="lc-br-note">{t('browser.missingLive', { n: view.missingLive })}</div>
-          : null}
-        {view.approximate
-          ? <div className="lc-br-note">{t('browser.approx')}</div>
-          : null}
-        {props.detailState === 'loading'
-          ? <DetailNote state="loading" className="lc-br-note" />
-          : null}
-        {props.detailState === 'failed' && props.onDetailRetry !== undefined
-          ? <DetailNote state="failed" onRetry={props.onDetailRetry} className="lc-br-note" />
-          : null}
-
-        <div className="lc-br-cats">
-          {CATS.map((c) => {
-            const count = toolCount(c.key)
-            const v = breakdown[c.key] || 0
-            const prevCount = zeroBase ? 0 : prevView !== null && prevByCat !== null ? countOf(prevView, prevByCat, c.key) : null
-            const countDelta = prevCount !== null ? count - prevCount : null
-            const prevTokens = zeroBase ? 0 : refReq !== null ? (refReq[c.key] || 0) : null
-            const tokenDelta = prevTokens !== null ? v - prevTokens : null
-            const openable = count > 0
-              || ((c.key === 'system' || c.key === 'tools') && view.header === null)
-            const open = openCat === c.key && openable
-            return (
-              <div key={c.key} className={'lc-br-cat' + (openable ? '' : ' lc-br-cat-empty')}>
-                <button
-                  type="button"
-                  className={'lc-br-cat-row hover:bg-(--dsw-alias-interactive-bg-hover)'
-                    + (open ? ' lc-br-cat-open' : '')
-                    + (linked && props.hoverKey === c.key ? ' lc-br-cat-on' : '')}
-                  /* v8 ignore start -- the handlers exist only when linked,
-                     and linked already requires onHoverKey defined (above). */
-                  onMouseEnter={linked ? () => { if (props.onHoverKey !== undefined) props.onHoverKey(c.key) } : undefined}
-                  onMouseLeave={linked ? () => { if (props.onHoverKey !== undefined) props.onHoverKey(null) } : undefined}
-                  /* v8 ignore stop */
-                  onClick={() => { toggleCat(c.key) }}
-                >
-                  <span className={'lc-br-chev' + (open ? ' lc-br-chev-on' : '')} />
-                  <i style={{ background: c.color }} />
-                  <span className="lc-br-cat-label">{catLabel(c.key)}</span>
-                  <span className="lc-br-count-grp">
-                    <span className="lc-br-cat-count">{t('browser.items', { n: count })}</span>
-                    {countDelta !== null && countDelta !== 0 ? (
-                      <span className={'lc-br-delta lc-br-delta-' + (countDelta > 0 ? 'up' : 'down')}>
-                        {`${countDelta > 0 ? '+' : ''}${countDelta}`}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="lc-br-tokens-grp">
-                    {tokenDelta !== null && tokenDelta !== 0 ? (
-                      <span className={'lc-br-tdelta lc-br-tdelta-' + (tokenDelta > 0 ? 'up' : 'down')}>
-                        {(tokenDelta > 0 ? '+' : '') + fmt(tokenDelta)}
-                      </span>
-                    ) : null}
-                    <span className="lc-br-tokens">{'≈' + fmt(v)}</span>
-                  </span>
-                  <span className="lc-br-pct">{total > 0 ? `${Math.round(v / total * 100)}%` : ''}</span>
-                </button>
-                {open ? <div className="lc-br-body">{catBody(c.key)}</div> : null}
+          <div className={'lc-br-bar' + (dna ? ' lc-br-bar-dna' : '')}>
+            <div className="lc-br-bar-main">
+              <div className="lc-br-meta">
+                <b>{req !== null
+                  ? t('detail.step', { t: req.turn ?? 0, s: req.step ?? 0, n: stepsOf(req.turn) })
+                  : t('browser.liveNow')}</b>
+                {req !== null ? <span>{fmtTime(req.time)}</span> : null}
+                <span className="lc-est">{t('detail.estTotal', { n: fmt(total) })}</span>
+                {actual !== null && actual.prompt !== undefined
+                  ? <span>{t('detail.actual', { n: fmt(actual.prompt) })}</span>
+                  : null}
               </div>
-            )
-          })}
+              <StackedBar
+                parts={dnaParts ?? parts}
+                height={10}
+                // Highlight precedence: pointer hover (local in DNA mode, the shared link otherwise) over the open-category pin. In
+                // DNA mode the mirrored link is ONE-WAY: an incoming category key lights that category's bands, while band hovers stay
+                // on the bar and never report upward.
+                hoverKey={dna ? liveDnaKey ?? rowDnaLive ?? linkKey ?? pinKey : linkKey ?? pinKey}
+                onHoverKey={dna ? setDnaKey : linked ? props.onHoverKey : undefined}
+                tip={dna}
+                onPickKey={dna ? pickDna : undefined}
+                minBand={dna ? DNA_MIN_BAND : undefined}
+              />
+            </div>
+            <button
+              type="button"
+              className={'lc-br-map-btn' + (mapOn ? ' lc-br-map-btn-on' : '')}
+              title={t('browser.mapTip')}
+              aria-label={t('browser.mapAria')}
+              aria-pressed={mapOn}
+              onClick={() => { setMapOn(!mapOn) }}
+            >
+              <MapIcon />
+            </button>
+          </div>
+
+          {view.missingLive > 0
+            ? <div className="lc-br-note">{t('browser.missingLive', { n: view.missingLive })}</div>
+            : null}
+          {view.approximate
+            ? <div className="lc-br-note">{t('browser.approx')}</div>
+            : null}
+          {props.detailState === 'loading'
+            ? <DetailNote state="loading" className="lc-br-note" />
+            : null}
+          {props.detailState === 'failed' && props.onDetailRetry !== undefined
+            ? <DetailNote state="failed" onRetry={props.onDetailRetry} className="lc-br-note" />
+            : null}
+
+          {dna ? flatToolbar() : null}
+        </div>
+
+        {/* The block map sits in the card's fixed zone, right under the head: the rows region below is the
+            only scroller, and the map keeps the height it opens at (browser.css). */}
+        {mapOn
+          ? (
+            <BrowserTreemap
+              view={view}
+              openCat={openCat}
+              hoverKey={linkKey}
+              // The map reports its category upward only outside DNA mode: there the bar's link is one-way (an
+              // incoming category key lights that category's bands; bar hovers stay local), and the map — the
+              // bar's companion surface — keeps the same convention so every hover link mirrors the bar's.
+              onHoverKey={dna ? undefined : linked ? props.onHoverKey : undefined}
+              onPickCat={toggleCat}
+              onPickBlock={pickMapBlock}
+            />
+          )
+          : null}
+
+        <div className="lc-br-scroll">
+          {dna
+            ? flatRows()
+            : (
+              <div className="lc-br-cats">
+                {CATS.map((c) => {
+                  const count = toolCount(c.key)
+                  const v = breakdown[c.key] || 0
+                  const prevCount = zeroBase ? 0 : prevView !== null && prevByCat !== null ? countOf(prevView, prevByCat, c.key) : null
+                  const countDelta = prevCount !== null ? count - prevCount : null
+                  const prevTokens = zeroBase ? 0 : refReq !== null ? (refReq[c.key] || 0) : null
+                  const tokenDelta = prevTokens !== null ? v - prevTokens : null
+                  const openable = count > 0
+                    || ((c.key === 'system' || c.key === 'tools') && view.header === null)
+                  const open = openCat === c.key && openable
+                  return (
+                    <div key={c.key} className={'lc-br-cat' + (openable ? '' : ' lc-br-cat-empty')}>
+                      <button
+                        type="button"
+                        className={'lc-br-cat-row hover:bg-(--dsw-alias-interactive-bg-hover)'
+                          + (open ? ' lc-br-cat-open' : '')
+                          + (linked && props.hoverKey === c.key ? ' lc-br-cat-on' : '')}
+                        /* v8 ignore start -- the handlers exist only when linked,
+                           and linked already requires onHoverKey defined (above). */
+                        onMouseEnter={linked ? () => { if (props.onHoverKey !== undefined) props.onHoverKey(c.key) } : undefined}
+                        onMouseLeave={linked ? () => { if (props.onHoverKey !== undefined) props.onHoverKey(null) } : undefined}
+                        /* v8 ignore stop */
+                        onClick={() => { toggleCat(c.key) }}
+                      >
+                        <span className={'lc-br-chev' + (open ? ' lc-br-chev-on' : '')} />
+                        <i style={{ background: c.color }} />
+                        <span className="lc-br-cat-label">{catLabel(c.key)}</span>
+                        <span className="lc-br-count-grp">
+                          <span className="lc-br-cat-count">{t('browser.items', { n: count })}</span>
+                          {countDelta !== null && countDelta !== 0 ? (
+                            <span className={'lc-br-delta lc-br-delta-' + (countDelta > 0 ? 'up' : 'down')}>
+                              {`${countDelta > 0 ? '+' : ''}${countDelta}`}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="lc-br-tokens-grp">
+                          {tokenDelta !== null && tokenDelta !== 0 ? (
+                            <span className={'lc-br-tdelta lc-br-tdelta-' + (tokenDelta > 0 ? 'up' : 'down')}>
+                              {(tokenDelta > 0 ? '+' : '') + fmt(tokenDelta)}
+                            </span>
+                          ) : null}
+                          <span className="lc-br-tokens">{'≈' + fmt(v)}</span>
+                        </span>
+                        <span className="lc-br-pct">{total > 0 ? `${Math.round(v / total * 100)}%` : ''}</span>
+                      </button>
+                      {open ? <div className="lc-br-body">{catBody(c.key)}</div> : null}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
         </div>
       </div>
     )

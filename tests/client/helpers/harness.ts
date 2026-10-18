@@ -11,7 +11,7 @@ export interface SlotEntry {
 }
 
 export class TestSlots implements SlotsService {
-  readonly entries: SlotEntry[] = []
+  readonly seated: SlotEntry[] = []
 
   inject(_name: string, callback: () => unknown): unknown {
     // slots.inject is a declaration injection riding the caller's effect:
@@ -21,16 +21,35 @@ export class TestSlots implements SlotsService {
 
   register(registration: SlotRegistration, component: (props: { sessionId?: string } & Record<string, unknown>) => unknown): unknown {
     const entry: SlotEntry = { registration, component }
-    this.entries.push(entry)
+    this.seated.push(entry)
     return () => {
-      const i = this.entries.indexOf(entry)
-      if (i >= 0) this.entries.splice(i, 1)
+      const i = this.seated.indexOf(entry)
+      if (i >= 0) this.seated.splice(i, 1)
     }
+  }
+
+  /** The raw ledger view (`SlotRegistry.entries`): one stored record per seated
+   * entry of the slot, `options` carrying the registered cell fields — the shape
+   * the session header reads and the second-mount guard proves against. */
+  entries(name: string): {
+    component: SlotEntry['component']
+    options: { key?: string; id?: string; order?: number; priority?: number }
+    locale?: string
+  }[] {
+    return this.of(name).map(e => ({
+      component: e.component,
+      options: {
+        ...(e.registration.key !== undefined ? { key: e.registration.key } : {}),
+        ...(e.registration.id !== undefined ? { id: e.registration.id } : {}),
+        ...(e.registration.order !== undefined ? { order: e.registration.order } : {}),
+      },
+      ...(e.registration.locale !== undefined ? { locale: e.registration.locale } : {}),
+    }))
   }
 
   /** Every registration for a slot name (list slots keep several). */
   of(name: string): SlotEntry[] {
-    return this.entries.filter(e => e.registration.name === name)
+    return this.seated.filter(e => e.registration.name === name)
   }
 }
 

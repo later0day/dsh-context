@@ -199,6 +199,7 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
             { id: 'count', label: t('files.sort.count') },
             { id: 'latest', label: t('files.sort.latest') },
             { id: 'path', label: t('files.sort.path') },
+            { id: 'name', label: t('files.sort.name') },
           ]}
           onPick={(id) => { set?.('defaultFileSort', id) }}
         />

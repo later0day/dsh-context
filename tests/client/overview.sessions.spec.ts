@@ -240,7 +240,7 @@ describe('requestActivityBackfill', () => {
       return { ok: true }
     })
     requestActivityBackfill()
-    assert.deepEqual(calls, [['/api/dsh-context/backfill', { method: 'POST' }]])
+    assert.deepEqual(calls, [['api/dsh-context/backfill', { method: 'POST' }]])
     vi.stubGlobal('fetch', async () => Promise.reject(new Error('route absent')))
     requestActivityBackfill()
     vi.stubGlobal('fetch', () => { throw new Error('hostile transport') })

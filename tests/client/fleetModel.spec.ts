@@ -240,4 +240,117 @@ describe('useFleetDetails', () => {
     await flush()
     assert.equal(box.current?.landed.size, 0)
   })
+
+  test('a full landing after unmount updates nothing', async () => {
+    const cache = new FleetDetailCache()
+    let release: (d: FleetDetail | null) => void = () => {}
+    vi.spyOn(cache, 'fetch').mockImplementation((_id: string, _stamp: number, full?: boolean) => {
+      if (full !== true) return Promise.resolve(null)
+      return new Promise((resolve) => { release = resolve })
+    })
+    const { box, Probe } = probeDetails(cache)
+    const m = await mount(h(Probe))
+    const state = box.current as FleetDetailState
+    act(() => { state.requestFull('a') })
+    await m.unmount()
+    release({ messages: [], truncated: false, lastReply: { time: 1, text: 'late' } })
+    await flush()
+    assert.equal(box.current?.fullLanded.size, 0)
+  })
+
+  test('requestFull reads the full ledger once per session and lands fullLanded', async () => {
+    let fullReads = 0
+    const cache = new FleetDetailCache()
+    vi.spyOn(cache, 'fetch').mockImplementation((_id: string, _stamp: number, full?: boolean) => {
+      if (full === true) {
+        fullReads += 1
+        return Promise.resolve({ messages: [], truncated: false, lastReply: { time: 1, text: 'FULL' } })
+      }
+      return Promise.resolve(null)
+    })
+    const { box, Probe } = probeDetails(cache)
+    const m = await mount(h(Probe))
+    const state = box.current as FleetDetailState
+
+    act(() => { state.requestFull('a') })
+    assert.equal(box.current?.fullPending.has('a'), true)
+    // A second ask is deduped to the same single read.
+    act(() => { state.requestFull('a') })
+    await act(async () => {})
+    assert.equal(fullReads, 1)
+    assert.equal(box.current?.fullPending.size, 0)
+    assert.equal(box.current?.fullLanded.get('a')?.lastReply?.text, 'FULL')
+    assert.equal(box.current?.landed.size, 0, 'the excerpt ledger stays untouched')
+    await m.unmount()
+  })
+
+  test('a read serving nothing lands null once and never re-reads', async () => {
+    let fullReads = 0
+    const cache = new FleetDetailCache()
+    vi.spyOn(cache, 'fetch').mockImplementation((_id: string, _stamp: number, full?: boolean) => {
+      if (full !== true) return Promise.resolve(null)
+      fullReads += 1
+      // A transport failure settles as null inside the cache (its own catch); the hook's
+      // contract is a total promise.
+      return Promise.resolve(null)
+    })
+    const { box, Probe } = probeDetails(cache)
+    const m = await mount(h(Probe))
+    const state = box.current as FleetDetailState
+    act(() => { state.requestFull('a') })
+    await act(async () => {})
+    assert.equal(box.current?.fullLanded.get('a') ?? null, null, 'the absence path lands as null')
+    assert.equal(box.current?.fullPending.size, 0)
+    act(() => { state.requestFull('a') })
+    await act(async () => {})
+    assert.equal(fullReads, 1, 'a settled ask is deduped even when it read nothing')
+    await m.unmount()
+  })
+
+  test('a later full landing replaces the first; the pending set drains exactly once', async () => {
+    const releases: Array<(d: FleetDetail | null) => void> = []
+    const cache = new FleetDetailCache()
+    vi.spyOn(cache, 'fetch').mockImplementation((_id: string, _stamp: number, full?: boolean) => {
+      if (full !== true) return Promise.resolve(null)
+      return new Promise((resolve) => { releases.push(resolve) })
+    })
+    const { box, Probe } = probeDetails(cache)
+    const m = await mount(h(Probe))
+    const state = box.current as FleetDetailState
+
+    // The excerpt arms the stamp the full read rides; the fold's read spells from it.
+    act(() => { state.request('a', 5) })
+    await act(async () => {})
+    act(() => { state.requestFull('a') })
+    // A refresh released the ledger line mid-flight; the next unfold asks again — two reads
+    // in flight, one pending mark.
+    act(() => { state.refresh([nodeOf('a', { updatedAt: 5 })]) })
+    act(() => { state.requestFull('a') })
+    assert.equal(releases.length, 2)
+    assert.equal(box.current?.fullPending.size, 1)
+
+    // Both flights settle on the SAME value (a cache-hit replay): the first landing writes the
+    // map; the second's identity bail-out writes nothing new.
+    const landed: FleetDetail = { messages: [], truncated: false, lastReply: { time: 1, text: 'first' } }
+    await act(async () => { releases[0]!(landed) })
+    assert.equal(box.current?.fullLanded.get('a')?.lastReply?.text, 'first')
+    assert.equal(box.current?.fullPending.size, 0, 'the first landing drains the set')
+    await act(async () => { releases[1]!(landed) })
+    assert.equal(box.current?.fullLanded.get('a')?.lastReply?.text, 'first')
+    assert.equal(box.current?.fullPending.size, 0)
+    await m.unmount()
+  })
+
+  test('refresh drops both ledgers', async () => {
+    const cache = new FleetDetailCache()
+    const invalidated: string[] = []
+    vi.spyOn(cache, 'invalidate').mockImplementation(id => { invalidated.push(id) })
+    const { box, Probe } = probeDetails(cache)
+    const m = await mount(h(Probe))
+    const state = box.current as FleetDetailState
+    act(() => { state.requestFull('a') })
+    act(() => { state.refresh([nodeOf('a', { updatedAt: 1 })]) })
+    assert.deepEqual(invalidated, ['a'])
+    await m.unmount()
+  })
 })

@@ -98,18 +98,18 @@ describe('ContextBrowser message categories', () => {
     const rows = elemRows(m)
     assert.equal(rows.length, 8, 'user + compaction nodes, newest first')
     assert.equal(text(query(rows[0], '.lc-br-preview')), 'empty summary')
-    // Image chips ride the collapsed row (seq 1 ×2, seq 2 ×1).
+    // Attachment chips ride the collapsed row (seq 1 ×2 images, seq 2 ×1).
     const rowOf = (preview: string) => rows.find(r => text(r).includes(preview)) as HTMLElement
-    assert.ok(text(rowOf('with images')).includes('Image ×2'))
-    assert.ok(text(rowOf('one pic')).includes('Image'))
+    assert.ok(text(rowOf('with images')).includes('Attachments ×2'))
+    assert.ok(text(rowOf('one pic')).includes('Attachments'))
     assert.ok(!text(rowOf('one pic')).includes('×'))
     // Open seq 1: the chip makes way for the grid; loader resolves two cards.
     await click(rowOf('with images'))
     await flush()
     let content = query(m.container, '.lc-br-content')
-    assert.ok(!text(elemRows(m).find(r => text(r).includes('with images')) as HTMLElement).includes('Image ×2'),
+    assert.ok(!text(elemRows(m).find(r => text(r).includes('with images')) as HTMLElement).includes('Attachments ×2'),
       'expanded row drops the chip')
-    assert.ok(text(content).includes('Images'))
+    assert.ok(text(content).includes('Attachments'))
     const imgs = queryAll<HTMLImageElement>(content, '.lc-att-thumb img')
     assert.equal(imgs.length, 2, 'both loads resolved')
     assert.ok(imgs[0].src.includes('blob:a1'))
@@ -331,7 +331,7 @@ describe('ContextBrowser message categories', () => {
     assert.ok(heads.some(s => s.includes('→ noargs')))
     assert.ok(heads.some(s => s.includes('Result')), 'nested tool-result text section')
     assert.ok(heads.filter(s => s.includes('Other content')).length === 6, 'unknown blocks render raw JSON')
-    assert.ok(heads.some(s => s.includes('Images')))
+    assert.ok(heads.some(s => s.includes('Attachments')))
     const argVals = queryAll(content, '.lc-ts-arg-row').map(el => text(el))
     assert.ok(argVals.some(s => s.includes('command') && s.includes('ls')))
     assert.ok(argVals.some(s => s.includes('timeout') && s.includes('30')))

@@ -152,7 +152,7 @@ export type DefaultTrendMode = 'total' | 'delta'
 /** The browser delta baseline: against the immediately preceding record, or the previous turn's last step. */
 export type DefaultDeltaBase = 'step' | 'turn'
 
-export type DefaultFileSort = 'count' | 'latest' | 'path'
+export type DefaultFileSort = 'count' | 'latest' | 'path' | 'name'
 
 export type DefaultToolSort = 'size' | 'count' | 'name'
 
@@ -194,6 +194,9 @@ export interface Snapshot {
   model?: string
   provider?: string
   contextWindow?: number
+  /** The newest request envelope's routed output cap, which auto-compaction reserves before pricing
+   * its pressure trigger. Absent = no cap in the log (or a row folded before the field existed). */
+  maxOutputTokens?: number
   current: {
     system: number
     tools: number

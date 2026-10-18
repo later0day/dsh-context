@@ -10,6 +10,7 @@
  */
 
 import { asRecord } from './services'
+import type { AgentForest, AgentNode } from './agentTree'
 
 export interface FleetTeamMember {
   id: string
@@ -115,6 +116,14 @@ export function teamMemberOf(team: FleetTeam | null, sessionId: string): FleetTe
   return null
 }
 
+/** The name a graph card leads with for one node: teammates only — the lead's card keeps the
+ * session's own title, the current session's card is the self card, outsiders keep their prompt. */
+export function teammateNameOf(team: FleetTeam | null, node: AgentNode): string | undefined {
+  if (node.isCurrent) return undefined
+  const member = teamMemberOf(team, node.id)
+  return member !== null && member.role === 'teammate' ? member.name : undefined
+}
+
 /** A member's id off their roster NAME — the task board's ownership join key. */
 export function memberIdByName(team: FleetTeam | null, name: string | undefined): string | undefined {
   if (team === null || name === undefined) return undefined
@@ -128,4 +137,12 @@ export function memberIdByName(team: FleetTeam | null, name: string | undefined)
 export function tasksOfOwner(team: FleetTeam | null, ownerName: string | undefined): FleetTeamTask[] {
   if (team === null || ownerName === undefined) return []
   return team.tasks.filter(task => task.ownerName === ownerName)
+}
+
+/** The family's nodes outside the team roster — plain subagents, ancestors, siblings. The current
+ * session never counts (the members board's "other agents" and the task board's delegations share
+ * this scope). */
+export function familyOthersOf(forest: AgentForest | null, team: FleetTeam | null): AgentNode[] {
+  if (forest === null) return []
+  return forest.nodes.filter(n => !n.isCurrent && teamMemberOf(team, n.id) === null)
 }

@@ -146,6 +146,20 @@ describe('watchFleetChannel gating', () => {
     assert.equal(value.initialPrompt, 'do the thing')
   })
 
+  test('a full body lifts the excerpt caps; an absent or junk full flag reads excerpts', async () => {
+    const long = { type: 'assistant/message', seq: 1, time: 1, data: { message: { content: [{ type: 'text', text: 'z'.repeat(400) }] } } }
+    const { captured } = armed({ sessionQuery: observing([long]) })
+    const excerpt = await call(captured, { sessionId: 's1' }) as { value: { lastReply: { text: string }; truncated: boolean } }
+    assert.equal(excerpt.value.lastReply.text.length, 301)
+    assert.equal(excerpt.value.truncated, true)
+    const full = await call(captured, { sessionId: 's1', full: true }) as typeof excerpt
+    assert.equal(full.value.lastReply.text.length, 400)
+    assert.equal(full.value.truncated, false)
+    // A junk flag and an excerpt-mode read agree.
+    const junk = await call(captured, { sessionId: 's1', full: 42 }) as typeof excerpt
+    assert.equal(junk.value.lastReply.text.length, 301)
+  })
+
   test('an observation without a dispose method still serves', async () => {
     const { captured } = armed({
       sessionQuery: {
@@ -238,6 +252,18 @@ describe('fleetDetailOfEvents — the delegation prompt', () => {
     assert.equal(detail.initialPrompt?.length, 1601)
     assert.equal(detail.truncated, true)
   })
+
+  test('the full read lifts the prompt cap to the hostile-payload bound', () => {
+    const events = [
+      { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: 'x'.repeat(80_000) }] } },
+    ]
+    const excerpt = fleetDetailOfEvents(events)
+    assert.equal(excerpt.initialPrompt?.length, 1601)
+    assert.equal(excerpt.truncated, true)
+    const full = fleetDetailOfEvents(events, true)
+    assert.equal(full.initialPrompt?.length, 80_000)
+    assert.equal(full.truncated, false)
+  })
 })
 
 describe('fleetDetailOfEvents — roster facts and latest reply', () => {
@@ -281,6 +307,15 @@ describe('fleetDetailOfEvents — roster facts and latest reply', () => {
     ])
     assert.equal(detail.lastReply?.text.length, 301)
     assert.equal(detail.truncated, true)
+  })
+
+  test('the full read lifts the reply cap to the hostile-payload bound', () => {
+    const events = [
+      { type: 'assistant/message', seq: 1, time: 1, data: { message: { content: [{ type: 'text', text: 'z'.repeat(120_000) }] } } },
+    ]
+    const full = fleetDetailOfEvents(events, true)
+    assert.equal(full.lastReply?.text.length, 100_001, 'the bound stands even in full mode')
+    assert.equal(full.truncated, true)
   })
 
   test('the mailbox transport preamble strips off the excerpt', () => {

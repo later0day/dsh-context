@@ -52,17 +52,17 @@ describe('TrendChart DNA mode', () => {
     assert.equal(dnaDivs.length, 2)
     assert.equal(dnaDivs[0].style.height, `${Math.round(300 / 600 * CHART_H)}px`)
     assert.equal(dnaDivs[1].style.height, `${CHART_H}px`)
-    // d1: the two adjacent assistant bands coalesce into ONE blue run (50% → 100%).
+    // d1: the two adjacent assistant bands coalesce into ONE blue run (28px → 56px on the shared scale).
     const g1 = dnaDivs[0].style.background
     assert.ok(g1.startsWith('linear-gradient(to top, '), g1)
-    assert.ok(g1.includes('var(--color-indigo-500) 0%, var(--color-indigo-500) 33.33%'), g1)
-    assert.ok(g1.includes('var(--color-amber-500) 33.33%, var(--color-amber-500) 50%'), g1)
-    assert.ok(g1.includes('var(--color-blue-500) 50%, var(--color-blue-500) 100%'), g1)
+    assert.ok(g1.includes('var(--color-indigo-500) 0px, var(--color-indigo-500) 18.67px'), g1)
+    assert.ok(g1.includes('var(--color-amber-500) 18.67px, var(--color-amber-500) 28px'), g1)
+    assert.ok(g1.includes('var(--color-blue-500) 28px, var(--color-blue-500) 56px'), g1)
     // d2: the zero-token user band leaves no run of its own; the teal run starts at its offset.
     const g2 = dnaDivs[1].style.background
-    assert.ok(g2.includes('var(--color-blue-500) 33.33%, var(--color-blue-500) 46.67%'), g2)
-    assert.ok(g2.includes('var(--color-green-500) 46.67%, var(--color-green-500) 63.33%'), g2)
-    assert.ok(g2.includes('var(--color-teal-500) 63.33%, var(--color-teal-500) 100%'), g2)
+    assert.ok(g2.includes('var(--color-blue-500) 37.33px, var(--color-blue-500) 52.27px'), g2)
+    assert.ok(g2.includes('var(--color-green-500) 52.27px, var(--color-green-500) 70.93px'), g2)
+    assert.ok(g2.includes('var(--color-teal-500) 70.93px, var(--color-teal-500) 112px'), g2)
     assert.equal(queryAll(m.container, '.lc-bar-stack').length, 0)
     assert.equal(query(m.container, '.lc-axis-top').textContent, '600')
     // Without an onPickBand handler a band click is a quiet no-op (the pick guard's undefined arm).
@@ -265,12 +265,18 @@ describe('TrendChart DNA mode', () => {
   })
 
   test('the browser category focus is ignored — the bands already are the full composition', async () => {
+    // The axis is driven by the second bar's total, so the first bar's height discriminates: focused on 'user'
+    // the records shrink to their user figures (30/150 → 22px); ignored, they hold the full totals (300/600 → 56px).
     const r1 = req(1, { turn: 1, step: 0, total: 300 })
+    const r2 = req(2, { turn: 1, step: 1, total: 600, user: 150 })
     const d1 = dnaBands([['sys', 'system', 100], ['n1', 'user', 200, { seq: 1, cat: 'user', tokens: 200 }]])
-    const m = await mount(h(TrendChart, propsOf([r1], { dna: [d1], focusCat: 'user' })))
-    const dnaDiv = query(m.container, '.lc-bar-dna')
-    assert.equal(dnaDiv.style.height, `${CHART_H}px`, 'full height, not the focused category share')
-    assert.ok(dnaDiv.style.background.includes('var(--color-indigo-500)'), 'the system band is still painted')
+    const d2 = dnaBands([['sys', 'system', 100], ['n2', 'user', 500, { seq: 2, cat: 'user', tokens: 500 }]])
+    const m = await mount(h(TrendChart, propsOf([r1, r2], { dna: [d1, d2], focusCat: 'user' })))
+    const dnaDivs = queryAll(m.container, '.lc-bar-dna')
+    assert.equal(dnaDivs.length, 2)
+    assert.equal(dnaDivs[0].style.height, `${Math.round(CHART_H * 300 / 600)}px`, 'full-context share, not the focused category share')
+    assert.equal(dnaDivs[1].style.height, `${CHART_H}px`)
+    assert.ok(dnaDivs[0].style.background.includes('var(--color-indigo-500)'), 'the system band is still painted')
     await m.unmount()
   })
 

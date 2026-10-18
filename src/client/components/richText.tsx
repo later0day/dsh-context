@@ -1,12 +1,13 @@
-/** The raw/markdown body for the Context browser's detail sections: MarkdownText for `md` (the harness's shared GFM
- * renderer), a line-numbered `<pre>` for raw. */
+/** The raw/markdown/JSON body for the Context browser's detail sections: MarkdownText for `md` (the harness's shared
+ * GFM renderer), the harness's JsonTree inspector for a whole-text JSON payload, a line-numbered `<pre>` for raw. */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type RefObject } from 'react'
-import { MarkdownText, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
+import { JsonTree, MarkdownText, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { JsonTreeLabels } from '@deepseek-ai/dsh-client-ui-primitives'
 import { IconCheck, IconChevronDown, IconChevronUp, IconClose, IconCopy, IconSearch } from '../primitives'
 import type { ViewKit } from '../viewkit'
 
-export type RichMode = 'raw' | 'md'
+export type RichMode = 'raw' | 'md' | 'json'
 
 /** The `labels` prop MarkdownText requires, typed locally so the plugin needs no primitives dependency. */
 interface MarkdownChrome {
@@ -16,11 +17,28 @@ interface MarkdownChrome {
 
 const Markdown = MarkdownText as (props: { text: string; labels?: MarkdownChrome }) => ReactElement
 
+/** The parsed value of a whole-text JSON payload (the tree's `data`), else null: a `{`/`[` lead parses to an
+ * object/array or throws, never a bare primitive — so a failed parse is the only rejection past the lead. */
+export function jsonOf(text: string): object | unknown[] | null {
+  const s = text.trim()
+  if (s[0] !== '{' && s[0] !== '[') return null
+  try {
+    return JSON.parse(s) as object
+  } catch {
+    return null
+  }
+}
+
+/** Cap on auto-opened second-level nodes: past it the expansion storm (one React toggle per row, each
+ * rendering its children) outweighs the overview. */
+const JSON_EXPAND_MAX = 100
+
 export interface RichKit {
   RichText: (props: { text: string; mode: RichMode }) => ReactElement
-  RichSwitch: (props: { mode: RichMode; onPick: (mode: RichMode) => void }) => ReactElement
+  RichSwitch: (props: { mode: RichMode; json?: boolean; onPick: (mode: RichMode) => void }) => ReactElement
   RichCopy: (props: { text: string }) => ReactElement
-  useRichMode: () => [RichMode, (mode: RichMode) => void]
+  /** The section's display mode plus whether the text is JSON-detected (drives RichSwitch's third segment). */
+  useRichMode: (text: string) => [RichMode, (mode: RichMode) => void, boolean]
   useRichFind: (text: string, mode: RichMode) => RichFind
 }
 
@@ -95,12 +113,17 @@ function markMatches(root: HTMLElement, query: string, active: number): FindMark
 export function makeRichText(kit: ViewKit): RichKit {
   const { t } = kit
 
-  function useRichMode(): [RichMode, (mode: RichMode) => void] {
-    const [mode, setMode] = useState<RichMode>('md')
-    return [mode, setMode]
+  // The default follows the payload: a JSON-detected body opens on the tree, where markdown is meaningless —
+  // so `md` is not offered there at all, and a pick that no longer fits the body (`json` gone unparseable,
+  // `md` turned JSON) falls back to the payload's own default. An explicit `raw` always sticks.
+  function useRichMode(text: string): [RichMode, (mode: RichMode) => void, boolean] {
+    const json = useMemo(() => jsonOf(text) !== null, [text])
+    const [pick, setPick] = useState<RichMode | null>(null)
+    const mode: RichMode = pick === 'raw' ? 'raw' : pick === 'json' && json ? 'json' : json ? 'json' : 'md'
+    return [mode, setPick, json]
   }
 
-  function RichSwitch(props: { mode: RichMode; onPick: (mode: RichMode) => void }): ReactElement {
+  function RichSwitch(props: { mode: RichMode; json?: boolean; onPick: (mode: RichMode) => void }): ReactElement {
     const seg = (m: RichMode, label: string, tip: string) => (
       <button
         type="button"
@@ -112,7 +135,9 @@ export function makeRichText(kit: ViewKit): RichKit {
     return (
       <span className="lc-gran">
         {seg('raw', t('rich.raw'), t('rich.toRaw'))}
-        {seg('md', t('rich.md'), t('rich.toMd'))}
+        {props.json === true
+          ? seg('json', t('rich.json'), t('rich.toJson'))
+          : seg('md', t('rich.md'), t('rich.toMd'))}
       </span>
     )
   }
@@ -158,13 +183,59 @@ export function makeRichText(kit: ViewKit): RichKit {
     )
   }
 
+  // Two levels open by default: JsonTree's expandTopLevel covers the root, and the second level opens by
+  // toggling the first-level expanders through the tree's own click path (no depth prop exists). The toggle
+  // claims focus, so the previously focused element is restored afterwards.
+  function JsonBody(props: { data: object | unknown[]; labels: JsonTreeLabels }): ReactElement {
+    const ref = useRef<HTMLDivElement>(null)
+    useLayoutEffect(() => {
+      const root = ref.current
+      /* v8 ignore next 2 -- the ref seats with the render this layout effect follows */
+      if (root === null) return
+      const previous = document.activeElement as HTMLElement | null
+      let clicked = 0
+      for (const el of root.querySelectorAll('[role=tree] > [role=treeitem] > [data-json-expander]')) {
+        if (clicked >= JSON_EXPAND_MAX) break
+        // Idempotent on a data swap that keeps an entry's key: its node stays mounted and expanded.
+        if (el.getAttribute('aria-expanded') !== 'false') continue
+        ;(el as HTMLElement).click()
+        clicked += 1
+      }
+      /* v8 ignore next 1 -- jsdom always seats body as activeElement; null only before document ready */
+      if (clicked > 0) previous?.focus({ preventScroll: true })
+    }, [props.data])
+    return (
+      <div ref={ref} className="lc-ts-desc-json">
+        <JsonTree data={props.data} label={t('rich.json.label')} labels={props.labels} />
+      </div>
+    )
+  }
+
   function RichText(props: { text: string; mode: RichMode }): ReactElement {
     // Reference-stable per locale: `labels` is a MarkdownText dependency, so a fresh object would re-parse the Markdown on every render.
     const mdLabels = useMemo<MarkdownChrome>(() => ({
       code: { copyLabel: t('rich.md.copy'), copiedLabel: t('rich.md.copied') },
       footnotes: t('rich.md.footnotes'),
     }), [t])
-    if (props.mode === 'md') {
+    // Same stability argument for the tree: its rows re-subscribe to hover state per labels identity.
+    const jsonLabels = useMemo<JsonTreeLabels>(() => ({
+      copyValue: t('rich.json.copyValue'),
+      copyJson: t('rich.json.copyJson'),
+      copyPath: t('rich.json.copyPath'),
+      copyPrettyJson: t('rich.json.copyPrettyJson'),
+      copyCompactJson: t('rich.json.copyCompactJson'),
+      copied: t('rich.json.copied'),
+      copyFailed: t('rich.json.copyFailed'),
+      collapseNode: t('rich.json.collapse'),
+      expandNode: t('rich.json.expand'),
+      copyButtonTitle: action => t('rich.json.copyOptions', { action }),
+    }), [t])
+    const json = useMemo(() => (props.mode === 'json' ? jsonOf(props.text) : null), [props.text, props.mode])
+    if (props.mode === 'json' && json !== null) {
+      return <JsonBody data={json} labels={jsonLabels} />
+    }
+    // A `json` mode whose text no longer parses (a stale pick after a body swap) degrades to markdown.
+    if (props.mode !== 'raw') {
       return <div className="lc-ts-desc-md"><Markdown text={props.text} labels={mdLabels} /></div>
     }
     return <RawText text={props.text} />

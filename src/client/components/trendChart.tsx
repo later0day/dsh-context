@@ -6,7 +6,7 @@ import type { DnaDelta, TrendBand } from '../dna'
 import { containHorizontalOverscroll } from '../overscroll'
 import type { ViewKit } from '../viewkit'
 
-const RISE_CLASS = ' animate-lc-bar-in motion-reduce:animate-none'
+export const RISE_CLASS = ' animate-lc-bar-in motion-reduce:animate-none'
 
 /** Only the NEWEST `RISE_CAP` columns play the grow-in: the chart mounts anchored to the newest bars, and animating
  * everything left of the window layerizes the whole chart and stalls the card's open. */
@@ -92,6 +92,117 @@ export function jumpTargetOf(requests: RequestRecord[], seq: number): RequestRec
   return requests.length > 0 ? requests[0] : null
 }
 
+/** Neutral zebra for the turn strip (inline, see the CSS note) — deliberately DISJOINT from the category palette:
+ * the strip is a partition layer, not a segment of the bars. Shared with the overview's ribbon strip. */
+export const TURN_FILLS = [
+  'color-mix(in srgb, var(--color-neutral-500) 12%, transparent)',
+  'color-mix(in srgb, var(--color-neutral-500) 26%, transparent)',
+]
+
+/** Focus one category: the kept bucket carries its fold figure and `total` IS the plotted figure. Raw fold figures
+ * are plotted as-is — rescaling against the provider prompt would drift with the heuristic's error and fake growth. */
+function focusOf(req: RequestRecord, cat: string): RequestRecord {
+  const key = cat as Category | 'system' | 'tools'
+  const out: RequestRecord = { ...req }
+  const v = req[key] || 0
+  out.total = v
+  for (const c of CATS) out[c.key] = c.key === key ? v : 0
+  return out
+}
+
+/** Delta mode: each category keeps the SIGNED change vs the previous record; `total` is the churn (summed magnitude)
+ * and `net` the signed change for the tooltip. Provider prompt/output are dropped — they are not deltas. */
+function deltaOf(req: RequestRecord, prev: RequestRecord | null): RequestRecord {
+  const { prompt: _prompt, output: _output, ...out } = req
+  let churn = 0
+  let net = 0
+  for (const c of CATS) {
+    const d = prev !== null ? (req[c.key] || 0) - (prev[c.key] || 0) : 0
+    out[c.key] = d
+    churn += Math.abs(d)
+    net += d
+  }
+  out.total = churn
+  out.net = net
+  return out
+}
+
+/** The trend faces' record preprocessing: an unrecognized focus key (a stale or hostile state) degrades to the
+ * unfocused chart, so the validation lives here — the callers never re-check the category vocabulary. */
+export function preprocessTrend(
+  requests: RequestRecord[],
+  delta: boolean,
+  focusCat: string | null | undefined,
+): { requests: RequestRecord[]; focus: string | null } {
+  const focus = focusCat !== null && focusCat !== undefined && CATS.some(c => c.key === focusCat) ? focusCat : null
+  const base = focus !== null ? requests.map(req => focusOf(req, focus)) : requests
+  return { requests: delta ? base.map((req, i) => deltaOf(req, i > 0 ? base[i - 1] : null)) : base, focus }
+}
+
+/** Whole-log maxima over the plotted records: the axis scale and the ribbon's px-per-token. maxTotal floors at 1
+ * so an all-zero history keeps a usable axis. */
+export function trendMaxima(requests: RequestRecord[], delta: boolean): { maxTotal: number; maxUp: number; maxDown: number } {
+  let maxTotal = 1
+  let maxUp = 0
+  let maxDown = 0
+  if (delta) {
+    for (const req of requests) {
+      let up = 0
+      let down = 0
+      for (const c of CATS) {
+        const d = req[c.key] || 0
+        if (d > 0) up += d
+        else down -= d
+      }
+      if (up > maxUp) maxUp = up
+      if (down > maxDown) maxDown = down
+    }
+  } else {
+    for (const req of requests) if (req.total > maxTotal) maxTotal = req.total
+  }
+  return { maxTotal, maxUp, maxDown }
+}
+
+/** The trend tip's rows: the identity head, the callers' own metric row when supplied (DNA mode names the hovered
+ * item) or the mode's own metric, and the duration row when the overlay is on. Shared with the overview's ribbon,
+ * which never supplies a metric — the mode rows answer alone. */
+export function trendTipRows(
+  kit: Pick<ViewKit, 't' | 'fmt' | 'fmtDuration' | 'catLabel'>,
+  opts: {
+    granularity: 'step' | 'turn'
+    stepsOf: (turn: number | undefined) => number
+    delta: boolean
+    /** Already-validated focused category key, or null for the unfocused chart. */
+    focus: string | null
+    durationOn: boolean
+    /** The caller's metric row, replacing the mode's own. */
+    metric?: string
+  },
+  req: RequestRecord,
+): string[] {
+  const { t, fmt, fmtDuration, catLabel } = kit
+  const n = req.stepCount ?? 1
+  const head = opts.granularity === 'turn'
+    ? (n > 1 ? t('tip.turn', { t: req.turn ?? 0, n }) : t('tip.turn1', { t: req.turn ?? 0 }))
+    : t('tip.step', { t: req.turn ?? 0, s: req.step ?? 0, n: opts.stepsOf(req.turn) })
+  let metric = opts.metric
+  if (metric === undefined) {
+    if (opts.delta) {
+      /* v8 ignore next 1 -- delta mode only receives records from
+         deltaOf, which always assigns net; the fallback is defensive. */
+      metric = t('tip.delta', { n: (req.net ?? 0) > 0 ? '+' + fmt(req.net ?? 0) : fmt(req.net ?? 0) })
+    } else {
+      // Focused: the metric row IS the focused category's figure, so the tip names it instead of claiming a total.
+      metric = opts.focus !== null
+        ? t('tip.cat', { cat: catLabel(opts.focus), n: fmt(req.total) })
+        : t('tip.total', { n: fmt(req.total) })
+    }
+  }
+  const rows = [head, metric]
+  if (opts.durationOn && req.activeMs !== undefined) rows.push(t('tip.duration', { n: fmtDuration(req.activeMs) }))
+  return rows
+}
+
 export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactElement {
   const { t, fmt, fmtDuration, eventLabel, eventAt, catLabel } = kit
 
@@ -106,11 +217,6 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
   const BAR_GAP = 2
   const STAGGER_CAP = 20
   const STEP_FLAG_EVERY = 5
-  // Neutral zebra, deliberately DISJOINT from the category palette: the strip is a partition layer, not a segment of the bars.
-  const TURN_FILLS = [
-    'color-mix(in srgb, var(--color-neutral-500) 12%, transparent)',
-    'color-mix(in srgb, var(--color-neutral-500) 26%, transparent)',
-  ]
   // Labels render at natural width and overflow their block: the pair-gap sizing below shrinks ALL of them uniformly, and
   // updateTurnLabels' measured chain is the last-resort guard. OVERHANG bounds a label's reach; GAP is the box gap.
   const LABEL_OVERHANG = 48
@@ -119,34 +225,6 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
   const LABEL_FONT = 10
   const LABEL_FONT_MIN = 6
   const estTurnLabel = (turn: number): number => 6.5 * String(turn).length
-
-  /** Focus one category: the kept bucket carries its fold figure and `total` IS the plotted figure. Raw fold figures
-   * are plotted as-is — rescaling against the provider prompt would drift with the heuristic's error and fake growth. */
-  const focusOf = (req: RequestRecord, cat: string): RequestRecord => {
-    const key = cat as Category | 'system' | 'tools'
-    const out: RequestRecord = { ...req }
-    const v = req[key] || 0
-    out.total = v
-    for (const c of CATS) out[c.key] = c.key === key ? v : 0
-    return out
-  }
-
-  /** Delta mode: each category keeps the SIGNED change vs the previous record; `total` is the churn (summed magnitude)
-   * and `net` the signed change for the tooltip. Provider prompt/output are dropped — they are not deltas. */
-  const deltaOf = (req: RequestRecord, prev: RequestRecord | null): RequestRecord => {
-    const { prompt: _prompt, output: _output, ...out } = req
-    let churn = 0
-    let net = 0
-    for (const c of CATS) {
-      const d = prev !== null ? (req[c.key] || 0) - (prev[c.key] || 0) : 0
-      out[c.key] = d
-      churn += Math.abs(d)
-      net += d
-    }
-    out.total = churn
-    out.net = net
-    return out
-  }
 
   interface VisibleMax {
     total: number
@@ -197,10 +275,14 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     const visible: TrendBand[] = []
     for (const b of props.bands) if (b.tokens > 0) visible.push(b)
     if (visible.length === 0) return null
+    // Shared per-token pixel scale (CHART_H/maxTotal), not per-bar percentages: the same band's stops are
+    // identical numbers in every bar, so the browser rasterizes common strands identically (per-bar %
+    // stops quantized against each bar's own total and made sub-pixel strands flip visible/merged).
+    const pxPerToken = CHART_H / props.maxTotal
     const runs: { color: string; from: number; to: number }[] = []
     for (const b of visible) {
-      const from = Math.round(b.off / props.total * 10000) / 100
-      const to = Math.round((b.off + b.tokens) / props.total * 10000) / 100
+      const from = Math.round(b.off * pxPerToken * 100) / 100
+      const to = Math.round((b.off + b.tokens) * pxPerToken * 100) / 100
       const last = runs.length > 0 ? runs[runs.length - 1] : null
       if (last !== null && last.color === b.color && last.to === from) last.to = to
       else runs.push({ color: b.color, from, to })
@@ -221,8 +303,8 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
       <div
         className={'lc-bar-dna' + (props.rise ? RISE_CLASS : '')}
         style={{
-          height: `${Math.max(1, Math.round(props.total / props.maxTotal * CHART_H))}px`,
-          background: 'linear-gradient(to top, ' + runs.map(r => `${r.color} ${r.from}%, ${r.color} ${r.to}%`).join(', ') + ')',
+          height: `${Math.max(1, Math.round(props.total * pxPerToken))}px`,
+          background: 'linear-gradient(to top, ' + runs.map(r => `${r.color} ${r.from}px, ${r.color} ${r.to}px`).join(', ') + ')',
           '--lc-i': Math.min(props.enterIndex, STAGGER_CAP),
         } as CSSProperties}
         onMouseMove={(e) => { props.onHit(hitAt(e).key) }}
@@ -410,10 +492,6 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     const delta = props.mode === 'delta'
     const dnaDeltaOn = dnaOn && delta
     const durationOn = props.durationCurve === true
-    // An unrecognized focus key degrades to the unfocused chart instead of plotting an empty axis.
-    const focus = !dnaOn && props.focusCat !== null && props.focusCat !== undefined && CATS.some(c => c.key === props.focusCat)
-      ? props.focusCat
-      : null
     const [dnaHit, setDnaHit] = useState<string | null>(null)
     // Each bar's bands paired against the previous bar's by key (dna.ts), aligned with `requests` by index; the
     // first bar carries no change.
@@ -421,12 +499,11 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
       () => (dnaDeltaOn ? dnaBands.map((bands, i) => deltaBandsOf(bands, i > 0 ? dnaBands[i - 1] : null)) : null),
       [dnaDeltaOn, dnaBands],
     )
-    const requests = useMemo(
-      () => {
-        const base = focus !== null ? props.requests.map(req => focusOf(req, focus)) : props.requests
-        return delta ? base.map((req, i) => deltaOf(req, i > 0 ? base[i - 1] : null)) : base
-      },
-      [props.requests, delta, focus],
+    // The DNA faces decompose the full context, so the browser's category focus would plot tool-only
+    // bar totals against full-context band offsets — floating every lifetime slice above half-height bars.
+    const { requests, focus } = useMemo(
+      () => preprocessTrend(props.requests, delta, dnaOn ? null : props.focusCat),
+      [props.requests, delta, props.focusCat, dnaOn],
     )
     const markers = props.markers
     // The maxima over the bars on screen; null until the first measure, which falls back to the whole-log scale, so the
@@ -493,22 +570,8 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
         if (up > maxUp) maxUp = up
         if (down > maxDown) maxDown = down
       }
-    } else if (delta) {
-      for (const req of requests) {
-        let up = 0
-        let down = 0
-        for (const c of CATS) {
-          const d = req[c.key] || 0
-          if (d > 0) up += d
-          else down -= d
-        }
-        if (up > maxUp) maxUp = up
-        if (down > maxDown) maxDown = down
-      }
     } else {
-      for (const req of requests) {
-        if (req.total > maxTotal) maxTotal = req.total
-      }
+      ({ maxTotal, maxUp, maxDown } = trendMaxima(requests, delta))
     }
     if (adaptive && visMax !== null) {
       if (delta) {
@@ -742,28 +805,18 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
       return slices
     }, [dnaOn, dnaHit, dnaDeltaOn, dnaDeltas, dnaBands, downPx, deltaScale, maxTotal])
     const tipRowsOf = (req: RequestRecord): string[] => {
-      const n = req.stepCount ?? 1
-      const head = props.granularity === 'turn'
-        ? (n > 1 ? t('tip.turn', { t: req.turn ?? 0, n }) : t('tip.turn1', { t: req.turn ?? 0 }))
-        : t('tip.step', { t: req.turn ?? 0, s: req.step ?? 0, n: stepsOf(req.turn) })
       // DNA mode: the metric row names the hovered item; a hover on the bar's padding falls through to the mode's own row.
       const band = hitBand ?? hoveredDelta
-      let metric: string
-      if (band !== null) {
-        metric = t('trend.dnaItem', { label: dnaBaseLabel(band, t, catLabel), n: dnaDeltaOn ? fmtSigned(band.tokens) : fmt(band.tokens) })
-      } else if (delta) {
-        /* v8 ignore next 1 -- delta mode only receives records from
-           deltaOf, which always assigns net; the fallback is defensive. */
-        metric = t('tip.delta', { n: fmtSigned(req.net ?? 0) })
-      } else {
-        // Focused: the metric row IS the focused category's figure, so the tip names it instead of claiming a total.
-        metric = focus !== null
-          ? t('tip.cat', { cat: catLabel(focus), n: fmt(req.total) })
-          : t('tip.total', { n: fmt(req.total) })
-      }
-      const rows = [head, metric]
-      if (durationOn && req.activeMs !== undefined) rows.push(t('tip.duration', { n: fmtDuration(req.activeMs) }))
-      return rows
+      return trendTipRows(kit, {
+        granularity: props.granularity,
+        stepsOf,
+        delta,
+        focus,
+        durationOn,
+        metric: band !== null
+          ? t('trend.dnaItem', { label: dnaBaseLabel(band, t, catLabel), n: dnaDeltaOn ? fmtSigned(band.tokens) : fmt(band.tokens) })
+          : undefined,
+      }, req)
     }
 
     const tipColRef = useRef(0)

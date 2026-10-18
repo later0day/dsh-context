@@ -4,16 +4,13 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import {
   activityOf,
-  canOpenPathsOf,
   contextBreakdownOf,
   contextPressureOf,
   conversationNodesOf,
+  entrySeated,
   headersOf,
   imageLoaderOf,
   numOf,
-  openPathVia,
-  openResourceVia,
-  openSessionVia,
   timelineOf,
   timingOf,
   tokenUsageOf,
@@ -169,16 +166,24 @@ describe('timelineOf', () => {
   })
 
   test('model/provider/contextWindow: wrong-typed dropped, right-typed kept', () => {
-    const kept = timelineOf({ current: 1, model: 'm', provider: 'p', contextWindow: 100 })
+    const kept = timelineOf({ current: 1, model: 'm', provider: 'p', contextWindow: 100, maxOutputTokens: 256000 })
     assert.ok(kept !== null)
     assert.equal(kept.model, 'm')
     assert.equal(kept.provider, 'p')
     assert.equal(kept.contextWindow, 100)
+    assert.equal(kept.maxOutputTokens, 256000)
     const dropped = timelineOf({ current: 1, model: 5, provider: {}, contextWindow: 'x' })
     assert.ok(dropped !== null)
     assert.ok(!('model' in dropped))
     assert.ok(!('provider' in dropped))
     assert.ok(!('contextWindow' in dropped))
+    // The output cap is re-proved like every other scalar: a hostile, non-finite, or non-positive one
+    // drops whole (reserve.ts reserves nothing without it) instead of reaching the mask math.
+    for (const maxOutputTokens of ['256000', Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+      const capped = timelineOf({ current: 1, maxOutputTokens })
+      assert.ok(capped !== null)
+      assert.ok(!('maxOutputTokens' in capped), String(maxOutputTokens))
+    }
   })
 
   test('images/toolCalls/humanInputs/surfaceFloor/archiveFloor are kept only when numbers', () => {
@@ -753,140 +758,6 @@ describe('workspaceOf', () => {
   })
 })
 
-describe('canOpenPathsOf / openPathVia', () => {
-  const ctxWith = (services: Record<string, unknown>): ClientCtx => ({ get: (name: string) => services[name] }) as unknown as ClientCtx
-  /** A loopback connection whose generic RPC answers per endpoint. */
-  const rpcConn = (routes: Record<string, () => unknown>, over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    isLoopback: true,
-    rpc: { call: (channel: string, endpoint: string) => Promise.resolve(routes[endpoint]?.()) },
-    ...over,
-  })
-  const openable = (): Record<string, unknown> =>
-    rpcConn({ 'session/canOpenWorkspacePath': () => ({ ok: true, value: true }) })
-
-  test('the capability remote gates the opener, behind the loopback fact', async () => {
-    assert.equal(await canOpenPathsOf(ctxWith({ connection: openable() })), true)
-    // The remote's answer is re-proved: non-true values and failed results are both "no".
-    assert.equal(await canOpenPathsOf(ctxWith({ connection: rpcConn({ 'session/canOpenWorkspacePath': () => ({ ok: true, value: false }) }) })), false)
-    assert.equal(await canOpenPathsOf(ctxWith({ connection: rpcConn({ 'session/canOpenWorkspacePath': () => ({ ok: false }) }) })), false)
-    assert.equal(await canOpenPathsOf(ctxWith({ connection: rpcConn({ 'session/canOpenWorkspacePath': () => 'garbage' }) })), false)
-    // The harness's own gate: a page not on the operator's machine never opens.
-    assert.equal(await canOpenPathsOf(ctxWith({ connection: { isLoopback: false, rpc: openable().rpc } })), false)
-    assert.equal(await canOpenPathsOf(ctxWith({})), false)
-  })
-
-  test('hostile connections and failed transports resolve false, never reject', async () => {
-    const throwProp = (): never => { throw new Error('boom') }
-    // A service lookup itself may throw.
-    assert.equal(await canOpenPathsOf({ get: throwProp } as unknown as ClientCtx), false)
-    // An rpc face whose call read throws; a loopback fact that throws on read.
-    assert.equal(await canOpenPathsOf(ctxWith({ connection: { isLoopback: true, rpc: { get call(): unknown { return throwProp() } } } })), false)
-    assert.equal(await canOpenPathsOf(ctxWith({ connection: { get isLoopback(): boolean { return throwProp() }, rpc: openable().rpc } })), false)
-    // A call that is not a function, and one that rejects.
-    assert.equal(await canOpenPathsOf(ctxWith({ connection: { isLoopback: true, rpc: { call: 7 } } })), false)
-    assert.equal(await canOpenPathsOf(ctxWith({ connection: { isLoopback: true, rpc: { call: () => Promise.reject(new Error('offline')) } } })), false)
-  })
-
-  test('openPathVia returns a fire-and-forget caller that swallows failures', async () => {
-    const open = openPathVia(ctxWith({ connection: { rpc: { call: () => Promise.reject(new Error('no desktop')) } } }))
-    assert.ok(open !== undefined)
-    open('/repo/a.ts') // must not throw
-    // A synchronously throwing transport joins the same silence.
-    const syncThrow = openPathVia(ctxWith({ connection: { rpc: { call: () => { throw new Error('sync') } } } }))
-    syncThrow!('/repo/a.ts')
-    assert.equal(openPathVia(ctxWith({})), undefined)
-  })
-
-  test('the opener forwards the requested path through the open remote', async () => {
-    const calls: { channel: string; endpoint: string; payload: unknown }[] = []
-    const open = openPathVia(ctxWith({
-      connection: {
-        rpc: {
-          call: (channel: string, endpoint: string, payload: unknown) => {
-            calls.push({ channel, endpoint, payload })
-            return Promise.resolve({ ok: true, value: { opened: true } })
-          },
-        },
-      },
-    }))
-    open!('/repo/a.ts')
-    await new Promise(resolve => setTimeout(resolve, 0))
-    assert.deepEqual(calls, [{ channel: '/api', endpoint: 'session/openWorkspacePath', payload: { args: { request: { path: '/repo/a.ts' } } } }])
-  })
-})
-
-describe('openResourceVia', () => {
-  const ctxWith = (services: Record<string, unknown>): ClientCtx => ({ get: (name: string) => services[name] }) as unknown as ClientCtx
-
-  test('forwards the address to the Sidebar face and reports the open', () => {
-    const opened: string[] = []
-    const open = openResourceVia(ctxWith({ sidebarRight: { openResource: (address: string) => { opened.push(address) } } }))
-    assert.ok(open !== undefined)
-    assert.equal(open('dsh-resource://file/session/s1/a.ts'), true)
-    assert.deepEqual(opened, ['dsh-resource://file/session/s1/a.ts'])
-  })
-
-  test('an absent or hostile face yields no opener at all', () => {
-    assert.equal(openResourceVia(ctxWith({})), undefined)
-    assert.equal(openResourceVia(ctxWith({ sidebarRight: null })), undefined)
-    assert.equal(openResourceVia(ctxWith({ sidebarRight: {} })), undefined)
-    assert.equal(openResourceVia(ctxWith({ sidebarRight: { openResource: 7 } })), undefined)
-    // A service lookup itself may throw.
-    assert.equal(openResourceVia({ get: () => { throw new Error('boom') } } as unknown as ClientCtx), undefined)
-  })
-
-  test('a refusal reports false instead of throwing, so the caller can fall back', () => {
-    const open = openResourceVia(ctxWith({ sidebarRight: { openResource: () => { throw new Error('no type claims it') } } }))
-    assert.equal(open!('dsh-resource://file/session/s1/a.ts'), false)
-  })
-
-  test('the face is re-proved per call: a revoked service refuses after the opener was built', () => {
-    const services: Record<string, unknown> = { sidebarRight: { openResource: () => {} } }
-    const open = openResourceVia(ctxWith(services))
-    assert.ok(open !== undefined)
-    // The plugin unloaded (HMR): the written face is gone.
-    services.sidebarRight = undefined
-    assert.equal(open('dsh-resource://file/session/s1/a.ts'), false)
-  })
-})
-
-describe('openSessionVia', () => {
-  const ctxWith = (services: Record<string, unknown>): ClientCtx => ({ get: (name: string) => services[name] }) as unknown as ClientCtx
-
-  test('jumps through the view owner — every supported line\'s own verb (issue #90)', () => {
-    // Exactly the supported composition: uiWorkspace serves the navigation
-    // verb, the sessions service carries no selection at all.
-    const opened: string[] = []
-    openSessionVia(ctxWith({
-      uiWorkspace: { openSession(id: string) { opened.push(id) } },
-      sessions: { list: { getSnapshot: () => ({}) } },
-    }), 's2')
-    assert.deepEqual(opened, ['s2'])
-  })
-
-  test('the verb is invoked bound to its service instance', () => {
-    let seen: unknown
-    const face = {
-      target: 's4',
-      openSession(this: { target: string }, id: string) { seen = `${this.target}:${id}` },
-    }
-    openSessionVia(ctxWith({ uiWorkspace: face }), 's4')
-    assert.equal(seen, 's4:s4')
-  })
-
-  test('a composition without the workspace module, or a verb-less face, swallows silently', () => {
-    openSessionVia(ctxWith({}), 's5')
-    openSessionVia(ctxWith({ uiWorkspace: {} }), 's5')
-    openSessionVia(ctxWith({ uiWorkspace: { openSession: 7 } }), 's5')
-  })
-
-  test('a hostile face never throws into the click handler', () => {
-    openSessionVia(ctxWith({ uiWorkspace: { openSession: () => { throw new Error('boom') } } }), 's6')
-    // A traced proxy can throw on the property READ itself (issue #42).
-    openSessionVia(ctxWith({ uiWorkspace: { get openSession() { throw new Error('boom') } } }), 's6')
-    openSessionVia({ get: () => { throw new Error('boom') } } as unknown as ClientCtx, 's6')
-  })
-})
 
 describe('activityOf', () => {
   test('absent or non-record values stay null (an older host serves no such key)', () => {
@@ -973,5 +844,54 @@ describe('activityOf', () => {
         '2026-09-19': { tokens: 1, requests: 1 },
       },
     }, 'non-record and empty-after-scrubbing tables drop whole; the days survive')
+  })
+})
+
+describe('entrySeated — the slot-ledger second-mount guard', () => {
+  /** A ctx whose slots face carries the given raw ledger (or a hostile face). */
+  const ctxWith = (entries: unknown): ClientCtx => ({ slots: { entries: () => entries } } as unknown as ClientCtx)
+
+  test('true when the ledger seats the id', () => {
+    const ctx = ctxWith([
+      { component: () => null, options: { id: 'context-jump', order: 20 } },
+    ])
+    assert.equal(entrySeated(ctx, 'conversation.chat.assistant-actions', 'context-jump'), true)
+  })
+
+  test('false when the slot seats other ids only, or nothing', () => {
+    const other = ctxWith([{ component: () => null, options: { id: 'feedback' } }])
+    assert.equal(entrySeated(other, 'conversation.chat.assistant-actions', 'context-jump'), false)
+    const empty = ctxWith([])
+    assert.equal(entrySeated(empty, 'conversation.chat.assistant-actions', 'context-jump'), false)
+  })
+
+  test('fail-open: a missing or non-function face, a non-array ledger, and a throwing face all read as unseated', () => {
+    assert.equal(entrySeated({ slots: {} } as unknown as ClientCtx, 's', 'x'), false, 'no entries member')
+    const primitive = { slots: { entries: 7 } } as unknown as ClientCtx
+    assert.equal(entrySeated(primitive, 's', 'x'), false, 'entries is not callable')
+    assert.equal(entrySeated(ctxWith('nope'), 's', 'x'), false, 'ledger is not an array')
+    const hostile = { slots: { entries: () => { throw new Error('boom') } } } as unknown as ClientCtx
+    assert.equal(entrySeated(hostile, 's', 'x'), false, 'the read throws')
+  })
+
+  test('an entry failing the stored shape drops alone; one bad entry never hides a real marker', () => {
+    const mixed = ctxWith([
+      null,
+      'row',
+      { component: () => null, options: 'not-a-record' },
+      { component: () => null, options: { id: 'context-jump' } },
+    ])
+    assert.equal(entrySeated(mixed, 's', 'context-jump'), true)
+    const badOnly = ctxWith([{ component: () => null, options: 7 }])
+    assert.equal(entrySeated(badOnly, 's', 'context-jump'), false)
+  })
+
+  test('the ledger read is keyed by slot: the face is asked for the named slot only', () => {
+    const asked: string[] = []
+    const ctx = {
+      slots: { entries: (name: string) => { asked.push(name); return [] } },
+    } as unknown as ClientCtx
+    assert.equal(entrySeated(ctx, 'conversation.chat.assistant-actions', 'context-jump'), false)
+    assert.deepEqual(asked, ['conversation.chat.assistant-actions'])
   })
 })

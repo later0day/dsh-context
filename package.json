@@ -1,6 +1,6 @@
 {
   "name": "dsh-context",
-  "version": "0.68.1",
+  "version": "0.73.2",
   "description": "A DeepSeek Harness plugin for context insight and management, with context dashboard and context command, for understanding how the context is made of, and how it evolves.",
   "icon": "icon.svg",
   "author": "bowenliang123",
@@ -14,7 +14,8 @@
   },
   "type": "module",
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.1.7-rc.2 || >=0.2.0-rc.2"
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -41,11 +42,12 @@
     "build": "tsdown",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "check": "bash scripts/check.sh",
     "watch": "bash scripts/watch.sh",
     "web": "bash scripts/web.sh",
     "register": "bash scripts/register.sh",
     "typecheck": "tsc --noEmit -p tsconfig.tests.json --incremental",
-    "test": "pnpm run typecheck && vitest run --coverage",
+    "test": "vitest run --coverage",
     "coverage": "vitest run --coverage",
     "release": "bash scripts/publish.sh",
     "social-preview": "node scripts/social-preview/generate.ts",
@@ -122,7 +124,7 @@
     "@types/node": "^26.6.3",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.5",
     "anser": "^2.3.5",
     "clsx": "^2.0.0",
     "diff": "^9.0.0",
@@ -149,10 +151,9 @@
     "react-dom": "^18.3.1",
     "shiki": "^4.3.1",
     "simple-icons": "16.32.0",
-    "tailwindcss": "4.3.3",
     "tsdown": "^0.23.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11",
+    "vitest": "^5.0.5",
     "zustand": "~4.4.7"
   }
 }

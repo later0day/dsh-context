@@ -4,7 +4,7 @@ import type { ReactElement, ReactNode } from 'react'
 import type { Category, SurfaceNode } from '../../shared/types'
 import type { Assembled } from '../assemble'
 import type { ConversationNodeLike } from '../services'
-import type { ImageKit } from './images'
+import type { AttachmentKit } from './attachments'
 import type { RichKit } from './richText'
 import { TextSection, BlocksBody, toolErrOf, ToolCallCard } from './browserToolCard'
 import type { DetailLabels } from './browserToolCard'
@@ -14,10 +14,10 @@ export function NodeContent(props: {
   conv: ConversationNodeLike | undefined
   hint: ReactNode
   rich: RichKit
-  img: ImageKit
+  att: AttachmentKit
   labels: DetailLabels
 }): ReactElement {
-  const { node, conv, rich, img, labels } = props
+  const { node, conv, rich, att, labels } = props
   if (conv === undefined) {
     if (node.text === undefined || node.text === '') {
       return <div className="lc-br-note">{props.hint}</div>
@@ -30,7 +30,7 @@ export function NodeContent(props: {
     )
   }
   if (conv.kind === 'assistant' && Array.isArray(conv.blocks)) {
-    return <BlocksBody blocks={conv.blocks} textLabel={labels.answer} rich={rich} img={img} labels={labels} />
+    return <BlocksBody blocks={conv.blocks} textLabel={labels.answer} rich={rich} att={att} labels={labels} />
   }
   if (conv.kind === 'tool-result') {
     const { err, exit } = toolErrOf(node, conv)
@@ -45,7 +45,7 @@ export function NodeContent(props: {
           />
           : null}
         {Array.isArray(conv.content)
-          ? <BlocksBody blocks={conv.content} textLabel={labels.result} rich={rich} img={img} labels={labels} />
+          ? <BlocksBody blocks={conv.content} textLabel={labels.result} rich={rich} att={att} labels={labels} />
           : null}
       </>
     )
@@ -56,7 +56,7 @@ export function NodeContent(props: {
       : <></>
   }
   if (Array.isArray(conv.content)) {
-    return <BlocksBody blocks={conv.content} textLabel={labels.content} rich={rich} img={img} labels={labels} />
+    return <BlocksBody blocks={conv.content} textLabel={labels.content} rich={rich} att={att} labels={labels} />
   }
   return <div className="lc-br-note">{props.hint}</div>
 }

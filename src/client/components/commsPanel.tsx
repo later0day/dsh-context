@@ -8,7 +8,7 @@
  * moves on.
  */
 
-import { useMemo, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { IconSendOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AgentNode } from '../agentTree'
 import { commsStaleOf, type FleetDetailState } from '../fleetModel'
@@ -24,6 +24,10 @@ export interface CommsPanelProps {
   comms: CommsRow[]
   labelOf: (id: string) => string
   onPin: (id: string | null) => void
+  /** The picked agent's session id (the graph's and members board's own pick): the timeline
+   * narrows to their traffic, and the pick chip in the toolbar clears it. */
+  pickId: string | null
+  onPickClear: () => void
   t: ViewKit['t']
   fmt: ViewKit['fmt']
 }
@@ -34,8 +38,14 @@ function clockOf(time: number): string {
 }
 
 export function CommsPanel(props: CommsPanelProps): ReactElement {
-  const { nodes, details, comms, t } = props
+  const { nodes, details, comms, pickId, t } = props
   const [agentFilter, setAgentFilter] = useState<string | null>(null)
+
+  // A pick governs while it stands: the dropdown's own choice yields on landing and never
+  // resurrects stale once the pick clears.
+  useEffect(() => {
+    if (pickId !== null) setAgentFilter(null)
+  }, [pickId])
 
   // Only scan-claimed sessions drive the panel's state: the inspector's own focus reads never
   // flip it past the collapsed state.
@@ -53,9 +63,12 @@ export function CommsPanel(props: CommsPanelProps): ReactElement {
     return [...ids]
   }, [comms])
 
-  const rows = agentFilter === null
-    ? comms
-    : comms.filter(row => row.from === agentFilter || row.to === agentFilter)
+  // The pick narrows first; the dropdown's own choice only ever governs without one.
+  const rows = pickId !== null
+    ? comms.filter(row => row.from === pickId || row.to === pickId)
+    : agentFilter !== null
+      ? comms.filter(row => row.from === agentFilter || row.to === agentFilter)
+      : comms
 
   const truncated = useMemo(() => {
     for (const entry of details.landed.values()) {
@@ -94,7 +107,16 @@ export function CommsPanel(props: CommsPanelProps): ReactElement {
             <button type="button" className="lc-inspector-btn" onClick={() => { details.refresh(nodes) }}>
               {t('fleet.comms.rescan')}
             </button>
-            {involved.length > 0 ? (
+            {pickId !== null ? (
+              <button
+                type="button"
+                className="lc-agents-badge lc-tasks-filter"
+                title={props.labelOf(pickId)}
+                onClick={props.onPickClear}
+              >
+                {props.labelOf(pickId)} ×
+              </button>
+            ) : involved.length > 0 ? (
               <select
                 className="lc-fleet-sort"
                 value={agentFilter ?? ''}
@@ -111,6 +133,8 @@ export function CommsPanel(props: CommsPanelProps): ReactElement {
 
       {details.scanned.size > 0 && !scanning && comms.length === 0 ? (
         <div className="lc-empty">{t('fleet.comms.empty')}</div>
+      ) : pickId !== null && !scanning && comms.length > 0 && rows.length === 0 ? (
+        <div className="lc-empty">{t('fleet.comms.noMatch')}</div>
       ) : null}
 
       {rows.length > 0 ? (

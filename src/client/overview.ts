@@ -11,6 +11,7 @@
 
 import { workspaceTitleOf } from '@deepseek-ai/dsh-util-workspace-path'
 import { dayKeyOf, endOfDayKey, startOfDayKey } from '../shared/days'
+import { BACKFILL_ROUTE } from './apiRoutes'
 import { billedParts } from './categories'
 import { cacheHitPercent } from './format'
 import { estimateSessionCost, mergeCostUsage } from './cost'
@@ -26,6 +27,8 @@ export interface OverviewRow {
   updatedAt: number
   running: boolean
   current: boolean
+  /** Whether the workspace registry archived this session: the coverage picker's split line. */
+  archived: boolean
   timeline: ContextTimeline | null
   /** The TEAM's merged daily ledger: this session's own plus every descendant subagent's. */
   activity: ContextActivity | null
@@ -131,7 +134,8 @@ export function inGroup(row: OverviewRow, group: string, groups: Record<string, 
   return group === UNGROUPED_KEY ? title === undefined : title === group
 }
 
-/** Fail open: an absent seat, a hostile shape, or a throwing accessor archives nothing, so filtering never empties the list. */
+/** Fail open: an absent seat, a hostile shape, or a throwing accessor tags
+ * nothing, so the coverage split keeps every row in the pane's own scope. */
 function archivedSetOf(workspaces: unknown): Set<string> {
   try {
     const value = asRecord(workspaces)?.archivedSessionIds
@@ -143,8 +147,9 @@ function archivedSetOf(workspaces: unknown): Set<string> {
 }
 
 /** Join the raw session-list snapshot into render-ready rows, or null when it
- * is unusable (distinct from a real empty list). Blank placeholder and
- * archived rows drop out; one throwing row costs just itself. */
+ * is unusable (distinct from a real empty list). Blank placeholder rows drop
+ * out, archived rows are tagged for the coverage picker, and one throwing row
+ * costs just itself. */
 export function rowsOfSnapshot(snapshot: unknown, workspaces?: unknown): OverviewRow[] | null {
   const state = asRecord(snapshot)
   if (state === null) return null
@@ -155,7 +160,6 @@ export function rowsOfSnapshot(snapshot: unknown, workspaces?: unknown): Overvie
   const current = typeof state.current === 'string' ? state.current : undefined
   const rows: OverviewRow[] = []
   for (const id of ids) {
-    if (archived.has(id)) continue
     try {
       const row = asRecord(byId[id])
       if (row === null) continue
@@ -175,6 +179,7 @@ export function rowsOfSnapshot(snapshot: unknown, workspaces?: unknown): Overvie
         updatedAt: typeof row.updatedAt === 'number' && Number.isFinite(row.updatedAt) ? row.updatedAt : 0,
         running: row.running === true,
         current: id === current,
+        archived: archived.has(id),
         timeline: timelineOf(values?.contextTimeline),
         activity: activityOf(values?.contextActivity),
         family: [],
@@ -216,6 +221,16 @@ export function rowsOfSnapshot(snapshot: unknown, workspaces?: unknown): Overvie
     row.activity = mergeActivity(activities)
   }
   return rows
+}
+
+/** The coverage picker's scopes: 'active' hides archived sessions, 'archived'
+ * lists only them, and 'all' folds both. */
+export type OverviewCoverage = 'all' | 'active' | 'archived'
+
+/** The coverage pass every page reader (KPI band, chart, heatmap, grid) shares:
+ * one list, so the cards can never disagree with the grid on which sessions count. */
+export function coveredRowsOf(rows: readonly OverviewRow[], coverage: OverviewCoverage): readonly OverviewRow[] {
+  return coverage === 'all' ? rows : rows.filter(row => row.archived === (coverage === 'archived'))
 }
 
 /** Merge several sessions' daily ledgers into one family's: per day the tokens
@@ -579,7 +594,6 @@ export function tokenPartsOf(rows: readonly OverviewRow[]): { parts: TokenPartTo
 
 export interface OverviewKpis {
   sessions: number
-  listed: number
   tokens: number
   turns: number
   cost: number | null
@@ -596,7 +610,6 @@ export interface OverviewKpis {
 
 export function kpisOf(
   rows: readonly OverviewRow[],
-  listed: number,
   book: ModelBook | null | undefined,
   currency: CostCurrency,
 ): OverviewKpis {
@@ -623,7 +636,6 @@ export function kpisOf(
   }
   return {
     sessions: rows.length,
-    listed,
     tokens: totals?.total ?? 0,
     turns,
     cost: estimateSessionCost(usage, book, currency),
@@ -701,10 +713,6 @@ export function refreshSessions(ctx: ClientCtx): void {
     void Promise.resolve(sessions.refresh()).catch(() => { /* a failed re-pull keeps the stale rows */ })
   } catch { /* hostile service — no refresh */ }
 }
-
-// The plugin's warm-up trigger route (host/backfill.ts), re-declared here: the
-// client bundle inlines every import and the host module must never reach it.
-const BACKFILL_ROUTE = '/api/dsh-context/backfill'
 
 /** Summon the host's projection warm-up (host/backfill.ts): this page is
  * the rows' only reader, so the host defers the corpus-wide cold reads until

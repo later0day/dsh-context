@@ -28,7 +28,9 @@ export const CATS: { key: Category | 'system' | 'tools'; color: string }[] = [
 
 export const CAT_COLOR = Object.fromEntries(CATS.map(c => [c.key, c.color])) as Record<Category | 'system' | 'tools', string>
 
-const MESSAGE_CATS: readonly (Category | 'system' | 'tools')[] = ['user', 'inject', 'skill', 'assistant', 'tool']
+/** The message-fold categories in canonical order — the tail of CATS without the
+ * singular `system`/`tools` bands. The pie panel and the block map lay parts out in this order. */
+export const MESSAGE_CATS: readonly (Category | 'system' | 'tools')[] = ['user', 'inject', 'skill', 'assistant', 'tool']
 
 export function partsOf(breakdown: Snapshot['current'] | RequestRecord): PartsPart[] {
   return CATS.map((c) => {

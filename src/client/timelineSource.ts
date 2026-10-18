@@ -16,12 +16,9 @@
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { ContextTimeline, ContextTimelineDetail } from '../shared/types'
+import { DETAIL_ROUTE } from './apiRoutes'
 import type { SessionStandardProps } from './services'
 import { asRecord, collectionsOf, projectionOf, timelineOf } from './services'
-
-// The detail route of host/detail.ts, re-declared here: the client bundle
-// inlines every import and the host module must never reach it.
-const DETAIL_ROUTE = '/api/dsh-context/detail'
 
 /** Narrow the detail endpoint's payload; a missing or NaN revision rejects the
  * whole payload so the caller shows its retryable note, never half-merged data. */

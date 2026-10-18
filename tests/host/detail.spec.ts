@@ -2,11 +2,13 @@
 // independent), the live flip on unload, and typed outcomes — never a throw into the transport.
 
 import assert from 'node:assert/strict'
-import { describe, test } from 'vitest'
+import { describe, test, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { DETAIL_ROUTE, watchDetailChannel } from '../../src/host/detail'
 import { resolveBounds } from '../../src/host/config'
 import type { TimelineState } from '../../src/host/fold'
+import { buildTimelineDetail } from '../../src/host/foldWire'
+import type { TimelineEvent } from '../../src/host/foldState'
 import { assistantMessage, header, userMessage } from './helpers/events'
 import { driveTimeline } from './helpers/projection'
 
@@ -18,6 +20,7 @@ interface CtxSpec {
   connection?: unknown
   sessions?: unknown
   sessionQuery?: unknown
+  sessionPersistence?: unknown
   stateOf?: (session: unknown, key: string) => unknown
 }
 
@@ -31,6 +34,7 @@ function ctxOf(spec: CtxSpec): { ctx: Context; captured: { path?: string; fetch?
   if ('connection' in spec) services.set('connection', spec.connection)
   if ('sessions' in spec) services.set('sessions', spec.sessions)
   if ('sessionQuery' in spec) services.set('sessionQuery', spec.sessionQuery)
+  if ('sessionPersistence' in spec) services.set('sessionPersistence', spec.sessionPersistence)
   const ctx = {
     get: (name: string) => services.get(name),
     sessionProjections: { stateOf: spec.stateOf ?? (() => undefined) },
@@ -359,5 +363,158 @@ describe('the detail route', () => {
     const r4 = await call(stringThrow.captured, { sessionId: 's1' }) as { ok: boolean; error: { message: string } }
     assert.equal(r4.ok, false)
     assert.equal(r4.error.message, 'string boom')
+  })
+})
+
+describe('the cold fold (issue #145)', () => {
+  function coldCtx(observe: (id: string) => Promise<unknown>, persistence: unknown = { backend: 'default' }): { ctx: Context; captured: { fetch?: RouteFetch } } {
+    return ctxOf({
+      connection: { fetch: { register: () => () => {} } },
+      sessions: sessionsWith(okSession()),
+      stateOf: () => undefined,
+      sessionQuery: { observeSession: (id: string) => observe(id) },
+      sessionPersistence: persistence,
+    })
+  }
+
+  function manyEvents(count: number): TimelineEvent[] {
+    const events: TimelineEvent[] = [header(1, { model: 'deepseek-v4-flash', provider: 'deepseek' })]
+    for (let seq = 2; seq <= count; seq++) {
+      events.push(seq % 2 === 0
+        ? userMessage(seq, [{ type: 'text', text: `question ${seq}` }], { kind: 'user' })
+        : assistantMessage(seq, { turn: seq, step: seq, usage: { inputTokens: 10, outputTokens: 5 } }))
+    }
+    return events
+  }
+
+  test('a monster log folds to the byte-identical detail, yielding to the event loop per chunk', async () => {
+    const events = manyEvents(2_001)
+    const { ctx, captured } = coldCtx(() => Promise.resolve({ events, [Symbol.dispose]: () => {} }))
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout')
+    try {
+      watchDetailChannel(ctx, BOUNDS)
+      const result = await call(captured, { sessionId: 'cold1' }) as { ok: boolean; value: unknown }
+      assert.equal(result.ok, true)
+      const reference = buildTimelineDetail(driveTimeline(events).state, BOUNDS)
+      assert.deepStrictEqual(result.value, reference, 'the yielding fold produces the identical payload')
+      const yields = timerSpy.mock.calls.filter(args => args[1] === 0).length
+      assert.equal(yields, 2, 'two macrotask yields across 2,001 events')
+    } finally {
+      timerSpy.mockRestore()
+    }
+  })
+
+  test('an unchanged log (same durable revision) re-serves the payload without refolding', async () => {
+    const events = manyEvents(5)
+    let eventReads = 0
+    let disposed = 0
+    const { ctx, captured } = coldCtx(() => Promise.resolve({
+      revision: 'dev:ino:100:42:42',
+      get events() {
+        eventReads++
+        return events
+      },
+      [Symbol.dispose]: () => { disposed++ },
+    }))
+    watchDetailChannel(ctx, BOUNDS)
+    const first = await call(captured, { sessionId: 'cold1' })
+    const second = await call(captured, { sessionId: 'cold1' })
+    assert.equal(eventReads, 1, 'the second read never touched the log')
+    assert.deepEqual(second, first, 'the re-served payload is identical')
+    assert.equal(disposed, 2, 'both observation leases released')
+  })
+
+  test('a changed revision refolds (no stale payload, ever)', async () => {
+    const events = manyEvents(5)
+    let eventReads = 0
+    let revision = 'r1'
+    const { ctx, captured } = coldCtx(() => Promise.resolve({
+      get revision() { return revision },
+      get events() {
+        eventReads++
+        return events
+      },
+      [Symbol.dispose]: () => {},
+    }))
+    watchDetailChannel(ctx, BOUNDS)
+    await call(captured, { sessionId: 'cold1' })
+    revision = 'r2' // the log moved: a new durable revision must fold again
+    await call(captured, { sessionId: 'cold1' })
+    assert.equal(eventReads, 2, 'the changed log refolded instead of serving stale data')
+  })
+
+  test('an observation without a revision (a live-race cut) never keys the cache', async () => {
+    const events = manyEvents(5)
+    let eventReads = 0
+    const { ctx, captured } = coldCtx(() => Promise.resolve({
+      get events() {
+        eventReads++
+        return events
+      },
+      [Symbol.dispose]: () => {},
+    }))
+    watchDetailChannel(ctx, BOUNDS)
+    await call(captured, { sessionId: 'cold1' })
+    await call(captured, { sessionId: 'cold1' })
+    assert.equal(eventReads, 2, 'no revision — every read folds, as before')
+  })
+
+  test('the cache holds four sessions; the evicted oldest refolds, the kept newest re-serves', async () => {
+    const reads = new Map<string, number>()
+    const { ctx, captured } = coldCtx((id) => Promise.resolve({
+      revision: `r-${id}`,
+      get events() {
+        reads.set(id, (reads.get(id) ?? 0) + 1)
+        return manyEvents(5)
+      },
+      [Symbol.dispose]: () => {},
+    }))
+    watchDetailChannel(ctx, BOUNDS)
+    for (const id of ['c1', 'c2', 'c3', 'c4', 'c5']) await call(captured, { sessionId: id })
+    assert.deepEqual([...reads.values()], [1, 1, 1, 1, 1], 'every first read folded')
+    await call(captured, { sessionId: 'c5' })
+    assert.equal(reads.get('c5'), 1, 'the newest entry survived eviction')
+    await call(captured, { sessionId: 'c1' })
+    assert.equal(reads.get('c1'), 2, 'the evicted oldest refolded on its next read')
+  })
+
+  test('a swapped persistence instance can never alias a stale payload (the dsh trust tuple)', async () => {
+    const events = manyEvents(5)
+    let eventReads = 0
+    const observe = (): Promise<unknown> => Promise.resolve({
+      revision: 'same-token-from-two-backends',
+      get events() {
+        eventReads++
+        return events
+      },
+      [Symbol.dispose]: () => {},
+    })
+    const first = coldCtx(observe, { backend: 'one' })
+    watchDetailChannel(first.ctx, BOUNDS)
+    await call(first.captured, { sessionId: 'cold1' })
+    // The storage backend was replaced (its revision tokens say nothing anymore): refold.
+    const second = coldCtx(observe, { backend: 'two' })
+    watchDetailChannel(second.ctx, BOUNDS)
+    await call(second.captured, { sessionId: 'cold1' })
+    assert.equal(eventReads, 2, 'a replaced persistence invalidates every cached payload')
+  })
+
+  test('a remount (a fresh watch closure) starts with an empty cache', async () => {
+    const events = manyEvents(5)
+    let eventReads = 0
+    const { ctx, captured } = coldCtx(() => Promise.resolve({
+      revision: 'r1',
+      get events() {
+        eventReads++
+        return events
+      },
+      [Symbol.dispose]: () => {},
+    }))
+    watchDetailChannel(ctx, BOUNDS)
+    await call(captured, { sessionId: 'cold1' })
+    // The second watch (the config remount's re-arm) shares nothing with the first.
+    watchDetailChannel(ctx, BOUNDS)
+    await call(captured, { sessionId: 'cold1' })
+    assert.equal(eventReads, 2, 'the remounted route folds against its own cache')
   })
 })

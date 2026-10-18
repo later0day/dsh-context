@@ -17,7 +17,8 @@
  * each series' own peak, a solid baseline at 0, and a tick rail on each
  * side — TOKENS on the left, COST on the right, computed from the same
  * maxima the bars scale to. The cost rail reads '—' until some day actually
- * prices.
+ * prices. Each tokens bar carries its own day's figure above it, so the
+ * common case reads without hovering.
  */
 
 import type { ReactElement } from 'react'
@@ -86,15 +87,17 @@ export function makeOverviewUsage(kit: ViewKit): (props: OverviewUsageProps) => 
                   {TICKS.map(p => <span key={p} className="lc-ov-usage-tick" style={{ top: `${100 - p}%` }}>{tickOf(p)}</span>)}
                 </div>
                 <div className="lc-ov-usage-grid">
-                  {TICKS.map(p => (
-                    <span
-                      key={p}
-                      className={'lc-ov-usage-line' + (p === 0 ? ' lc-ov-usage-line-0' : '')}
-                      style={{ bottom: `${p}%` }}
-                      aria-hidden="true"
-                    />
-                  ))}
                   <div className="lc-ov-usage-cols">
+                    {/* The gridlines resolve against the bars' own box, so the headroom the value labels
+                        take above the tallest bar never shifts the scale they mark. */}
+                    {TICKS.map(p => (
+                      <span
+                        key={p}
+                        className={'lc-ov-usage-line' + (p === 0 ? ' lc-ov-usage-line-0' : '')}
+                        style={{ bottom: `${p}%` }}
+                        aria-hidden="true"
+                      />
+                    ))}
                     {columns.map((c) => {
                       const tokens = c.entry?.tokens ?? 0
                       const cost = c.entry?.cost ?? null
@@ -106,7 +109,10 @@ export function makeOverviewUsage(kit: ViewKit): (props: OverviewUsageProps) => 
                             <span
                               className="lc-ov-usage-bar lc-ov-usage-tokens"
                               style={{ height: heightOf(tokens, maxTokens) }}
-                            />
+                            >
+                              {/* The day's own figure, riding its bar's top — a day with no tokens has nothing to say. */}
+                              {tokens > 0 && <span className="lc-ov-usage-value">{fmt(tokens)}</span>}
+                            </span>
                             <span
                               className="lc-ov-usage-bar lc-ov-usage-cost"
                               style={{ height: cost === null ? '0%' : heightOf(cost, maxCost) }}

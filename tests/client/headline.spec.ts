@@ -132,6 +132,31 @@ describe('headlineOf window and pct', () => {
   })
 })
 
+describe('headlineOf reserve', () => {
+  test('the timeline window and output cap resolve the two masks', () => {
+    const h = headlineOf(timeline({ contextWindow: 1_000_000, maxOutputTokens: 256_000 }), null)
+    assert.deepEqual(h.reserve, { threshold: 678_464, headroom: 65_536, output: 256_000 })
+  })
+
+  test('without an output cap only the headroom mask is left (at its true size, the trigger detached)', () => {
+    const h = headlineOf(timeline({ contextWindow: 1_000_000 }), null)
+    assert.deepEqual(h.reserve, { threshold: 800_000, headroom: 65_536, output: 0 })
+  })
+
+  test('a hostile or non-positive cap reserves nothing; no window yields no reserve at all', () => {
+    const hostile = headlineOf(timeline({ contextWindow: 1_000_000, maxOutputTokens: 'junk' as unknown as number }), null)
+    assert.deepEqual(hostile.reserve, { threshold: 800_000, headroom: 65_536, output: 0 })
+    const zero = headlineOf(timeline({ contextWindow: 1_000_000, maxOutputTokens: 0 }), null)
+    assert.deepEqual(zero.reserve, { threshold: 800_000, headroom: 65_536, output: 0 })
+    assert.equal(headlineOf(timeline({ maxOutputTokens: 256_000 }), null).reserve, undefined)
+  })
+
+  test('the pressure projection\'s window drives the reserve when the timeline has none', () => {
+    const h = headlineOf(timeline({ maxOutputTokens: 256_000 }), { contextWindow: 1_000_000 })
+    assert.deepEqual(h.reserve, { threshold: 678_464, headroom: 65_536, output: 256_000 })
+  })
+})
+
 describe('headlineOf parts', () => {
   test('a known positive occupancy anchors the parts to it', () => {
     const h = headlineOf(timeline(), { projectedTokens: 200 })

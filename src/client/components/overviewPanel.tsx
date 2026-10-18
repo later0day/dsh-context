@@ -8,7 +8,10 @@
  * <body>, because that container would otherwise capture their fixed positioning.
  *
  * The cluster holds ONE scope: a picked calendar range replaces the rolling preset and clicking a preset hands it
- * back, so they never both claim it, and everything the presets scope reads that one resolved window. Below the KPI
+ * back, so they never both claim it, and everything the presets scope reads that one resolved window. The coverage
+ * picker sits at the sessions feed's head and defaults to All: archived sessions fold into the page's every figure
+ * unless the picker narrows them, and the Active Sessions card's label and sub-line follow the picked coverage.
+ * Below the KPI
  * band and the usage chart, the heatmap pins both its column mates to a picked day, and a skill-card row click
  * narrows the session column to that skill's loaders within the same scope. A session card jumps through the
  * harness's own `openSessionVia`, whose navigation returns the center column to the conversation.
@@ -19,11 +22,11 @@ import { estimateSessionCost, formatCost, type CostCurrency, type ModelBook } fr
 import { fmt } from '../format'
 import { useModelPrices } from '../modelPrices'
 import {
-  aggregateDays, dayRangeWindow, filterRows, groupCountsOf, inGroup, kpisOf,
+  aggregateDays, coveredRowsOf, dayRangeWindow, filterRows, groupCountsOf, inGroup, kpisOf,
   pageOf, rangeWindowOf, refreshSessions, requestActivityBackfill, rowsOfSnapshot,
   rowLoadedSkill, sessionGroupsOf, sessionsSnapshotOf, skillLoadsOf, sortRows,
   UNGROUPED_KEY, workspacesSnapshotOf,
-  type DayRange, type OverviewRange, type OverviewRow, type OverviewSort, type SkillSort,
+  type DayRange, type OverviewCoverage, type OverviewRange, type OverviewRow, type OverviewSort, type SkillSort,
 } from '../overview'
 import { openSessionVia, type ClientCtx } from '../services'
 import { readSkillCatalog } from '../skills'
@@ -42,6 +45,7 @@ import { makeOverviewUsage } from './overviewUsage'
 import { makeStatsTiming } from './statsTiming'
 import { makeOverviewCard } from './overviewCard'
 import { makeOverviewSkills } from './overviewSkills'
+import { makeUpdatePill } from './updatePill'
 import { IconSettings } from '../primitives'
 
 export interface OverviewPanelProps {
@@ -51,6 +55,8 @@ export interface OverviewPanelProps {
 
 const RANGES: readonly OverviewRange[] = ['today', '7d', '30d', 'all']
 const SORTS: readonly OverviewSort[] = ['recent', 'tokens', 'context']
+/** The coverage scopes the sessions feed serves, in menu order. */
+const COVERAGE: readonly OverviewCoverage[] = ['all', 'active', 'archived']
 /** The heatmap's depth metrics, in toggle order (steps is the default). */
 const METRICS: readonly HeatMetric[] = ['sessions', 'steps']
 
@@ -64,6 +70,7 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
   const StatsTiming = makeStatsTiming(kit, Donut)
   const OverviewUsage = makeOverviewUsage(kit)
   const OverviewSkills = makeOverviewSkills(kit)
+  const UpdatePill = makeUpdatePill(kit)
   const ErrorBoundary = makeErrorBoundary(t)
 
   // Read per render: the slot outlet re-renders on a locale switch.
@@ -83,6 +90,7 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
     const wsSnapshot = workspacesSnapshotOf(props)
     const [preset, setPreset] = useState<OverviewRange>('30d')
     const [custom, setCustom] = useState<DayRange | null>(null)
+    const [coverage, setCoverage] = useState<OverviewCoverage>('all')
     const [day, setDay] = useState<string | null>(null)
     const [query, setQuery] = useState('')
     const [group, setGroup] = useState<string | null>(null)
@@ -120,11 +128,12 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
     }, [])
 
     // Any filter change re-anchors the pager at the first page.
-    useEffect(() => { setPage(0) }, [preset, custom, day, query, group, skill, sort])
+    useEffect(() => { setPage(0) }, [preset, custom, coverage, day, query, group, skill, sort])
 
     const currency = activeCurrency()
     const now = Date.now()
     const allRows = rows ?? []
+    const covered = coveredRowsOf(allRows, coverage)
     // The scope window every figure below reads: the calendar's own picked
     // range while one is set (a malformed key keeps the preset, never an unprovable window), else the preset's rolling floor.
     const scope = (custom !== null ? dayRangeWindow(custom) : null) ?? rangeWindowOf(preset, now)
@@ -135,8 +144,8 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
     const spanTo = scope.start === null ? null : dayKeyOf(scope.end ?? now)
     const span = spanFrom !== null && spanTo !== null ? { from: spanFrom, to: spanTo } : null
     // The scope scopes the KPI band, the composition donut, and the grid;
-    // the heatmap keeps its own fixed window over the whole list.
-    const ranged = filterRows(allRows, { scope, day: null, query: '' })
+    // the heatmap keeps its own fixed window over the coverage-selected list.
+    const ranged = filterRows(covered, { scope, day: null, query: '' })
     // The group chips count the day/query-scoped rows BEFORE the group filter
     // applies, so selecting a chip never collapses the row itself.
     const scoped = filterRows(ranged, { scope, day, query })
@@ -154,13 +163,19 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
       sort,
     )
     const paged = pageOf(visible, page)
-    const kpi = kpisOf(ranged, allRows.length, book, currency)
-    const days = aggregateDays(allRows, book, currency)
+    const kpi = kpisOf(ranged, book, currency)
+    const days = aggregateDays(covered, book, currency)
     const openOne = (id: string): void => {
       // The view owner's verb navigates the center column back to the
       // conversation itself (selectPanel(null)), so the page needs no close.
       openSessionVia(ctx, id)
     }
+    // The sessions card mirrors its coverage: All prices in the window's
+    // archived share; the narrow scopes name what the full list holds.
+    const sessionsLabel = coverage === 'archived' ? t('ov.kpi.archived') : coverage === 'active' ? t('ov.kpi.sessions') : t('ov.kpi.allSessions')
+    const sessionsSub = coverage === 'all'
+      ? t('ov.kpi.inclArchived', { n: ranged.filter(row => row.archived).length })
+      : t('ov.kpi.ofTotal', { n: allRows.length })
 
     return (
       <section className="lc-ov-page" aria-label={t('ov.title')} {...zoneProps}>
@@ -175,6 +190,7 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
               </button>
               {/* Renders nothing until a live figure lands, so the heading row never reflows for it. */}
               <BalanceCapsule />
+              <UpdatePill />
               {/* One wrapper so the head's right cluster pushes once; a bare `.lc-gran` sibling would split the free space. */}
               <div className="lc-ov-headctl">
                 <DateRange
@@ -205,9 +221,9 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
                 <div className="lc-ov-first">
                   <div className="lc-ov-kpis">
                     <div className="lc-stat lc-ov-kpi">
-                      <span className="lc-stat-label">{t('ov.kpi.sessions')}</span>
+                      <span className="lc-stat-label">{sessionsLabel}</span>
                       <span className="lc-stat-value">{kpi.sessions}</span>
-                      <span className="lc-stat-sub">{t('ov.kpi.ofTotal', { n: kpi.listed })}</span>
+                      <span className="lc-stat-sub">{sessionsSub}</span>
                     </div>
                     <div className="lc-stat lc-ov-kpi">
                       <span className="lc-stat-label">{t('ov.kpi.tokens')}</span>
@@ -297,6 +313,16 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
                         aria-label={t('ov.list.search')}
                         onChange={(ev) => { setQuery(ev.target.value) }}
                       />
+                      <select
+                        className="lc-ov-cover"
+                        value={coverage}
+                        aria-label={t('ov.cover.label')}
+                        onChange={(ev) => { setCoverage(ev.target.value as OverviewCoverage) }}
+                      >
+                        {COVERAGE.map(c => (
+                          <option key={c} value={c}>{t('ov.cover.' + c)}</option>
+                        ))}
+                      </select>
                       <div className="lc-gran" role="group" aria-label={t('ov.list.sortLabel')}>
                         {SORTS.map(s => (
                           <button
