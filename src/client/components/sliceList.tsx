@@ -11,7 +11,8 @@ export interface SliceRow {
   pct: string
   /** Preformatted secondary line; empty renders no line. */
   count: string
-  /** A zero-figure slice dims whole — the ring already carries the share. */
+  /** A zero-figure slice dims whole; the owning card decides whether its row
+   * still renders (the timing card keeps the zero residual slot). */
   dim?: boolean
 }
 

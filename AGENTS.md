@@ -41,7 +41,7 @@ Complete ALL of these before ANY commit:
 - Close out the to-do list, ensuring every item is completed, cleaned up or explicitly closed.
 - Review the full diff independently: every change necessary, correct, and not over-engineered.
 - Clean up generated temporary files and temporary or unhelpful comments.
-- Load the [code-review](https://github.com/mattpocock/skills/tree/main/skills/engineering/code-review) skill if available, run it to review all the changes, and independently verify or follow each of its suggestions when its multi-axis analysis done.
+- Load the [code-review](https://github.com/mattpocock/skills/tree/main/skills/engineering/code-review) skill, run it to review all the changes, and independently verify or follow each of its suggestions after its multi-axis analysis done.
 - Run `pnpm run check`: it runs `pnpm run lint`, `pnpm run typecheck` and `pnpm run coverage` concurrently, prints each tool's COMPLETE output, and fails when any of them does (the same logs stay in `.tmp/check-logs/`).
   - Fix every lint and type error, and ensure 100% per-file coverage. Please capture the ALL content of the full output without truncation or tailing.
     - Example for per-file 100% coverage output:

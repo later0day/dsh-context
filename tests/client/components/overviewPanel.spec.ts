@@ -50,7 +50,20 @@ function sessionsSnapshot(): { ids: string[]; byId: Record<string, Record<string
         running: true,
         projectionValues: {
           contextTimeline: timeline(),
-          contextActivity: { days: { [TODAY]: { tokens: 100, requests: 2 }, [YESTERDAY]: { tokens: 50, requests: 1 } } },
+          contextActivity: {
+            days: {
+              [TODAY]: {
+                tokens: 100,
+                requests: 2,
+                turns: 2,
+                toolCalls: 4,
+                toolsMs: 10_000,
+                wallMs: 45_000,
+                cost: { deepseek: { 'deepseek-v4-flash': { peak: { uncached: 1000, cacheRead: 500, cacheWrite: 0, output: 250 } } } },
+              },
+              [YESTERDAY]: { tokens: 50, requests: 1, turns: 1, toolCalls: 3, toolsMs: 10_000, wallMs: 45_000 },
+            },
+          },
         },
       },
       b: {
@@ -59,7 +72,7 @@ function sessionsSnapshot(): { ids: string[]; byId: Record<string, Record<string
         updatedAt: NOW - 10 * 86_400_000,
         projectionValues: {
           contextTimeline: timeline({ current: { system: 10, tools: 0, user: 0, inject: 0, skill: 0, assistant: 0, tool: 0, total: 10 }, cost: undefined }),
-          contextActivity: { days: { [YESTERDAY]: { tokens: 25, requests: 1 } } },
+          contextActivity: { days: { [YESTERDAY]: { tokens: 25, requests: 1, turns: 1, toolCalls: 7, toolsMs: 20_000, wallMs: 90_000 } } },
         },
       },
       c: {
@@ -161,7 +174,7 @@ describe('OverviewPanel', () => {
     assert.equal(values[4], '14')
     assert.equal(values[5], '3m0s')
     assert.ok(text(m.container).includes('tool runs 40.0s'), 'the tool calls cell qualifies with the summed run time')
-    assert.ok(text(m.container).includes('8 model calls'), 'the active-time cell qualifies with the model-call count')
+    assert.ok(text(m.container).includes('4 model calls'), 'the active-time cell qualifies with the settled model-call count')
     // Cost and cache hit qualify with the session count each figure covers
     // (only session a carries usage; b folds no cost at all).
     const subs = queryAll(m.container, '.lc-stat-sub').map(el => el.textContent)
@@ -256,7 +269,7 @@ describe('OverviewPanel', () => {
     assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1, "only today's session stays")
     await click(rangeButtons[1]) // Last 7 days
     assert.deepEqual(span(), [dayKeyOf(NOW - 7 * 86_400_000), TODAY])
-    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1, 'only the freshest stays')
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 2, 'the yesterday-active session joins the prompt-fresh one')
     await click(rangeButtons[2]) // back to 30d
     assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 2)
     await m.unmount()
@@ -275,9 +288,9 @@ describe('OverviewPanel', () => {
       [YESTERDAY, TODAY],
       'the head names both ends, start first',
     )
-    // The window closes at both ends: only the session last touched inside it stays.
-    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1)
-    assert.equal(queryAll(m.container, '.lc-stat-value')[0].textContent, '1', 'the KPI band narrowed with it')
+    // The window closes at both ends: the prompt-fresh session and the yesterday-active one stay.
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 2)
+    assert.equal(queryAll(m.container, '.lc-stat-value')[0].textContent, '2', 'the KPI band narrowed with it')
     assert.ok(
       rangeButtons.every(b => !b.className.includes('lc-gran-on')),
       'a picked range and a preset are never both lit',
@@ -301,7 +314,7 @@ describe('OverviewPanel', () => {
       [YESTERDAY, TODAY],
       'the picked pair is sorted, start day first',
     )
-    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 1, 'the same window a forward pick would have left')
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-session').length, 2, 'the same window a forward pick would have left')
     await m.unmount()
   })
 
@@ -370,16 +383,16 @@ describe('OverviewPanel', () => {
     await m.unmount()
   })
 
-  test('the metric toggle re-prices the heatmap between steps and sessions', async () => {
+  test('the metric toggle re-prices the heatmap between tokens and sessions', async () => {
     const ctx = makeCtx()
     const { m } = await openPanel(ctx)
     const todayCellClass = (): string | undefined =>
       queryAll<HTMLButtonElement>(m.container, 'button.lc-heat-cell')
         .find(c => c.getAttribute('aria-label')?.startsWith(TODAY))?.className
-    assert.ok(todayCellClass()?.includes('lc-heat-4'), 'steps mode (default): today holds the steps peak')
+    assert.ok(todayCellClass()?.includes('lc-heat-4'), 'tokens mode (default): today holds the token peak')
     const metricButtons = queryAll<HTMLButtonElement>(m.container, '.lc-heat-ctl .lc-gran-btn')
-    assert.deepEqual(metricButtons.map(b => b.textContent), ['Sessions', 'Steps'])
-    assert.ok(metricButtons[1].className.includes('lc-gran-on'), 'steps starts selected')
+    assert.deepEqual(metricButtons.map(b => b.textContent), ['Sessions', 'Tokens'])
+    assert.ok(metricButtons[1].className.includes('lc-gran-on'), 'tokens starts selected')
     await click(metricButtons[0])
     const after = queryAll<HTMLButtonElement>(m.container, '.lc-heat-ctl .lc-gran-btn')
     assert.ok(after[0].className.includes('lc-gran-on'), 'the click selects sessions')

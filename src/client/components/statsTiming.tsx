@@ -9,9 +9,10 @@
  * the true duration and qualify it with a tally on the secondary line — the
  * model calls (TTFT), the tool runs, and the decode slices' own BLOCK counts
  * (zero to many per call, so a call count would be a false tally there). A
- * slice that never happened (zero time) is omitted entirely — the ring already skips
+ * slice that never happened (zero time) is omitted — the ring already skips
  * its arc, and a zero row would otherwise borrow the session's call count and
- * read as "no time, many calls". The donut and the rows sit side by side so
+ * read as "no time, many calls" — except the residual overhead row, which
+ * keeps its dimmed slot at zero. The donut and the rows sit side by side so
  * the head row stays half-height. Parallel tool calls each count, so the tools
  * figure can overlap — the ring clamps it into the post-model window while the
  * row numbers stay true. Below them the session-time strip packs every
@@ -55,10 +56,11 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
    * slices). Absent on the overview's cross-session aggregate card and on
    * rows folded before the collection existed — the card then shows no strip. */
   spans?: TimingSpan[]
+  locale?: string
 }) => ReactElement {
   const { t, fmt, fmtDuration, fmtShare } = kit
   const TimingStrip = makeTimingStrip(kit)
-  return function StatsTiming(props: { timing: TimingTotals | null; spans?: TimingSpan[] }): ReactElement {
+  return function StatsTiming(props: { timing: TimingTotals | null; spans?: TimingSpan[]; locale?: string }): ReactElement {
     // The legend row ↔ donut segment hover link (shared key, set from either side).
     const [hoverKey, setHoverKey] = useState<string | null>(null)
     const timing = props.timing
@@ -159,21 +161,26 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
         pct: fmtShare(slice.ms, wall),
         count: countOf(slice.ms, slice.times),
       })
-      // A slice that never happened is HIDDEN rather than shown as a zero row:
-      // a "0.0%" row still carrying a count ("— · 323 calls") reads as "this
-      // ran 323 times in no time" when in truth nothing ever ran or decoded
-      // there. The ring already skips zero arcs, so the legend now matches it.
-      // Every slice is a share of the wall total, so dropping rows never distorts the remaining percentages.
-      rows = [
+      // A slice that never happened stays hidden: a "0.0%" row still carrying
+      // the session's count reads as "many calls, no time". The residual
+      // overhead row is the exception — the live totals price an open step's
+      // model/tool windows before its wall time, so it transiently clamps to
+      // zero and would otherwise vanish (and resize the card) at every step
+      // boundary. A timing with no priced slice at all keeps the empty state.
+      const sliceRows = [
         ...modelSlices.map(toRow),
         toRow(toolSlice),
         toRow(otherSlice),
-      ].filter(row => !row.dim)
+      ]
+      rows = sliceRows.some(row => !row.dim)
+        ? sliceRows.filter(row => !row.dim || row.key === otherSlice.key)
+        : []
     }
     return (
       <div className="lc-card lc-col-donut flex-1 min-w-[min(360px,100%)]">
         <div className="lc-card-title">
           <span className="lc-card-title-text">{t('timing.title')}</span>
+          <span className="lc-card-sub">{t('timing.scope')}</span>
           {tps !== null && (
             <span className="lc-card-rate" title={t('timing.tpsTip')}>{t('timing.tps', { tps })}</span>
           )}
@@ -201,7 +208,7 @@ export function makeStatsTiming(kit: ViewKit, Donut: (props: DonutProps) => Reac
                   every span of its KIND plus the donut arc and the legend row,
                   and a legend/donut hover lights the strip's matching spans. */}
               {props.spans !== undefined && props.spans.length > 0
-                ? <TimingStrip spans={props.spans} hoverKey={hoverKey} onHoverKey={setHoverKey} />
+                ? <TimingStrip spans={props.spans} hoverKey={hoverKey} onHoverKey={setHoverKey} locale={props.locale} />
                 : null}
             </>
           )}

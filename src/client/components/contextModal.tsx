@@ -37,6 +37,13 @@ export function makeContextModal(
   const DetailNote = makeDetailNote(kit)
   const ErrorBoundary = makeErrorBoundary(t)
 
+  /** The slot outlet re-renders this body on a locale switch; the browser's memoized labels follow the prop. */
+  function activeLocale(): string {
+    const locale = ctx.locale
+    /* v8 ignore next 1 -- older Host halves may serve no locale service; the live shell always does. */
+    return typeof locale.getLocale === 'function' ? locale.getLocale().active : 'en'
+  }
+
   function ContextModalBody(props: ContextModalProps): ReactElement | null {
     const sessionId = typeof props.sessionId === 'string' ? props.sessionId : ''
     const open = typeof props.useContextModal === 'function' ? props.useContextModal(s => s) : false
@@ -141,6 +148,7 @@ export function makeContextModal(
                 onHoverKey={setHoverCat}
                 detailState={source.detailState}
                 onDetailRetry={source.retryDetail}
+                locale={activeLocale()}
               />
             </div>
           )}

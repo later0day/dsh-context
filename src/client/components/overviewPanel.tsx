@@ -57,8 +57,8 @@ const RANGES: readonly OverviewRange[] = ['today', '7d', '30d', 'all']
 const SORTS: readonly OverviewSort[] = ['recent', 'tokens', 'context']
 /** The coverage scopes the sessions feed serves, in menu order. */
 const COVERAGE: readonly OverviewCoverage[] = ['all', 'active', 'archived']
-/** The heatmap's depth metrics, in toggle order (steps is the default). */
-const METRICS: readonly HeatMetric[] = ['sessions', 'steps']
+/** The heatmap's depth metrics, in toggle order (tokens is the default). */
+const METRICS: readonly HeatMetric[] = ['sessions', 'tokens']
 
 export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: OverviewPanelProps) => ReactElement | null {
   const { t, fmtDuration } = kit
@@ -97,7 +97,7 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
     const [skill, setSkill] = useState<string | null>(null)
     const [skillSort, setSkillSort] = useState<SkillSort>('loads')
     const [sort, setSort] = useState<OverviewSort>('recent')
-    const [metric, setMetric] = useState<HeatMetric>('steps')
+    const [metric, setMetric] = useState<HeatMetric>('tokens')
     const [page, setPage] = useState(0)
     const { zoneProps, bubble } = useHoverTip()
 
@@ -163,7 +163,7 @@ export function makeOverviewPanel(ctx: ClientCtx, kit: ViewKit): (props: Overvie
       sort,
     )
     const paged = pageOf(visible, page)
-    const kpi = kpisOf(ranged, book, currency)
+    const kpi = kpisOf(ranged, book, currency, scope)
     const days = aggregateDays(covered, book, currency)
     const openOne = (id: string): void => {
       // The view owner's verb navigates the center column back to the

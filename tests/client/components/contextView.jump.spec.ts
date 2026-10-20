@@ -134,7 +134,7 @@ describe('ContextView — the stats board\'s pill jumps', () => {
       const fileCard = queryAll(m.container, '.lc-card').find(c => text(c).includes(DICT_EN['files.title']))
       assert.ok(fileCard !== undefined)
       const chip = (label: string): HTMLElement => {
-        const hit = queryAll(fileCard, '.lc-fa-ctl .lc-gran-btn').find(b => text(b).startsWith(label))
+        const hit = queryAll(fileCard, '.lc-fa-chips .lc-gran-btn').find(b => text(b).startsWith(label))
         if (hit === undefined) throw new Error(`chip not found: ${label}`)
         return hit
       }

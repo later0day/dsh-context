@@ -1,4 +1,4 @@
-import { createElement as h, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { createElement as h, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import type { Category, ContextEventRecord, RequestRecord, SurfaceNode } from '../../shared/types'
 import { CATS } from '../categories'
 import { briefNodes, briefOf } from '../brief'
@@ -11,7 +11,7 @@ import { useContextSession } from '../sessionData'
 import { makeDetailNote } from './detailNote'
 import { canOpenPathsOf, openPathVia, openResourceVia, workspaceOf } from '../services'
 import { makeAttachmentOpener } from '../attachmentSource'
-import { activityOf, activityOfOps, locateStepOf, previewAddressOf } from '../fileActivity'
+import { activityOf, activityOfOps, locateStepOf, previewAddressOf, surfaceSeqOf } from '../fileActivity'
 import type { FileEntry, FileOp } from '../fileActivity'
 import type { ContextSettings } from '../settings'
 import type { ViewKit } from '../viewkit'
@@ -35,8 +35,11 @@ import { makeStatsTokens } from './statsTokens'
 import { makeLegend, makeStackedBar } from './stackedBar'
 import { aggregateByTurn, attachMarkers, jumpTargetOf, makeTrendChart, turnStepsOf } from './trendChart'
 import { makeTrendOverview } from './trendOverview'
-import { assemble } from '../assemble'
+import { stepStampOf } from './browserHelpers'
+import { cachedByData, assembleCached } from './derivedCache'
+import { useLazyMount } from './useLazyMount'
 import { trendBandsOf } from '../dna'
+import type { TrendBand } from '../dna'
 
 import { activateViewTab, openContextSidebar, subscribeContextFocus, takeContextFocus } from '../viewFocus'
 import { revealInScrollParent } from '../revealScroll'
@@ -47,6 +50,11 @@ import { makeErrorBoundary } from './errorBoundary'
 const viewScroll = new Map<string, number>()
 
 const EVENT_KINDS = ['inject', 'compaction', 'prune', 'model', 'mode'] as const
+/** Ordinary sweeps coalesce on this trailing delay; DNA bars are heavier and wait longer for the pointer to rest. */
+const HOVER_DELAY_MS = 140
+const DNA_HOVER_DELAY = 220
+/** Above this many retained steps the DNA bands are built lazily per rendered window. */
+const DNA_LAZY_MIN = 512
 
 /** Scroll a landed-on card to the top of the page's scrollport: the stats jumps and the events card's injection
  *  rows land on the browser, the stats file pills on the File Activity card, and no landing may stay below the fold. */
@@ -160,6 +168,71 @@ export function makeContextView(
     const [jumpSeq, setJumpSeq] = useState<number | null>(null)
     const [hoverCat, setHoverCat] = useState<string | null>(null)
     const [focusCat, setFocusCat] = useState<string | null>(null)
+    // Sidebar-hosted copies stay mounted while the sidebar is collapsed (the dock only hides them): track real
+    // visibility so a hidden copy stops rendering its cards and the page never pays for two full context views.
+    const [sidebarVisible, setSidebarVisible] = useState(true)
+    // Pointer-driven hovers are transient: they must never block the pointer. The chart keeps its own immediate
+    // hover state, while the rest of the view (browser preview, file activity) follows in a transition so a
+    // pointer sweep cannot stack synchronous full-view renders.
+    const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const hoverPending = useRef<number | null>(null)
+    const hoverAt = useRef(0)
+    const clearHoverTimer = useCallback((): void => {
+      if (hoverTimer.current !== null) {
+        clearTimeout(hoverTimer.current)
+        hoverTimer.current = null
+      }
+    }, [])
+    useEffect(() => clearHoverTimer, [clearHoverTimer])
+    const handleHover = useCallback((seq: number | null): void => {
+      hoverPending.current = seq
+      if (seq === null) {
+        clearHoverTimer()
+        hoverAt.current = 0
+        setHoveredSeq(null)
+        return
+      }
+      const now = performance.now()
+      // First entry (or a deliberate slow move) previews immediately; a pointer sweep keeps only the trailing
+      // value, so the browser preview cannot force a layout per pointer event while the chart stays instant.
+      // DNA bars carry thousands of bands: previewing every bar enter made each sweep cost a full view render,
+      // so DNA mode only follows once the pointer rests (the chart's own hover stays instant).
+      if (!dna && now - hoverAt.current > HOVER_DELAY_MS) {
+        clearHoverTimer()
+        hoverAt.current = now
+        setHoveredSeq(seq)
+        return
+      }
+      hoverAt.current = now
+      clearHoverTimer()
+      hoverTimer.current = setTimeout(() => {
+        hoverTimer.current = null
+        const trailing = seq
+        startTransition(() => {
+          /* v8 ignore next 2 -- the timer is cleared by a reset; the guard only covers a transition already
+             queued behind that reset, which jsdom's synchronous act cannot interleave. */
+          if (hoverPending.current === trailing) setHoveredSeq(trailing)
+        })
+      }, dna ? DNA_HOVER_DELAY : HOVER_DELAY_MS)
+    }, [clearHoverTimer, dna])
+    const handleHoverTurn = useCallback((turn: number | null): void => {
+      startTransition(() => { setHoverTurn(turn) })
+    }, [])
+    const handleHoverKey = useCallback((key: string | null): void => {
+      startTransition(() => { setHoverCat(key) })
+    }, [])
+    /* v8 ignore start -- jsdom has neither IntersectionObserver nor layout: the gate is verified in the live page. */
+    useEffect(() => {
+      if (!inSidebar || typeof IntersectionObserver !== 'function') return
+      const el = rootRef.current
+      if (el === null) return
+      const observer = new IntersectionObserver(([entry]) => {
+        setSidebarVisible(entry.isIntersecting)
+      }, { threshold: 0 })
+      observer.observe(el)
+      return () => { observer.disconnect() }
+    }, [inSidebar, data])
+    /* v8 ignore stop */
     const [pickedKinds, setPickedKinds] = useState<string[]>([...EVENT_KINDS])
     const toggleKind = (k: string) => {
       setPickedKinds((p) => {
@@ -204,11 +277,18 @@ export function makeContextView(
     const [filterFocus, setFilterFocus] = useState<FileFilter | null>(null)
     const clearFilterFocus = useCallback(() => { setFilterFocus(null) }, [])
 
-    // The browser column's height cap (browserCapOf), re-measured per render and followed by a
-    // ResizeObserver: pane drags and card reflows change no prop.
+    // Below-the-fold cards: keep the first commit to the cards the reader actually sees, then mount the event/file
+    // row in an idle slice once it nears the conversation viewport. The two skeleton cards reserve the row height.
+    const [belowFoldRef, belowFoldMounted] = useLazyMount(filterFocus !== null)
+    // The browser card is visible but heavy (assembled rows for the current step): paint its card-shaped skeleton
+    // in the first commit, then fill it in the next idle slice so the open's commit stays small.
+    const [browserRef, browserMounted] = useLazyMount()
+
+    // The browser column's height cap (browserCapOf), re-measured for new data and ResizeObserver ticks:
+    // pane drags and card reflows change no prop.
     const leftColRef = useRef<HTMLDivElement | null>(null)
     const [browserCap, setBrowserCap] = useState<number | null>(null)
-    const [, setCapTick] = useState(0)
+    const [capTick, setCapTick] = useState(0)
     useLayoutEffect(() => {
       const col = leftColRef.current
       /* v8 ignore next 1 -- the loading frame renders no left column; every carded render attaches it. */
@@ -216,7 +296,9 @@ export function makeContextView(
       // The column renders exactly the composition + trend cards.
       const next = browserCapOf([...col.children].map(el => el.getBoundingClientRect()))
       setBrowserCap(prev => (prev === next ? prev : next))
-    })
+      // Hover/selection commits change no card geometry: only a new projection, a Remount, or a ResizeObserver
+      // tick needs a fresh measurement, so a pointer sweep never flushes layout here.
+    }, [data, capTick, sidebarVisible])
     /* v8 ignore start -- jsdom has neither ResizeObserver nor layout: the cap's math is pinned by browserCapOf's unit tests. */
     useEffect(() => {
       const col = leftColRef.current
@@ -225,14 +307,15 @@ export function makeContextView(
       observer.observe(col)
       for (const el of col.querySelectorAll(':scope > .lc-card')) observer.observe(el)
       return () => { observer.disconnect() }
-    }, [data])
+    }, [data, sidebarVisible])
     /* v8 ignore stop */
     // The stats board's jumps: a browser key lands on its own category row (skills inject, answers, user messages),
     // a file kind on the File Activity card's matching chip.
     const onJump = useCallback((jump: StatsJump): void => {
       if (jump === 'read' || jump === 'write' || jump === 'search' || jump === 'image') {
+        // The below-fold row may still be lazy: setting the focus forces its mount, and the effect below
+        // reveals the card once it exists.
         setFilterFocus(jump)
-        revealCard(rootRef.current, '.lc-fa-card')
         return
       }
       setCatFocus(jump === 'skills'
@@ -289,18 +372,50 @@ export function makeContextView(
     )
     // Tallied over the RAW step records — turn-mode aggregates read their own stepCount instead.
     const stepsOf = useMemo(() => turnStepsOf(requests), [requests])
+    const opStampOf = useMemo(() => stepStampOf(requests), [requests])
     const markers = useMemo(() => attachMarkers(displayRequests, events), [displayRequests, events])
     // One assemble() per displayed record — the same pure reconstruction the browser uses — memoized so hover-driven
     // re-renders never reassemble.
     /* v8 ignore next 1 -- a missing projection returns the loading screen before the trend card
        (and its DNA toggle) renders, so `dna && data === null` cannot occur. */
+    // A long log carries thousands of requests: assembling every step's context up front blocked the DNA toggle.
+    // Small logs and delta mode keep the eager array; large total-mode logs hand the chart a per-seq accessor so only
+    // the rendered window assembles. Delta needs every bar's per-key change: net totals cannot bound key churn.
+    /* v8 ignore next 1 -- the sidebar-visible operand is only reachable in a live dock (jsdom has no IO);
+       the hidden-copy path is verified on the live page and every main-host test covers the short-circuit. */
+    const dnaAllowed = dna && data !== null && (!inSidebar || sidebarVisible)
+    const dnaEager = dnaAllowed && (displayRequests.length <= DNA_LAZY_MIN || trendMode === 'delta')
+    // Bands depend on the header epoch as well as the timeline; the composite owner keeps a late epoch from
+    // reusing bands assembled without its system prompt/tool schemas.
+    const dnaCacheOwner = useMemo(() => ({ data, headers }), [data, headers])
     const dnaBands = useMemo(
-      () => (dna && data !== null ? displayRequests.map(req => trendBandsOf(assemble(data, headers, req.seq))) : null),
-      [dna, data, headers, displayRequests],
+      () => (dnaEager
+        ? cachedByData(dnaCacheOwner, `dna:${granularity}`, () => displayRequests.map(req => trendBandsOf(assembleCached(data, headers, req.seq))))
+        : null),
+      [dnaEager, dnaCacheOwner, data, headers, displayRequests, granularity],
     )
+    const dnaAt = useMemo(() => {
+      if (!dnaAllowed || displayRequests.length <= DNA_LAZY_MIN || trendMode === 'delta') return null
+      const bandsBySeq = new Map<number, TrendBand[]>()
+      return (seq: number): TrendBand[] => {
+        let bands = bandsBySeq.get(seq)
+        /* v8 ignore next 1 -- the chart's own per-seq cache makes a repeated lookup here defensive only. */
+        if (bands === undefined) {
+          bands = trendBandsOf(assembleCached(data, headers, seq))
+          bandsBySeq.set(seq, bands)
+        }
+        return bands
+      }
+    }, [dnaAllowed, data, headers, displayRequests.length, trendMode])
     const revealBand = useCallback((seq: number, band: { key: string; cat: Category | 'system' | 'tools' }): void => {
       setNodeFocus({ step: seq, key: band.key, cat: band.cat })
     }, [])
+
+    // A stats file-pill jump can target the lazy below-fold row: reveal it once the forced mount lands.
+    useEffect(() => {
+      if (filterFocus === null || !belowFoldMounted) return
+      revealCard(rootRef.current, '.lc-fa-card')
+    }, [filterFocus, belowFoldMounted])
 
     // Chat → Context jump, leg 1: pick up the relay's request once per mount and on every later record (the sidebar
     // landing keeps this view mounted).
@@ -331,7 +446,7 @@ export function makeContextView(
       if (anchor !== null) revealInScrollParent(anchor)
     }, [jumpSeq, data, requests, detailReady])
 
-    const briefList = useMemo(() => (data ? briefNodes(data) : []), [data])
+    const briefList = useMemo(() => (data ? cachedByData(data, 'briefList', () => briefNodes(data)) : []), [data])
     const convNodes = conversationNodesOf(props)
     const bySeq = useMemo(() => {
       const m = new Map<number, ConversationNodeLike>()
@@ -363,14 +478,18 @@ export function makeContextView(
     const convOf = useCallback((seq: number): ConversationNodeLike | undefined => bySeq.get(seq), [bySeq])
 
     // Memoized on the walk's inputs only: hover/select renders elsewhere leave every input reference untouched, so the walk is skipped.
+    // The live chat-node map moves independently of the projection, so it joins the cache owner.
+    const fileCacheOwner = useMemo(() => ({ data, bySeq }), [data, bySeq])
     const fileActivity = useMemo(
       () => {
-        if (data !== null && data.fileOps !== undefined) {
-          return activityOfOps(data.fileOps, data.archive, filesBefore)
-        }
-        return activityOf(briefList, convOf, filesBefore)
+        if (data === null) return activityOf(briefList, convOf, filesBefore)
+        return cachedByData(fileCacheOwner, `files:${String(filesBefore)}`, () => (
+          data.fileOps !== undefined
+            ? activityOfOps(data.fileOps, data.archive, filesBefore)
+            : activityOf(briefList, convOf, filesBefore)
+        ))
       },
-      [data, briefList, convOf, filesBefore],
+      [fileCacheOwner, data, briefList, convOf, filesBefore],
     )
     // The stats card's pill tallies; the null bound means the WHOLE session.
     const ioTotals = useMemo(
@@ -382,7 +501,7 @@ export function makeContextView(
       },
       [data, briefList, convOf],
     )
-    const toolTally = useMemo(() => (data ? toolTallyOf(data.nodes) : []), [data])
+    const toolTally = useMemo(() => (data ? cachedByData(data, 'toolTally', () => toolTallyOf(data.nodes)) : []), [data])
     // Read per render off the observable snapshot, so the next projection push re-renders with the current workspace root.
     const workspace = typeof ctx.get === 'function' ? workspaceOf(ctx, typeof sessionId === 'string' ? sessionId : undefined) : undefined
     // The capability is an async RPC answer, so file names stay inert until the probe settles.
@@ -414,7 +533,7 @@ export function makeContextView(
     )
     const locateFileOp = useCallback((op: FileOp): void => {
       // A nested Code-Mode op has no surface row of its own — it reveals on its parent run_code result.
-      const seq = op.parent ?? op.seq
+      const seq = surfaceSeqOf(op)
       const step = locateStepOf(requests, seq, op.gone)
       if (step === null) return
       setNodeFocus({ step, key: 'n' + String(seq), cat: 'tool' })
@@ -435,12 +554,13 @@ export function makeContextView(
     // (a removed item shows only on the steps before its removal), and its category is the fold's own verdict — skill
     // machinery lands in `skill`, which the event's `sub` does not cover (the catalog digest rides an untagged event).
     const nodeOfSeq = useMemo(() => {
-      const m = new Map<number, SurfaceNode>()
-      if (data !== null) {
+      if (data === null) return new Map<number, SurfaceNode>()
+      return cachedByData(data, 'nodeOfSeq', () => {
+        const m = new Map<number, SurfaceNode>()
         for (const n of data.nodes) m.set(n.seq, n)
         for (const n of data.archive) m.set(n.seq, n)
-      }
-      return m
+        return m
+      })
     }, [data])
     const focusInject = useCallback((ev: ContextEventRecord): void => {
       const node = nodeOfSeq.get(ev.seq)
@@ -469,12 +589,6 @@ export function makeContextView(
 
     // Provider-anchored occupancy: the 4-chars/token heuristic undercounts CJK by ~10–15%, so the headline anchors to the billed total.
     const head = headlineOf(data, pressure, breakdown)
-    let fileScope = t('files.scopeLatest')
-    if (activeReq !== null && filesBefore !== null) {
-      fileScope = activeReq.stepCount !== undefined && activeReq.stepCount > 1
-        ? t('detail.turn', { t: activeReq.turn ?? 0, n: activeReq.stepCount })
-        : t('detail.step', { t: activeReq.turn ?? 0, s: activeReq.step ?? 0, n: stepsOf(activeReq.turn) })
-    }
 
     // Turn highlight is hover-only (strip hover wins, then the hovered bar's turn): no fallback, so a pinned or
     // default selection never glows.
@@ -493,12 +607,15 @@ export function makeContextView(
     const subtitle = (data.model ?? '') + (data.provider ? ' · ' + data.provider : '')
     const gate = unsupportedOf(data.unsupported)
 
+    /* v8 ignore next 2 -- only a real dock collapse hides a sidebar copy; jsdom has no IntersectionObserver. */
+    if (inSidebar && !sidebarVisible) return <div className="lc-root" ref={rootRef} />
+
     const compositionCard = (
       <CurrentComposition
         head={head}
         subtitle={subtitle}
         hoverKey={hoverCat}
-        onHoverKey={setHoverCat}
+        onHoverKey={handleHoverKey}
       />
     )
     // Both trend faces share the records + hover/select flow; only the overview's turn click pins instead of
@@ -519,8 +636,8 @@ export function makeContextView(
       focusCat,
       durationCurve,
       onSelect: setSelectedSeq,
-      onHover: setHoveredSeq,
-      onHoverTurn: setHoverTurn,
+      onHover: handleHover,
+      onHoverTurn: handleHoverTurn,
     }
     const trendCard = (
       <div className="lc-card">
@@ -619,6 +736,7 @@ export function makeContextView(
                     focusTurn={focusTurn}
                     adaptive={adaptive}
                     dna={dnaBands}
+                    dnaAt={dnaAt}
                     onPickBand={revealBand}
                     onPickTurn={(turn) => { setGranularity('turn'); setFocusTurn(turn) }}
                     onFocusTurnHandled={() => { setFocusTurn(null) }}
@@ -636,7 +754,7 @@ export function makeContextView(
                 stepsOf={stepsOf}
                 onLocate={locateNode}
                 hoverKey={trendHoverCat}
-                onHoverKey={setHoverCat}
+                onHoverKey={handleHoverKey}
               />
             </div>
           )}
@@ -652,7 +770,7 @@ export function makeContextView(
         previewSeq={hoveredSeq}
         pinSeq={pinnedReq !== null ? pinnedReq.seq : null}
         hoverKey={hoverCat}
-        onHoverKey={setHoverCat}
+        onHoverKey={handleHoverKey}
         onOpenCat={setFocusCat}
         nodeFocus={nodeFocus}
         onNodeFocusHandled={clearNodeFocus}
@@ -665,6 +783,7 @@ export function makeContextView(
         // The DNA switch is shared with the trend card: both toggles move as one.
         dna={dna}
         onDnaChange={setDna}
+        locale={activeLocale}
       />
     )
 
@@ -682,7 +801,7 @@ export function makeContextView(
         )}
         <div className="lc-cols lc-head">
           <StatsTokens usage={usage} current={data.current} breakdown={breakdown} />
-          <StatsTiming timing={data.timing ?? null} spans={data.spans} />
+          <StatsTiming timing={data.timing ?? null} spans={data.spans} locale={activeLocale} />
         </div>
 
         <div className="lc-cols lc-cols-main">
@@ -691,38 +810,44 @@ export function makeContextView(
               /context modal draws its own stack and fills its own card. The DNA feed lays out every
               message, so the card's rows region scrolls inside the capped card. */}
           <div
+            ref={browserRef}
             className="lc-col lc-col-browser flex-1 min-w-[min(360px,100%)]"
             style={browserCap !== null ? { maxHeight: browserCap } : undefined}
-          >{browserCard}</div>
+          >{browserMounted ? browserCard : <div className="lc-card lc-deferred-skeleton" style={{ height: '100%', minHeight: 320 }} aria-hidden="true" />}</div>
         </div>
 
-        <div className="lc-cols">
-          <div className="lc-card lc-col flex-1 min-w-[min(360px,100%)]">
-            <div className="lc-card-title">
-              <span className="lc-card-title-text">{t('events.title')}</span>
-              <div className="lc-kinds @max-[380px]/lc-card:flex-wrap">
-                {EVENT_KINDS.map((k) => {
-                  const n = kindCounts[k]
-                  return (
-                    <button
-                      key={k}
-                      data-kind={k}
-                      className={'lc-gran-btn' + (pickedKinds.includes(k) ? ' lc-gran-on lc-kind-' + k : '')}
-                      onClick={() => { toggleKind(k) }}
-                    >
-                      {t('kind.' + k)}
-                      {n !== undefined ? <span className="lc-kind-n">{kit.fmt(n)}</span> : null}
-                    </button>
-                  )
-                })}
+        <div className="lc-cols" ref={belowFoldRef}>
+          {belowFoldMounted ? (<>
+            <div className="lc-card lc-col flex-1 min-w-[min(360px,100%)]">
+              <div className="lc-card-title">
+                <span className="lc-card-title-text">{t('events.title')}</span>
+                <div className="lc-kinds @max-[380px]/lc-card:flex-wrap">
+                  {EVENT_KINDS.map((k) => {
+                    const n = kindCounts[k]
+                    return (
+                      <button
+                        key={k}
+                        data-kind={k}
+                        className={'lc-gran-btn' + (pickedKinds.includes(k) ? ' lc-gran-on lc-kind-' + k : '')}
+                        onClick={() => { toggleKind(k) }}
+                      >
+                        {t('kind.' + k)}
+                        {n !== undefined ? <span className="lc-kind-n">{kit.fmt(n)}</span> : null}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
+              <EventList events={shownEvents} state={source.detailState} onRetry={source.retryDetail} onInjectFocus={focusInject} />
             </div>
-            <EventList events={shownEvents} state={source.detailState} onRetry={source.retryDetail} onInjectFocus={focusInject} />
-          </div>
-          <FileCard activity={fileActivity} scope={fileScope} workspace={workspace}
-            onPreview={previewFile} onOpen={fileOpener} onLocate={locateFileOp}
-            filterFocus={filterFocus} onFilterFocusHandled={clearFilterFocus}
-            state={source.detailState} onRetry={source.retryDetail} />
+            <FileCard activity={fileActivity} workspace={workspace} stampOf={opStampOf}
+              onPreview={previewFile} onOpen={fileOpener} onLocate={locateFileOp}
+              filterFocus={filterFocus} onFilterFocusHandled={clearFilterFocus}
+              state={source.detailState} onRetry={source.retryDetail} />
+          </>) : (<>
+            <div className="lc-card lc-col flex-1 min-w-[min(360px,100%)] lc-deferred-skeleton" style={{ minHeight: 450 }} aria-hidden="true" />
+            <div className="lc-card lc-col flex-1 min-w-[min(360px,100%)] lc-deferred-skeleton" style={{ minHeight: 450 }} aria-hidden="true" />
+          </>)}
         </div>
 
         {/* The card's standalone home is the Fleet tab; the right Sidebar's panel is too narrow to split, so it keeps the card inline. */}

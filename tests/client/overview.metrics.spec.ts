@@ -4,11 +4,13 @@ import {
   aggregateDays,
   billedOf,
   createdDayOf,
+  dayRangeWindow,
   kpisOf,
   timingSumOf,
   tokenPartsOf,
   turnsOf,
   usageTotalsOf,
+  windowTotalsOf,
   type OverviewRow,
 } from '../../src/client/overview'
 import { priceIndexOf } from '../../src/client/cost'
@@ -172,6 +174,46 @@ describe('tokenPartsOf', () => {
       parts: [{ key: 'system', color: 'var(--color-indigo-500)', value: 10 }],
     })
   })
+
+  test('a scoped split folds only the daily ledger days inside the window', () => {
+    const member = { current: STANDARD_CURRENT, cost: COST, requests: [] } as unknown as ContextTimeline
+    const activity: ContextActivity = {
+      days: {
+        '2026-09-16': { tokens: 5, requests: 1, cost: COST },
+        '2026-09-17': { tokens: 9, requests: 1, cost: COST },
+      },
+    }
+    const row = rowOf({ timeline: member, family: [member], familyActivity: [activity] })
+    const scope = dayRangeWindow({ from: '2026-09-16', to: '2026-09-16' })
+    assert.ok(scope !== null)
+    assert.equal(tokenPartsOf([row], scope)?.total, 200, 'one admitted day of COST, not both')
+    const orphan = rowOf({ timeline: { current: STANDARD_CURRENT, cost: COST, requests: [] } as unknown as ContextTimeline, family: [member], familyActivity: [null] })
+    assert.equal(tokenPartsOf([orphan], scope), null, 'a member without a ledger contributes no scoped usage')
+    const noLedger = rowOf({ timeline: member })
+    assert.equal(tokenPartsOf([noLedger], scope), null, 'a row without a family ledger contributes nothing to a scoped split')
+  })
+})
+
+describe('windowTotalsOf', () => {
+  test('folds only admitted days; a cost-less day leaves the usage null', () => {
+    const scope = dayRangeWindow({ from: '2026-09-16', to: '2026-09-16' })
+    assert.ok(scope !== null)
+    assert.deepEqual(windowTotalsOf(null, scope), { requests: 0, turns: 0, toolCalls: 0, toolsMs: 0, wallMs: 0, usage: null })
+    assert.deepEqual(
+      windowTotalsOf({
+        days: {
+          '2026-09-16': { tokens: 1, requests: 1, turns: 1, toolCalls: 2, toolsMs: 3, wallMs: 4 },
+          '2026-09-17': { tokens: 9, requests: 9, cost: COST },
+        },
+      }, scope),
+      { requests: 1, turns: 1, toolCalls: 2, toolsMs: 3, wallMs: 4, usage: null },
+      'the day after the window contributes nothing',
+    )
+    assert.deepEqual(
+      windowTotalsOf({ days: { '2026-09-16': { tokens: 1, requests: 1, cost: COST } } }, scope).usage,
+      COST,
+    )
+  })
 })
 
 describe('kpisOf', () => {
@@ -213,6 +255,36 @@ describe('kpisOf', () => {
     assert.equal(kpi.tokenParts?.total, 200)
     assert.deepEqual(kpi.tokenParts?.parts.find(p => p.key === 'system'), { key: 'system', color: 'var(--color-indigo-500)', value: 32 })
     assert.deepEqual(kpi.timing, { wallMs: 120_000, ttftMs: 1_000, genMs: 30_000, calls: 6, toolsMs: 20_000, toolCalls: 7, tools: {} })
+  })
+
+  test('a bounded scope folds only the daily ledger days inside the window', () => {
+    const member = {
+      cost: COST,
+      counts: { turns: 9 },
+      current: { system: 100, tools: 50, user: 30, inject: 10, skill: 10, assistant: 200, tool: 100, total: 500 },
+      requests: [],
+    } as unknown as ContextTimeline
+    const activity: ContextActivity = {
+      days: {
+        '2026-09-16': { tokens: 5, requests: 1, cost: COST, turns: 1, toolCalls: 2, toolsMs: 30, wallMs: 100 },
+        '2026-09-17': { tokens: 7, requests: 3, cost: COST, turns: 1, toolCalls: 4, toolsMs: 50, wallMs: 300 },
+      },
+    }
+    const row = rowOf({ timeline: member, family: [member], familyActivity: [activity], activity, familyCost: COST })
+    const bare = rowOf({ activity: { days: { '2026-09-16': { tokens: 1, requests: 1 } } } })
+    const scope = dayRangeWindow({ from: '2026-09-16', to: '2026-09-16' })
+    assert.ok(scope !== null)
+    const kpi = kpisOf([row, bare], prices, 'usd', scope)
+    assert.equal(kpi.sessions, 2)
+    assert.equal(kpi.tokens, 200, 'one admitted COST, not two')
+    assert.equal(kpi.costSessions, 1)
+    assert.equal(kpi.usageSessions, 1)
+    assert.equal(kpi.turns, 1, 'the out-of-window turn is not counted')
+    assert.equal(kpi.toolCalls, 2)
+    assert.equal(kpi.toolsMs, 30)
+    assert.equal(kpi.calls, 2, 'settled model calls follow the admitted days')
+    assert.equal(kpi.wallMs, 100)
+    assert.equal(kpi.tokenParts?.total, 200)
   })
 
   test('a session with usage the book cannot price feeds the cache-hit rate but prices to nothing', () => {

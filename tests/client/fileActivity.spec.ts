@@ -108,7 +108,6 @@ describe('activityOf', () => {
     assert.equal(file.searches, 0)
     assert.equal(file.added, 2) // edit new_string: 'x\nq'
     assert.equal(file.removed, 3) // edit old_string: 'x\ny\nz'
-    assert.equal(file.errs, 0)
     // Ops newest first inside the entry.
     assert.deepEqual(file.ops.map(o => o.seq), [7, 5, 3])
     assert.equal(file.ops[0].kind, 'read')
@@ -148,16 +147,14 @@ describe('activityOf', () => {
     assert.deepEqual(a.totals.image, { files: 2, ops: 2 })
   })
 
-  test('counts failures from the fold stamp or the snapshot error flag', () => {
+  test('stamps the error flag from the fold or the snapshot', () => {
     const a = run([
       op(3, 'read', { file_path: '/a.ts' }, { err: true }),
       op(5, 'read', { file_path: '/a.ts' }, {}, { isError: true }),
       op(7, 'read', { file_path: '/b.ts' }),
     ])
-    const file = a.entries[1]
-    assert.equal(file.errs, 2)
-    assert.equal(file.ops[0].err, true)
-    assert.equal(a.entries[0].errs, 0)
+    assert.deepEqual(a.entries[1].ops.map(o => o.err), [true, true])
+    assert.equal(a.entries[0].ops[0].err, false)
   })
 
   test('carries the archive removal stamp onto the op for locate targeting', () => {

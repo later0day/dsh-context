@@ -72,7 +72,7 @@ describe('rowsOfSnapshot', () => {
     const [b, c, d, e] = rows
     assert.deepEqual(b, {
       id: 'b', title: 'shown', updatedAt: 5, running: true, current: true, archived: false,
-      timeline: null, activity: null, family: [null], familyCost: null,
+      timeline: null, activity: null, family: [null], familyActivity: [null], familyCost: null,
     })
     assert.equal(c.title, 'titled')
     assert.equal(c.current, false)
@@ -158,21 +158,26 @@ describe('rowsOfSnapshot: the family fold', () => {
         displayTitle: 'root',
         projectionValues: {
           contextTimeline: billedHead(100, COST),
-          contextActivity: { days: { '2026-09-16': { tokens: 5, requests: 1, cost: COST } } },
+          contextActivity: { days: { '2026-09-16': { tokens: 5, requests: 1, cost: COST, turns: 1, toolCalls: 1, toolsMs: 100, wallMs: 1_000 } } },
         },
       }],
       ['kid', {
         origin: 'subagent', parentId: 'root',
         projectionValues: {
           contextTimeline: billedHead(50, COST2),
-          contextActivity: { days: { '2026-09-16': { tokens: 7, requests: 2, cost: COST2 } } },
+          contextActivity: { days: { '2026-09-16': { tokens: 7, requests: 2, cost: COST2, turns: 1, toolCalls: 2, toolsMs: 200, wallMs: 2_000 } } },
         },
       }],
       ['grand', {
         origin: 'subagent', parentId: 'kid',
         projectionValues: {
           contextTimeline: billedHead(25),
-          contextActivity: { days: { '2026-09-16': { tokens: 4, requests: 1 }, '2026-09-15': { tokens: 3, requests: 1 } } },
+          contextActivity: {
+            days: {
+              '2026-09-16': { tokens: 4, requests: 1, turns: 1, toolCalls: 3, toolsMs: 300, wallMs: 3_000 },
+              '2026-09-15': { tokens: 3, requests: 1, turns: 1, toolCalls: 4, toolsMs: 400, wallMs: 4_000 },
+            },
+          },
         },
       }],
       ['stranger', { displayTitle: 'unrelated' }],
@@ -181,6 +186,7 @@ describe('rowsOfSnapshot: the family fold', () => {
     assert.deepEqual(rows.map(r => r.id), ['root', 'stranger'], 'subagent-origin rows stay unlisted')
     const [root, stranger] = rows
     assert.equal(root.family.length, 3, 'self + kid + grand — all levels')
+    assert.equal(root.familyActivity?.length, 3, 'the per-member ledgers align with the family')
     // COST (200) + COST2 (300) merge; the grandchild carried no cost.
     assert.equal(billedOf(root), 500)
     assert.equal(billedOf(stranger), null)
@@ -188,7 +194,15 @@ describe('rowsOfSnapshot: the family fold', () => {
     assert.equal(root.activity?.days['2026-09-16'].tokens, 16)
     assert.equal(root.activity?.days['2026-09-16'].requests, 4)
     assert.deepEqual(root.activity?.days['2026-09-16'].cost, mergeCostUsage(COST, COST2))
+    assert.equal(root.activity?.days['2026-09-16'].turns, 3)
+    assert.equal(root.activity?.days['2026-09-16'].toolCalls, 6)
+    assert.equal(root.activity?.days['2026-09-16'].toolsMs, 600)
+    assert.equal(root.activity?.days['2026-09-16'].wallMs, 6_000)
     assert.equal(root.activity?.days['2026-09-15'].tokens, 3)
+    assert.equal(root.activity?.days['2026-09-15'].turns, 1)
+    assert.equal(root.activity?.days['2026-09-15'].toolCalls, 4)
+    assert.equal(root.activity?.days['2026-09-15'].toolsMs, 400)
+    assert.equal(root.activity?.days['2026-09-15'].wallMs, 4_000)
     assert.equal(root.activity?.days['2026-09-15'].cost, undefined)
     // The composed split proportions each member's OWN composition: the root's
     // all-user 160 billed input + output 40, the kid's all-user 300 — user 460 / output 40.
@@ -200,6 +214,58 @@ describe('rowsOfSnapshot: the family fold', () => {
         { key: 'output', color: 'var(--color-pink-500)', value: 40 },
       ],
     })
+  })
+
+  test('the daily tallies merge additively; a day none carried leaves them absent', () => {
+    const rows = rowsOfSnapshot(snapshotOf([
+      ['root', {
+        displayTitle: 'root',
+        projectionValues: {
+          contextTimeline: billedHead(1),
+          contextActivity: {
+            days: {
+              '2026-09-14': { tokens: 1, requests: 1 },
+              '2026-09-13': { tokens: 1, requests: 1 },
+            },
+          },
+        },
+      }],
+      ['kid', {
+        origin: 'subagent', parentId: 'root',
+        projectionValues: {
+          contextTimeline: billedHead(1),
+          contextActivity: {
+            days: {
+              '2026-09-14': { tokens: 1, requests: 1, turns: 1, toolCalls: 1, toolsMs: 1, wallMs: 1 },
+              '2026-09-13': { tokens: 1, requests: 1 },
+            },
+          },
+        },
+      }],
+      ['grand', {
+        origin: 'subagent', parentId: 'kid',
+        projectionValues: {
+          contextTimeline: billedHead(1),
+          contextActivity: {
+            days: {
+              '2026-09-14': { tokens: 1, requests: 1 },
+              '2026-09-13': { tokens: 1, requests: 1 },
+            },
+          },
+        },
+      }],
+    ]))
+    assert.ok(rows !== null)
+    const day = rows[0].activity?.days['2026-09-14']
+    assert.equal(day?.turns, 1)
+    assert.equal(day?.toolCalls, 1)
+    assert.equal(day?.toolsMs, 1)
+    assert.equal(day?.wallMs, 1)
+    const bare = rows[0].activity?.days['2026-09-13']
+    assert.equal(bare?.turns, undefined)
+    assert.equal(bare?.toolCalls, undefined)
+    assert.equal(bare?.toolsMs, undefined)
+    assert.equal(bare?.wallMs, undefined)
   })
 
   test('an unlisted subtree (a subagent whose root never lists) leaks nowhere', () => {

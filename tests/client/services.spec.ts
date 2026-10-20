@@ -845,6 +845,18 @@ describe('activityOf', () => {
       },
     }, 'non-record and empty-after-scrubbing tables drop whole; the days survive')
   })
+
+  test('the daily tallies ride the pass-through and the sanitized copy; malformed figures drop alone', () => {
+    const tallies = { turns: 2, toolCalls: 3, toolsMs: 4.5, wallMs: 5 }
+    const wire = { days: { '2026-09-16': { tokens: 15, requests: 1, ...tallies } } }
+    assert.ok(activityOf(wire) === wire, 'a clean payload keeps its reference')
+    const dirty = { days: { '2026-09-16': { tokens: 15, requests: 1, ...tallies }, bad: { tokens: 1, requests: 1 } } }
+    assert.deepEqual(activityOf(dirty), { days: { '2026-09-16': { tokens: 15, requests: 1, ...tallies } } })
+    const out = activityOf({
+      days: { '2026-09-16': { tokens: 15, requests: 1, turns: 'x', toolCalls: -1, toolsMs: Number.NaN, wallMs: Number.POSITIVE_INFINITY } },
+    })
+    assert.deepEqual(out, { days: { '2026-09-16': { tokens: 15, requests: 1 } } }, 'each malformed tally drops, the day survives')
+  })
 })
 
 describe('entrySeated — the slot-ledger second-mount guard', () => {

@@ -55,19 +55,37 @@ describe('TrendChart DNA mode', () => {
     // d1: the two adjacent assistant bands coalesce into ONE blue run (28px → 56px on the shared scale).
     const g1 = dnaDivs[0].style.background
     assert.ok(g1.startsWith('linear-gradient(to top, '), g1)
-    assert.ok(g1.includes('var(--color-indigo-500) 0px, var(--color-indigo-500) 18.67px'), g1)
-    assert.ok(g1.includes('var(--color-amber-500) 18.67px, var(--color-amber-500) 28px'), g1)
+    // Boundaries snap to the shared 2px grid so neighbouring bars keep identical strand offsets.
+    assert.ok(g1.includes('var(--color-indigo-500) 0px, var(--color-indigo-500) 18px'), g1)
+    assert.ok(g1.includes('var(--color-amber-500) 18px, var(--color-amber-500) 28px'), g1)
     assert.ok(g1.includes('var(--color-blue-500) 28px, var(--color-blue-500) 56px'), g1)
-    // d2: the zero-token user band leaves no run of its own; the teal run starts at its offset.
+    // d2: boundaries land on the same shared grid; the zero-token user band leaves no run of its own.
     const g2 = dnaDivs[1].style.background
-    assert.ok(g2.includes('var(--color-blue-500) 37.33px, var(--color-blue-500) 52.27px'), g2)
-    assert.ok(g2.includes('var(--color-green-500) 52.27px, var(--color-green-500) 70.93px'), g2)
-    assert.ok(g2.includes('var(--color-teal-500) 70.93px, var(--color-teal-500) 112px'), g2)
+    assert.ok(g2.includes('var(--color-indigo-500) 0px, var(--color-indigo-500) 38px'), g2)
+    assert.ok(g2.includes('var(--color-blue-500) 38px, var(--color-blue-500) 52px'), g2)
+    assert.ok(g2.includes('var(--color-green-500) 52px, var(--color-green-500) 70px'), g2)
+    assert.ok(g2.includes('var(--color-teal-500) 70px, var(--color-teal-500) 112px'), g2)
     assert.equal(queryAll(m.container, '.lc-bar-stack').length, 0)
     assert.equal(query(m.container, '.lc-axis-top').textContent, '600')
     // Without an onPickBand handler a band click is a quiet no-op (the pick guard's undefined arm).
     await act(async () => { dnaDivs[0].dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     await m.unmount()
+  })
+
+  test('a bar far below the shared scale keeps its colour instead of an empty gradient', async () => {
+    const r1 = req(1, { turn: 1, step: 0, total: 1, system: 1 })
+    const r2 = req(2, { turn: 1, step: 1, total: 50000, system: 50000 })
+    const m = await mount(h(TrendChart, propsOf([r1, r2], {
+      dna: [dnaBands([['sys', 'system', 1]]), dnaBands([['sys', 'system', 50000]])],
+    })))
+    try {
+      const bars = queryAll<HTMLElement>(m.container, '.lc-bar-dna')
+      assert.ok(bars[0].style.background.length > 0)
+      assert.ok(!bars[0].style.background.includes('linear-gradient(to top, )'))
+      assert.ok(bars[0].style.background.includes('var(--color-indigo-500)'))
+    } finally {
+      await m.unmount()
+    }
   })
 
   test('a band click reports the picked item with the bar seq, for the Context browser reveal', async () => {

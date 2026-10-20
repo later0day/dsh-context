@@ -1,14 +1,17 @@
 import { createElement as h } from 'react'
 import assert from 'node:assert/strict'
-import { describe, test } from 'vitest'
+import { describe, test, vi } from 'vitest'
 import { DICT_EN } from '../../../src/client/i18n'
 import type { UseChatLike } from '../../../src/client/services'
 import type { ContextTimeline } from '../../../src/shared/types'
 import { TestClientCtx } from '../helpers/harness'
-import { click, flush, hover, mount, query, queryAll, text, unhover } from '../helpers/kit'
+import { click, flush, hover, mount, query, queryAll, text, unhover, until } from '../helpers/kit'
 import { buttonByText, makeView, projectionsFor, T0, timeline } from './contextViewHarness'
 
 describe('ContextView — file activity card', () => {
+  // Chart hover previews the browser/file activity after a short rest; a rapid sweep keeps only the trailing
+  // value (contextView's hover debounce), so tests wait for the trailing update before asserting.
+  const rest = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 200))
   /** Six steps with two file ops: a live read (seq 3) and an edit (seq 5) compacted away before seq 6 dispatched. */
   function fileTimeline(): ContextTimeline {
     const req = (seq: number, time: number, extra: Record<string, unknown> = {}) =>
@@ -57,46 +60,66 @@ describe('ContextView — file activity card', () => {
     return { m, card }
   }
 
-  test('follows the chart pick: the scope label and the exclusive next-step bound', async () => {
+  test('follows the chart pick: the exclusive next-step bound', async () => {
     const { m, card } = await mountFiles('sv-files-scope')
-    assert.ok(text(card).includes(DICT_EN['files.scopeLatest']))
     assert.ok(text(card).includes('+1') && text(card).includes('−2'))
 
     // Hovering the FIRST bar bounds the fold at the second request: the edit drops out.
     await hover(query(m.container, '.lc-bar[data-seq="2"]'))
-    assert.ok(text(card).includes('Turn 1 · Step 1'))
+    await rest()
     assert.equal(queryAll(card, '.lc-fa-meta-delta').length, 0)
     assert.equal(queryAll(card, '.lc-fa-row').length, 1)
     assert.ok(!text(card).includes('+1'))
 
-    // The turn-less mid step falls back to zero labels and still bounds at the next request.
+    // The turn-less mid step still bounds at the next request: both the read and the edit stay.
     await hover(query(m.container, '.lc-bar[data-seq="6"]'))
-    assert.ok(text(card).includes('Turn 0 · Step 0'))
+    await rest()
     assert.ok(text(card).includes('+1'))
 
     await unhover(query(m.container, '.lc-chart'))
-    assert.ok(text(card).includes(DICT_EN['files.scopeLatest']))
+    assert.ok(text(card).includes('−2'))
     await m.unmount()
   })
 
-  test('turn aggregates label the scope; op clicks reveal the result in the browser', async () => {
+  test('a rapid second hover keeps only the trailing preview', async () => {
+    const { m, card } = await mountFiles('sv-files-trailing')
+    // Freeze the hover clock across both moves: the first previews immediately, the second can only trail.
+    const frozen = performance.now()
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(frozen)
+    await hover(query(m.container, '.lc-bar[data-seq="2"]'))
+    await hover(query(m.container, '.lc-bar[data-seq="4"]'))
+    await hover(query(m.container, '.lc-bar[data-seq="6"]'))
+    clock.mockRestore()
+    // Poll rather than sleep a fixed margin: the trailing timer may land late under a loaded coverage run.
+    await until(() => text(card).includes('+1'), 'the trailing hover lands on the last bar')
+    await m.unmount()
+  })
+
+  test('DNA mode waits for the pointer to rest before updating the preview', async () => {
+    const { m, card } = await mountFiles('sv-files-dna-hover')
+    await click(buttonByText(m.container, DICT_EN['trend.dna']))
+    await hover(query(m.container, '.lc-bar[data-seq="2"]'))
+    await new Promise(resolve => setTimeout(resolve, 80))
+    // The chart lights its own bar immediately; the cross-card preview stays on the latest scope.
+    assert.ok(text(card).includes('−2'))
+    await new Promise(resolve => setTimeout(resolve, 300))
+    assert.ok(!text(card).includes('−2'))
+    await m.unmount()
+  })
+
+  test('op clicks reveal the result in the browser', async () => {
     const { m, card } = await mountFiles('sv-files-locate')
     const pick = query<HTMLSelectElement>(m.container, 'select.lc-br-pick')
-
-    await click(buttonByText(m.container, DICT_EN['gran.turn']))
-    await hover(query(m.container, '.lc-bar[data-seq="4"]'))
-    assert.ok(text(card).includes(DICT_EN['detail.turn'].replace('{t}', '1').replace('{n}', '2')))
-    await hover(query(m.container, '.lc-bar[data-seq="7"]'))
-    assert.ok(text(card).includes(DICT_EN['detail.turn'].replace('{t}', '0').replace('{n}', '2')))
-    await hover(query(m.container, '.lc-bar[data-seq="8"]'))
-    assert.ok(text(card).includes('Turn 2 · Step 1'))
-    await unhover(query(m.container, '.lc-chart'))
 
     // Expand the file row: the compacted edit (seq 5) has no viewing step and
     // its click is a no-op; the read (seq 3) reveals in step 4's surface.
     await click(query(card, '.lc-fa-row'))
     const ops = queryAll(card, '.lc-fa-op')
     assert.equal(ops.length, 2)
+    // The Context Browser's own stamp: the read result (seq 3) is first carried by the seq-4 request (Turn 1 · Step 2);
+    // the compacted edit's carrying request is turn-less, so its row prints no stamp.
+    assert.ok(text(query(ops[1], '.lc-fa-op-time')).includes('T1 S2'))
+    assert.ok(/^\d{2}:\d{2}:\d{2}$/.test(text(query(ops[0], '.lc-fa-op-time'))))
     await click(ops[0]) // edit, gone = 6: unlocatable
     assert.equal(pick.value, 'live')
     await click(ops[1]) // read at seq 3

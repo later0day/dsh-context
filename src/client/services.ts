@@ -590,15 +590,33 @@ export function activityOf(value: unknown): ContextActivity | null {
     // The day's skill table (additive-optional): a malformed tally drops just that name.
     const skills = skillTalliesOf(entry.skills)
     if (entry.skills !== undefined && skills === undefined) dirty = true
+    // The per-day activity tallies (additive-optional); a malformed figure drops just that field.
+    const turns = nonNegativeOf(entry.turns)
+    const toolCalls = nonNegativeOf(entry.toolCalls)
+    const toolsMs = nonNegativeOf(entry.toolsMs)
+    const wallMs = nonNegativeOf(entry.wallMs)
+    if ((entry.turns !== undefined && turns === undefined)
+      || (entry.toolCalls !== undefined && toolCalls === undefined)
+      || (entry.toolsMs !== undefined && toolsMs === undefined)
+      || (entry.wallMs !== undefined && wallMs === undefined)) dirty = true
     days[key] = {
       tokens,
       requests,
       ...(cost !== undefined ? { cost } : {}),
+      ...(turns !== undefined ? { turns } : {}),
+      ...(toolCalls !== undefined ? { toolCalls } : {}),
+      ...(toolsMs !== undefined ? { toolsMs } : {}),
+      ...(wallMs !== undefined ? { wallMs } : {}),
       ...(skills !== undefined ? { skills } : {}),
     }
   }
   // The untouched pass-through keeps the value reference-stable for the selector equality.
   return dirty ? { days } : data as unknown as ContextActivity
+}
+
+/** A readable non-negative figure; anything else is absent, never coerced to zero. */
+function nonNegativeOf(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
 /** One day's skill-load table; a name needs a finite count and load instant, and an empty-after-scrubbing record drops whole. */

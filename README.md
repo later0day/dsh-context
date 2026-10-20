@@ -63,11 +63,11 @@ Click **Context Insights / 上下文洞察** in the sidebar's panel list — the
 
 | Section | The question it answers |
 | --- | --- |
-| **KPI band** | How much am I using — sessions, billed tokens, estimated cost, and cache-hit rate over the picked range (7d / 30d / all). |
+| **KPI band** | How much am I using — sessions, billed tokens, estimated cost, cache-hit rate, turns, tool runs, and active time over the picked range (7d / 30d / all), each figure folded by the day its step started. |
 | **7-day usage chart** | When did I spend what — each of the last 7 days' billed tokens and estimated cost as a bar pair, folded per turn off the sessions' own request times (not the session's last-active day). |
 | **Activity heatmap** | When do I actually work — the last 8 weeks of daily billed tokens; click a day to filter the sessions that were active on it. |
 | **Settings entry** | One row under the heatmap — the same guarded jump to this plugin's preferences as the Context tab's Plugin Info card. |
-| **Context Composition** | Where the context windows went, summed over the range's sessions. |
+| **Context Composition** | Where the picked range's billed tokens went, split by the Context tab's composition categories. |
 | **Session cards** | Each session's profile: composition ring, billed tokens, turns, cost, and its workspace-group / project breadcrumb — sorted by recency, tokens, or context size, searchable, grouped by workspace. A card click opens the session. |
 
 

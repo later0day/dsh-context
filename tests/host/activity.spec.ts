@@ -19,11 +19,20 @@ function assistantMessage(time: number, usage?: unknown): SessionEvent {
   } as never
 }
 
+function turnMessage(time: number, turn: number, usage?: unknown): SessionEvent {
+  return {
+    type: 'assistant/message',
+    seq: 1,
+    time,
+    data: { turn, ...(usage === undefined ? {} : { usage }) },
+  } as never
+}
+
 describe('contextActivity unit: shape', () => {
   test('the definition carries the contract fields', () => {
     const def = createContextActivityDefinition()
     assert.equal(def.key, 'contextActivity')
-    assert.equal(def.stateVersion, 4, 'the per-day skill table is the fourth shape')
+    assert.equal(def.stateVersion, 5, 'the daily turns/tool/wall tallies are the fifth shape')
     assert.deepEqual(def.init(), { days: {} })
   })
 
@@ -195,13 +204,15 @@ describe('applyActivity: skill loads', () => {
     assert.equal(state.skillCalls, undefined, 'the claim consumes once')
   })
 
-  test('a wrapper in another tool’s result books nothing (a `read` quoting the wrapper is no load)', () => {
+  test('a wrapper in another tool’s result books no skill (a `read` quoting the wrapper is no load)', () => {
     let state = applyActivity({ days: {} }, toolCall(at(0), 'c1', 'read'))
     state = applyActivity(state, skillResult(at(0), 'source text quoting <skill_content name="…"> inline', 'c1'))
-    assert.deepEqual(state.days, {})
-    // Wholly unpaired results book nothing either (a trimmed/foreign call).
+    assert.equal(state.days['2026-01-01'].skills, undefined)
+    assert.equal(state.days['2026-01-01'].toolCalls, 1, 'the read still prices its tool run')
+    // Wholly unpaired results add no tool run (a trimmed/foreign call).
     state = applyActivity(state, skillResult(at(0), '<skill_content name="ponytail">…</skill_content>', 'c9'))
-    assert.deepEqual(state.days, {})
+    assert.equal(state.days['2026-01-01'].skills, undefined)
+    assert.equal(state.days['2026-01-01'].toolCalls, 1)
   })
 
   test('the lifted toolCallId and the durable source callId both pair', () => {
@@ -216,10 +227,11 @@ describe('applyActivity: skill loads', () => {
     assert.deepEqual(state.days['2026-01-01'].skills, { tdd: { n: 1, last: at(0) } })
   })
 
-  test('a paired result without the wrapper consumes the claim but books nothing', () => {
+  test('a paired result without the wrapper consumes the claim but books no skill', () => {
     let state = applyActivity({ days: {} }, toolCall(at(0), 'c1', 'skill'))
     state = applyActivity(state, skillResult(at(0), 'skill load failed', 'c1'))
-    assert.deepEqual(state.days, {})
+    assert.equal(state.days['2026-01-01'].skills, undefined)
+    assert.equal(state.days['2026-01-01'].toolCalls, 1)
     assert.equal(state.skillCalls, undefined)
   })
 
@@ -240,7 +252,7 @@ describe('applyActivity: skill loads', () => {
     }
     assert.equal(state.skillCalls?.length, 100, 'the oldest pending claims drop first')
     assert.equal(state.skillCalls?.includes('c1'), false)
-    // Non-skill calls and unreadable ids never arm.
+    // Non-skill calls and unreadable ids never arm a skill claim (the bash run still times itself).
     for (const ev of [
       toolCall(at(0), 'c2', 'bash'),
       toolCall(at(0), 7, 'skill'),
@@ -248,7 +260,7 @@ describe('applyActivity: skill loads', () => {
       toolCall(at(0), undefined, 'skill'),
       { type: 'tool/call', seq: 1, time: at(0), data: null } as never,
     ]) {
-      assert.ok(applyActivity(state, ev) === state, JSON.stringify(ev.data))
+      assert.deepEqual(applyActivity(state, ev).skillCalls, state.skillCalls, JSON.stringify(ev.data))
     }
   })
 
@@ -479,6 +491,80 @@ describe('applyActivity: the initiation stamp', () => {
   })
 })
 
+describe('applyActivity: turn, tool-run, and step-time attribution', () => {
+  const late = new Date(2026, 0, 1, 23, 30).getTime()
+  const early = new Date(2026, 0, 2, 0, 30).getTime()
+
+  test('a turn books once, on the initiation day of its first settlement', () => {
+    let state = applyActivity({ days: {} }, requestHeader('deepseek-v4', 'deepseek-official'))
+    state = applyActivity(state, stepStart(at(0)))
+    state = applyActivity(state, turnMessage(at(0), 7, { inputTokens: 1 }))
+    state = applyActivity(state, stepEnd(at(0)))
+    state = applyActivity(state, stepStart(at(1)))
+    state = applyActivity(state, turnMessage(at(1), 7, { inputTokens: 1 }))
+    state = applyActivity(state, stepEnd(at(1)))
+    assert.equal(state.days['2026-01-01'].turns, 1)
+    assert.equal(state.days['2026-01-02'].turns, undefined, 'the same turn never re-books on a later day')
+    state = applyActivity(state, stepStart(at(1)))
+    state = applyActivity(state, turnMessage(at(1), 8, { inputTokens: 1 }))
+    assert.equal(state.days['2026-01-02'].turns, 1, 'the next turn books its own day')
+  })
+
+  test('a tool run books its duration on the step-start day, across midnight', () => {
+    let state = applyActivity({ days: {} }, requestHeader('deepseek-v4', 'deepseek-official'))
+    state = applyActivity(state, stepStart(late))
+    state = applyActivity(state, toolCall(late, 'c1', 'bash'))
+    state = applyActivity(state, skillResult(early, 'done', 'c1'))
+    assert.equal(state.days['2026-01-01'].toolCalls, 1)
+    assert.equal(state.days['2026-01-01'].toolsMs, early - late)
+    assert.equal(state.days['2026-01-02'], undefined)
+  })
+
+  test('a step wall time books on the step-start day, across midnight', () => {
+    let state = applyActivity({ days: {} }, stepStart(late))
+    state = applyActivity(state, stepEnd(early))
+    assert.equal(state.days['2026-01-01'].wallMs, early - late)
+    assert.equal(state.days['2026-01-02'], undefined)
+  })
+
+  test('an unreadable or undatable tool start never arms', () => {
+    const state = applyActivity({ days: {} }, requestHeader('deepseek-v4', 'deepseek-official'))
+    assert.ok(applyActivity(state, toolCall(Number.NaN, 'c1', 'bash')) === state, 'a non-finite start')
+    assert.ok(applyActivity(state, toolCall(1e30, 'c2', 'bash')) === state, 'a start outside the day-key range')
+    const negative = applyActivity(state, stepStart(-2 * 86_400_000))
+    assert.equal(applyActivity(negative, toolCall(at(0), 'c3', 'bash')).toolStarts, undefined, 'a step stamp with no local day')
+  })
+
+  test('a later settlement keeps the day’s tool and wall tallies', () => {
+    const start = at(0)
+    let state = applyActivity({ days: {} }, requestHeader('deepseek-v4', 'deepseek-official'))
+    state = applyActivity(state, stepStart(start))
+    state = applyActivity(state, turnMessage(start, 1, { inputTokens: 1 }))
+    state = applyActivity(state, stepEnd(start + 100))
+    state = applyActivity(state, stepStart(start + 200))
+    state = applyActivity(state, toolCall(start + 200, 'c1', 'bash'))
+    state = applyActivity(state, skillResult(start + 300, 'done', 'c1'))
+    state = applyActivity(state, stepStart(start + 400))
+    state = applyActivity(state, turnMessage(start + 400, 2, { inputTokens: 1 }))
+    state = applyActivity(state, stepEnd(start + 500))
+    const day = state.days['2026-01-01']
+    assert.equal(day.turns, 2)
+    assert.equal(day.toolCalls, 1)
+    assert.equal(day.toolsMs, 100)
+    assert.equal(day.wallMs, 200, 'the first and last completed steps')
+  })
+
+  test('a tagged seed cut clears the turn cursor and pending tool starts', () => {
+    let state = applyActivity({ days: {} }, requestHeader('deepseek-v4', 'deepseek-official'))
+    state = applyActivity(state, stepStart(at(0)))
+    state = applyActivity(state, turnMessage(at(0), 1, { inputTokens: 1 }))
+    state = applyActivity(state, toolCall(at(0), 'c1', 'bash'))
+    assert.ok(state.lastTurn !== undefined && state.toolStarts !== undefined)
+    state = applyActivity(state, { type: 'session/end-seed', seq: 1, time: at(0), data: { inherited: true } } as never)
+    assert.deepEqual(state, { days: {} })
+  })
+})
+
 describe('applyActivity: the per-day pricing record', () => {
   test('DeepSeek peak windows book the doubled list price; off-peak books the plain one', () => {
     let state = applyActivity({ days: {} }, requestHeader('deepseek-v4', 'deepseek-official'))
@@ -533,6 +619,11 @@ describe('contextActivity unit: the schemas over the pricing record', () => {
     state = applyActivity(state, assistantMessage(at(0), { inputTokens: 1, outputTokens: 2 }))
     assert.equal(def.stateSchema.safeParse(state).success, true)
     assert.equal(def.stateSchema.safeParse({ days: {}, model: 'm', provider: 'p', stepStart: 1 }).success, true)
+    assert.equal(def.stateSchema.safeParse({ days: {}, lastTurn: 3, toolStarts: { c1: { start: 1, day: '2026-01-01' } } }).success, true)
+    assert.equal(def.stateSchema.safeParse({ days: {}, toolStarts: { c1: { start: -1, day: '2026-01-01' } } }).success, false)
+    assert.equal(def.stateSchema.safeParse({ days: { '2026-01-01': { tokens: 0, requests: 0, turns: 1, toolCalls: 2, toolsMs: 1.5, wallMs: 2 } } }).success, true)
+    assert.equal(def.stateSchema.safeParse({ days: { '2026-01-01': { tokens: 0, requests: 0, turns: 1.5 } } }).success, false)
+    assert.equal(contextActivitySchema.safeParse({ days: { '2026-01-01': { tokens: 0, requests: 0, turns: 1, toolCalls: 2, toolsMs: 1.5, wallMs: 2 } } }).success, true)
     const view = def.wire.view(state)
     assert.equal(def.wire.viewSchema.safeParse(view).success, true)
     assert.equal(contextActivitySchema.safeParse(view).success, true)

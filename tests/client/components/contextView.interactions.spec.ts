@@ -16,7 +16,7 @@ describe('ContextView — interactions', () => {
     assert.equal(queryAll(m.container, '.lc-bar-marker').length, 1)
     assert.equal(queryAll(m.container, '.lc-event').length, 2)
     assert.ok(text(m.container).includes(DICT_EN['files.title']))
-    assert.ok(text(m.container).includes(DICT_EN['files.scopeLatest']))
+    assert.ok(text(m.container).includes(DICT_EN['files.sort.count']))
     assert.ok(text(m.container).includes(DICT_EN['browser.liveNow']))
     // Turn strip partitions the two turn groups (turn 1 + the turn-less 0).
     assert.deepEqual(queryAll(m.container, '.lc-turn-label').map(el => text(el)), ['1', '0'])

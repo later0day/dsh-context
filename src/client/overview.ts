@@ -34,6 +34,8 @@ export interface OverviewRow {
   activity: ContextActivity | null
   /** Every subtree member's sanitized head, self first; each part split proportions its own composition. */
   family: (ContextTimeline | null)[]
+  /** Every subtree member's daily ledger, self first and aligned with {@link family}. */
+  familyActivity?: (ContextActivity | null)[]
   /** The subtree's merged billed usage; null when nothing was billed. */
   familyCost: SessionCostUsage | null
 }
@@ -217,6 +219,7 @@ export function rowsOfSnapshot(snapshot: unknown, workspaces?: unknown): Overvie
       }
     }
     row.family = timelines
+    row.familyActivity = activities
     row.familyCost = mergeCostUsage(...timelines.map(t => t?.cost))
     row.activity = mergeActivity(activities)
   }
@@ -233,8 +236,13 @@ export function coveredRowsOf(rows: readonly OverviewRow[], coverage: OverviewCo
   return coverage === 'all' ? rows : rows.filter(row => row.archived === (coverage === 'archived'))
 }
 
-/** Merge several sessions' daily ledgers into one family's: per day the tokens
- * and requests sum, the pricing records merge, and the skill tables merge name by name (loads sum, last-load takes the max). */
+/** Sum a pair of additive-optional day figures; both absent stays absent. */
+function addDayField(a: number | undefined, b: number | undefined): number | undefined {
+  return a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0)
+}
+
+/** Merge several sessions' daily ledgers into one family's: per day the counters and timing
+ * totals sum, the pricing records merge, and the skill tables merge name by name. */
 function mergeActivity(members: (ContextActivity | null)[]): ContextActivity | null {
   const days: ContextActivity['days'] = {}
   const byKey: Record<string, ContextActivity['days'][string] | undefined> = days
@@ -250,11 +258,23 @@ function mergeActivity(members: (ContextActivity | null)[]): ContextActivity | n
           tokens: entry.tokens,
           requests: entry.requests,
           ...(entry.cost !== undefined ? { cost: entry.cost } : {}),
+          ...(entry.turns !== undefined ? { turns: entry.turns } : {}),
+          ...(entry.toolCalls !== undefined ? { toolCalls: entry.toolCalls } : {}),
+          ...(entry.toolsMs !== undefined ? { toolsMs: entry.toolsMs } : {}),
+          ...(entry.wallMs !== undefined ? { wallMs: entry.wallMs } : {}),
           ...(entry.skills !== undefined ? { skills: entry.skills } : {}),
         }
       } else {
         prev.tokens += entry.tokens
         prev.requests += entry.requests
+        const turns = addDayField(prev.turns, entry.turns)
+        const toolCalls = addDayField(prev.toolCalls, entry.toolCalls)
+        const toolsMs = addDayField(prev.toolsMs, entry.toolsMs)
+        const wallMs = addDayField(prev.wallMs, entry.wallMs)
+        if (turns !== undefined) prev.turns = turns
+        if (toolCalls !== undefined) prev.toolCalls = toolCalls
+        if (toolsMs !== undefined) prev.toolsMs = toolsMs
+        if (wallMs !== undefined) prev.wallMs = wallMs
         if (entry.cost !== undefined) {
           /* v8 ignore next 1 -- a merge with a defined input never comes back empty. */
           prev.cost = mergeCostUsage(prev.cost, entry.cost) ?? entry.cost
@@ -329,6 +349,21 @@ export function dayRangeWindow(range: DayRange): RangeWindow | null {
   return { start, end }
 }
 
+/** Whether a ledger day key falls inside a resolved window. Day-granular on purpose: a preset's
+ * rolling floor admits its whole local day, because the ledger cannot split one day. */
+export function dayInScope(key: string, scope: RangeWindow): boolean {
+  const floor = scope.start === null ? null : dayKeyOf(scope.start)
+  const ceiling = scope.end === null ? null : dayKeyOf(scope.end)
+  return (floor === null || key >= floor) && (ceiling === null || key <= ceiling)
+}
+
+/** A day that contributed anything: billed tokens, a settlement, a turn, a tool run, step time,
+ * or a skill load. The range selection admits a session on any of these. */
+function hasActivity(entry: ActivityDay): boolean {
+  return entry.tokens > 0 || entry.requests > 0 || (entry.turns ?? 0) > 0
+    || (entry.toolCalls ?? 0) > 0 || (entry.wallMs ?? 0) > 0 || entry.skills !== undefined
+}
+
 export type OverviewSort = 'recent' | 'tokens' | 'context'
 
 /** The team card's cumulative billed tokens, or null when nothing was billed; the sort and the card stat share this figure. */
@@ -359,9 +394,27 @@ export function filterRows(
   opts: { scope: RangeWindow; day: string | null; query: string },
 ): OverviewRow[] {
   const query = opts.query.trim().toLowerCase()
+  const bounded = opts.scope.start !== null || opts.scope.end !== null
   return rows.filter((row) => {
-    if (opts.scope.start !== null && row.updatedAt < opts.scope.start) return false
-    if (opts.scope.end !== null && row.updatedAt > opts.scope.end) return false
+    // A bounded scope admits a session on either signal: a daily-ledger day inside the window
+    // (a long run with no new prompt still counts), or a last user prompt inside it (a session
+    // touched in the window but billing nothing). The KPI later sums only the ledger days.
+    if (bounded) {
+      let inScope = (opts.scope.start === null || row.updatedAt >= opts.scope.start)
+        && (opts.scope.end === null || row.updatedAt <= opts.scope.end)
+      if (!inScope) {
+        const days = row.activity?.days
+        if (days !== undefined) {
+          for (const key of Object.keys(days)) {
+            if (dayInScope(key, opts.scope) && hasActivity(days[key])) {
+              inScope = true
+              break
+            }
+          }
+        }
+      }
+      if (!inScope) return false
+    }
     if (opts.day !== null) {
       const entry = row.activity?.days[opts.day]
       if (entry === undefined || (entry.tokens <= 0 && entry.requests <= 0)) return false
@@ -409,10 +462,7 @@ export type SkillSort = 'loads' | 'recent'
  * that day, else the scope window admits its days whole. */
 function skillDayPredicate(opts: { scope: RangeWindow; day: string | null }): (key: string) => boolean {
   if (opts.day !== null) return key => key === opts.day
-  const { start, end } = opts.scope
-  const floor = start === null ? null : dayKeyOf(start)
-  const ceiling = end === null ? null : dayKeyOf(end)
-  return key => (floor === null || key >= floor) && (ceiling === null || key <= ceiling)
+  return key => dayInScope(key, opts.scope)
 }
 
 /** The Insights page's skill card data: every scoped row's family ledger folded
@@ -505,6 +555,38 @@ export function usageTotalsOf(usage: SessionCostUsage | null | undefined): Usage
   return totals
 }
 
+export interface WindowTotals {
+  requests: number
+  turns: number
+  toolCalls: number
+  toolsMs: number
+  wallMs: number
+  /** The window's merged pricing records; null when no day carried any. */
+  usage: SessionCostUsage | null
+}
+
+/** Fold one daily ledger over a window; every figure rides the ledger's own day keys. */
+export function windowTotalsOf(activity: ContextActivity | null, scope: RangeWindow): WindowTotals {
+  let requests = 0
+  let turns = 0
+  let toolCalls = 0
+  let toolsMs = 0
+  let wallMs = 0
+  let usage: SessionCostUsage | null = null
+  if (activity !== null) {
+    for (const [key, day] of Object.entries(activity.days)) {
+      if (!dayInScope(key, scope)) continue
+      requests += day.requests
+      turns += day.turns ?? 0
+      toolCalls += day.toolCalls ?? 0
+      toolsMs += day.toolsMs ?? 0
+      wallMs += day.wallMs ?? 0
+      if (day.cost !== undefined) usage = mergeCostUsage(usage, day.cost)
+    }
+  }
+  return { requests, turns, toolCalls, toolsMs, wallMs, usage }
+}
+
 /** The range's summed timing totals, folded from the rows' host-folded
  * whole-session totals exactly as the KPI band folds the scalar figures. The
  * additive-optional fields sum their carriers only, so a field no row carries stays absent instead of materializing zeros. */
@@ -560,15 +642,26 @@ export interface TokenPartTotal {
 /** The range's billed tokens split by category, folded across the rows'
  * families: each member's `billedParts` sum by category while its parts total
  * its own billed figure, so the aggregate total stays the exact merged billed
- * volume. Null when nothing billed; a non-finite part drops whole. */
-export function tokenPartsOf(rows: readonly OverviewRow[]): { parts: TokenPartTotal[]; total: number } | null {
+ * volume. With a scope, each member's usage comes from its daily ledger's
+ * admitted days; without one, the lifetime head. Null when nothing billed; a
+ * non-finite part drops whole. */
+export function tokenPartsOf(
+  rows: readonly OverviewRow[],
+  scope?: RangeWindow,
+): { parts: TokenPartTotal[]; total: number } | null {
   const sums = new Map<string, TokenPartTotal>()
   let total = 0
   let any = false
   for (const row of rows) {
-    for (const member of row.family) {
+    for (let index = 0; index < row.family.length; index++) {
+      const member = row.family[index]
       if (member === null) continue
-      const totals = usageTotalsOf(member.cost)
+      const memberUsage = scope === undefined
+        ? member.cost
+        : row.familyActivity === undefined
+          ? null
+          : windowTotalsOf(row.familyActivity[index] ?? null, scope).usage
+      const totals = usageTotalsOf(memberUsage)
       if (totals === null) continue
       any = true
       const usage: TokenUsage = {
@@ -612,10 +705,11 @@ export function kpisOf(
   rows: readonly OverviewRow[],
   book: ModelBook | null | undefined,
   currency: CostCurrency,
+  scope?: RangeWindow,
 ): OverviewKpis {
-  // Billed volume and spend ride the same family scope as the cards and chart.
-  const usage = mergeCostUsage(...rows.map(row => row.familyCost))
-  const totals = usageTotalsOf(usage)
+  // Every figure folds the SAME daily ledger over the window; the lifetime heads serve only
+  // callers that pass no scope (or rows with no ledger).
+  let usage: SessionCostUsage | null = null
   let turns = 0
   let toolCalls = 0
   let toolsMs = 0
@@ -623,17 +717,30 @@ export function kpisOf(
   let wallMs = 0
   let costSessions = 0
   let usageSessions = 0
+  const open = scope === undefined || (scope.start === null && scope.end === null)
   for (const row of rows) {
+    const windowTotals = scope !== undefined && row.activity !== null ? windowTotalsOf(row.activity, scope) : null
+    const rowUsage = windowTotals !== null ? windowTotals.usage : open ? row.familyCost : null
+    usage = mergeCostUsage(usage, rowUsage)
+    if (windowTotals !== null) {
+      turns += windowTotals.turns
+      toolCalls += windowTotals.toolCalls
+      toolsMs += windowTotals.toolsMs
+      calls += windowTotals.requests
+      wallMs += windowTotals.wallMs
+    } else if (open) {
+      const timing = row.timeline?.timing
+      turns += turnsOf(row.timeline)
+      toolCalls += timing?.toolCalls ?? 0
+      toolsMs += timing?.toolsMs ?? 0
+      calls += timing?.calls ?? 0
+      wallMs += timing?.wallMs ?? 0
+    }
     // Each sub-line counts the sessions its own figure covers: a session with usage but no book rates feeds the cache-hit rate.
-    if (estimateSessionCost(row.familyCost, book, currency) !== null) costSessions++
-    if (usageTotalsOf(row.familyCost) !== null) usageSessions++
-    turns += turnsOf(row.timeline)
-    const timing = row.timeline?.timing
-    toolCalls += timing?.toolCalls ?? 0
-    toolsMs += timing?.toolsMs ?? 0
-    calls += timing?.calls ?? 0
-    wallMs += timing?.wallMs ?? 0
+    if (estimateSessionCost(rowUsage, book, currency) !== null) costSessions++
+    if (usageTotalsOf(rowUsage) !== null) usageSessions++
   }
+  const totals = usageTotalsOf(usage)
   return {
     sessions: rows.length,
     tokens: totals?.total ?? 0,
@@ -646,7 +753,7 @@ export function kpisOf(
     toolsMs,
     calls,
     wallMs,
-    tokenParts: tokenPartsOf(rows),
+    tokenParts: tokenPartsOf(rows, scope),
     timing: timingSumOf(rows),
   }
 }

@@ -67,6 +67,14 @@ export interface ActivityDay {
   /** The day's billed buckets keyed provider → model → pricing period, scoped to the day the
    * requests INITIATED in. Absent = tokens-only bars. */
   cost?: SessionCostUsage
+  /** Turns whose FIRST settlement landed on this (step-initiation) day. */
+  turns?: number
+  /** Completed tool runs whose step STARTED that day. */
+  toolCalls?: number
+  /** Summed tool-run durations for those runs, in ms. */
+  toolsMs?: number
+  /** Summed wall time of steps that ENDED, charged to the day their step STARTED, in ms. */
+  wallMs?: number
   /** Skill name → `{ n: loads, last: last-load instant in epoch ms }`; absent = an empty day. */
   skills?: Record<string, { n: number; last: number }>
 }

@@ -16,7 +16,7 @@
  */
 
 /** The supported dsh tags, in lockstep with the BASELINES entries below. */
-export type BaselineId = 'v0.1.7-rc.2' | 'v0.2.0-rc.2'
+export type BaselineId = 'v0.1.7-rc.2' | 'v0.2.0-rc.2' | 'v0.2.1-rc.2'
 
 /** The harness web half's client faces, as far as the compat probes consume them. */
 export interface ClientSeam {
@@ -169,12 +169,13 @@ export interface Baseline {
     transportPresent: boolean
   }
   /** The balance capsule's host seam (src/host/balance.ts). The facts fold
-   * reads the DeepSeek API-key provider's settings row off the Config-form
-   * `describe()` projection — the provider row is the entry whose served
-   * value declares the top-level `apiKeyEnv` credential ref, preferred under
-   * the settings ids the generations have served it as. The retired
-   * registered-section `get(ns)` read is probed absent, so a resurrection
-   * names the seam instead of silently shadowing the projection. */
+   * reads the DeepSeek platform's settings row off the Config-form
+   * `describe()` projection — the provider directory names the API-key
+   * model's own row, and dsh's stock entry ids are the fallback — and reads
+   * that projection redacted, so a row's literal key never enters the fold.
+   * The retired registered-section `get(ns)` read is probed absent, so a
+   * resurrection names the seam instead of silently shadowing the
+   * projection. */
   balance: {
     settingsFile: string
     /** The retired `get(ns)` section read — absent on every supported line. */
@@ -182,7 +183,16 @@ export interface Baseline {
     settingsGetPresent: boolean
     /** The Config-form projection needle the fold reads. */
     settingsDescribeNeedle: string | undefined
-    /** The provider sources carrying the plugin id and the section shape the fold matches. */
+    /** The projection's redaction option — the fold reads every row redacted. */
+    settingsRedactNeedle: string
+    /** The provider directory: the route key's own settings id, whatever the
+     * entry is called. */
+    providerDirectory: { file: string; needle: string }
+    /** The stock entry ids of the DeepSeek platform's own rows on this line — the
+     * fold's fallback when the provider directory answers nothing. The set grows
+     * with the line, so it is pinned per line. */
+    stockIds: { file: string; ids: readonly string[] }
+    /** The provider sources carrying the route key and the section shape the fold reads. */
     providerFiles: readonly { file: string; needles: readonly string[] }[]
   }
   /** The system-prompt injection seam (src/host/promptInjection.ts): the
@@ -213,12 +223,12 @@ export interface Baseline {
 }
 
 /** One support-matrix entry. Every supported line is the V4 generation, so
- * the seams are spelled once here; a future line that diverges on a needle outgrows the factory (inline its entry instead). */
-function baseline(id: BaselineId, tag: string, session: string): Baseline {
+ * the seams are spelled once here; a line that diverges states its divergence here. */
+function baseline(id: BaselineId, tag: string, session: string, line: { cordis?: string; stockIds?: readonly string[] } = {}): Baseline {
   return {
     id,
     tag,
-    cordis: '4.0.4',
+    cordis: line.cordis ?? '4.0.4',
     session,
     foldEventTypes: [
       'request/header', 'request/context', 'step/start', 'step/end',
@@ -302,10 +312,19 @@ function baseline(id: BaselineId, tag: string, session: string): Baseline {
       settingsGetNeedle: 'get<const Namespace extends string>(ns:',
       settingsGetPresent: false,
       settingsDescribeNeedle: 'describe(options?: SettingsDescribeOptions)',
+      settingsRedactNeedle: 'redactSecrets?: boolean',
+      providerDirectory: {
+        file: 'packages/llm/llm/src/index.ts',
+        needle: 'listConfigurableProviders(): LlmConfigurableProvider',
+      },
+      stockIds: {
+        file: 'packages/bundle/base/cordis.patch.yml',
+        ids: line.stockIds ?? ['llm-deepseek', 'web-search-deepseek'],
+      },
       providerFiles: [
         {
           file: 'packages/llm/llm-deepseek-api-key/src/index.ts',
-          needles: ["export const name = 'llm-deepseek-api-key'"],
+          needles: ["const PROVIDER = 'deepseek-official'"],
         },
         {
           file: 'packages/llm/llm-deepseek-api-key/src/config.ts',
@@ -365,4 +384,12 @@ export const BASELINES: readonly Baseline[] = [
   // session-format tree carries no v4-to-v5 migration). Cordis stays 4.0.4,
   // and the line continues to enforce the plugin dsh-peer gate this plugin's `>=0.1.7-rc.2` peers satisfy.
   baseline('v0.2.0-rc.2', 'dsh-v0.2.0-rc.2', '0.2.0-rc.2'),
+  // The 0.2.1 line continues the V4 Config-form generation with every seam the
+  // plugin rides spelled as at `0.2.0-rc.2`. Two facts differ: the line
+  // vendors cordis 4.0.5, and it adds the `web-deepseek-api` entry the
+  // balance fold falls back to.
+  baseline('v0.2.1-rc.2', 'dsh-v0.2.1-rc.2', '0.2.1-rc.2', {
+    cordis: '4.0.5',
+    stockIds: ['llm-deepseek', 'web-search-deepseek', 'web-deepseek-api'],
+  }),
 ]

@@ -6,13 +6,13 @@ The rules dsh-context must hold on every supported `@deepseek-ai/dsh` release, a
 
 **Law.** Record only what no other artifact carries; delete what code, tests, or git history already say. Verify against the dsh sources before acting — source wins over this page. Less is ALWAYS better.
 
-Last verified: **2026-10-14** (dsh-context `0.70.0`, dsh `0.2.0-rc.2` npm install and `0.2.1-alpha.3` tree).
+Last verified: **2026-10-20** (dsh-context `0.73.3`, dsh `0.1.7-rc.2` / `0.2.0-rc.2` / `0.2.1-rc.2` tag trees).
 
 ## 1 · Supported set
 
 *What the plugin declares it works on.*
 
-1. **Support exactly `0.1.7-rc.2` and `0.2.0-rc.2`** — both the V4 durable-log generation. The floor is `0.1.7-rc.2` because it is the first `0.1.7`-line release with a complete npm dependency closure; anything older gets §2's fallback composition with an upgrade prompt, never a fold.
+1. **Support exactly `0.1.7-rc.2`, `0.2.0-rc.2` and `0.2.1-rc.2`** — all the V4 durable-log generation. The floor is `0.1.7-rc.2` because it is the first `0.1.7`-line release with a complete npm dependency closure; anything older gets §2's fallback composition with an upgrade prompt, never a fold.
 
 ## 2 · Admission
 
@@ -59,6 +59,7 @@ Last verified: **2026-10-14** (dsh-context `0.70.0`, dsh `0.2.0-rc.2` npm instal
 | `src/client/reserve.ts` | `packages/compaction/compaction-basic/src/config.ts` — only the shipped defaults (`thresholdRatio` 0.8, `headroomTokens` 65536): preset realms make a deployment's policy unreadable; when `contextWindow − reservedOutput − headroomTokens` is non-positive the backend refuses (`TargetPressureConfigError`), so the bar paints no masks |
 
 - **Limitation — declared divergence:** the timing card's wait/generation boundary opens at the first OBSERVABLE instant (the first token, or an earlier `block-start` marker the token packing could not stamp), not at the meter's first-token anchor — so marker-tiled decode buckets and the split never double-count one window.
+- **Limitation — daily-ledger attribution:** `contextTimeline.cost` prices at the settlement instant while the daily ledger prices at the step-initiation instant, so a tariff-boundary step can split its peak/off buckets differently between the lifetime total and the KPI band; the ledger also retains 400 days (`MAX_KEPT_DAYS` in `src/host/activity.ts`).
 
 ## 5 · Client surface
 

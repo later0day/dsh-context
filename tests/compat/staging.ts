@@ -57,6 +57,16 @@ export function stageFile(baseline: Baseline, tagPath: string, localName: string
   return file
 }
 
+/** Stage one file only when the tag carries it: a line that does not ship the
+ * file stages nothing, and the sibling a staged module imports by relative
+ * path rides along. */
+function stageFileIfPresent(baseline: Baseline, tagPath: string, localName: string): boolean {
+  const run = spawnSync('git', ['-C', DSH_REPO, 'cat-file', '-e', `${baseline.tag}:${tagPath}`], { encoding: 'utf8' })
+  if (run.status !== 0) return false
+  stageFile(baseline, tagPath, localName)
+  return true
+}
+
 /** The host packages the tag's staged sources import at runtime, at this line's own versions. */
 function hostDepsOf(baseline: Baseline): Record<string, string> {
   return {
@@ -108,7 +118,7 @@ function driverSource(pluginUrl: string, developerMessages: boolean): string {
   return `
 import { Context } from '@deepseek-ai/cordis'
 import { SessionProjectionRegistry } from './registry/index.ts'
-import { snapshotJsonValue } from './dsh/json-values.ts'
+import { snapshotJsonValue } from './dsh/index.ts'
 const plugin = await import(${JSON.stringify(pluginUrl)})
 const ctx = new Context()
 const registry = new SessionProjectionRegistry(ctx)
@@ -268,7 +278,12 @@ export function runDriver(baseline: Baseline): DriverReport {
   ensureHostDeps(baseline)
   stageFile(baseline, 'packages/session/session-projection/src/index.ts', join('registry', 'index.ts'))
   stageFile(baseline, 'packages/session/session-projection/src/types.ts', join('registry', 'types.ts'))
-  stageFile(baseline, 'packages/util/values/src/index.ts', join('dsh', 'json-values.ts'))
+  // The values package under its own file name: its modules import each other
+  // by relative path, so renaming the entry would break the sibling links.
+  stageFile(baseline, 'packages/util/values/src/index.ts', join('dsh', 'index.ts'))
+  // The 0.2.1 line's values package grew a sibling module the staged entry
+  // re-exports by relative path, so it rides along where the tag ships it.
+  stageFileIfPresent(baseline, 'packages/util/values/src/partial-json.ts', join('dsh', 'partial-json.ts'))
   const driver = join(STAGE, baseline.id, 'driver.mjs')
   writeFileSync(driver, driverSource(`file://${join(REPO, 'lib', 'index.js')}`, baseline.foldEventTypes.includes('developer/message')))
   const run = spawnSync(process.execPath, [driver], { cwd: STAGE, encoding: 'utf8', timeout: 60_000 })

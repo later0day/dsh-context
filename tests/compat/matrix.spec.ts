@@ -109,10 +109,11 @@ describe.skipIf(reasons.length > 0)('compat matrix — real dsh sources per base
     })
 
     test('balance: the settings face and the DeepSeek provider row the facts fold reads', () => {
-      // The balance route resolves the provider's settings row off the
-      // Config-form `describe()` projection (the row matched by its own
-      // apiKeyEnv-bearing section shape); the retired `get(ns)` section read
-      // is asserted absent, so a moved seam names itself instead of silently hiding the capsule.
+      // The balance route resolves the DeepSeek platform's settings row off the
+      // Config-form `describe()` projection — the provider directory names the
+      // API-key model's own row, and the projection is read redacted; the
+      // retired `get(ns)` section read is asserted absent, so a moved seam
+      // names itself instead of silently hiding the capsule.
       const balance = baseline.balance
       assert.equal(
         staging.dshHasString(baseline.tag, balance.settingsGetNeedle, balance.settingsFile),
@@ -124,6 +125,25 @@ describe.skipIf(reasons.length > 0)('compat matrix — real dsh sources per base
           staging.dshHasString(baseline.tag, balance.settingsDescribeNeedle, balance.settingsFile),
           true,
           'the settings service describe face',
+        )
+      }
+      assert.equal(
+        staging.dshHasString(baseline.tag, balance.settingsRedactNeedle, balance.settingsFile),
+        true,
+        'the settings service redaction option',
+      )
+      assert.equal(
+        staging.dshHasString(baseline.tag, balance.providerDirectory.needle, balance.providerDirectory.file),
+        true,
+        'the llm provider directory face',
+      )
+      for (const id of balance.stockIds.ids) {
+        // The needle ends at the line end, so a longer id never answers for a
+        // shorter one (`llm-deepseek` is not `llm-deepseek-account`).
+        assert.equal(
+          staging.dshHasString(baseline.tag, `id: ${id}$`, balance.stockIds.file),
+          true,
+          `the DeepSeek stock entry id: ${id}`,
         )
       }
       for (const provider of balance.providerFiles) {

@@ -72,7 +72,7 @@ describe('filterRows', () => {
     }),
   ]
 
-  test('the range window filters by last activity', () => {
+  test('the range window admits a last prompt or a daily activity day', () => {
     assert.deepEqual(filterRows(rows, { scope: win('today', now), day: null, query: '' }).map(r => r.id), ['new', 'active'])
     assert.deepEqual(filterRows(rows, { scope: win('7d', now), day: null, query: '' }).map(r => r.id), ['new', 'active'])
     assert.deepEqual(filterRows(rows, { scope: win('all', now), day: null, query: '' }).map(r => r.id), ['old', 'new', 'active'])
@@ -83,6 +83,39 @@ describe('filterRows', () => {
     ]
     assert.deepEqual(filterRows(dRows, { scope: win('today', now), day: null, query: '' }).map(r => r.id), ['in'])
     assert.deepEqual(filterRows(dRows, { scope: win('7d', now), day: null, query: '' }).map(r => r.id), ['in', 'out'], 'last night is still inside the week')
+  })
+
+  test('a bounded window also admits a ledger-active session whose last prompt is older', () => {
+    const rows = [
+      // The long run started today: no new user prompt, but its ledger day is in the window.
+      rowOf({ id: 'long-run', updatedAt: midnight - 3 * 86_400_000, activity: { days: { '2026-09-11': { tokens: 5, requests: 1 } } } }),
+      // A prompt inside the window with no billing still counts as touched.
+      rowOf({ id: 'prompt-only', updatedAt: now }),
+      // Neither signal is inside the window.
+      rowOf({ id: 'stale', updatedAt: midnight - 3 * 86_400_000 }),
+    ]
+    assert.deepEqual(filterRows(rows, { scope: win('today', now), day: null, query: '' }).map(r => r.id), ['long-run', 'prompt-only'])
+  })
+
+  test('each daily tally is enough to admit a session to a bounded window', () => {
+    const dayRow = (id: string, day: Record<string, unknown>) => rowOf({
+      id,
+      updatedAt: midnight - 3 * 86_400_000,
+      activity: { days: { '2026-09-11': day } } as never,
+    })
+    const rows = [
+      dayRow('tokens', { tokens: 1, requests: 0 }),
+      dayRow('requests', { tokens: 0, requests: 1 }),
+      dayRow('turns', { tokens: 0, requests: 0, turns: 1 }),
+      dayRow('toolCalls', { tokens: 0, requests: 0, toolCalls: 1 }),
+      dayRow('wallMs', { tokens: 0, requests: 0, wallMs: 1 }),
+      dayRow('skills', { tokens: 0, requests: 0, skills: { tdd: { n: 1, last: 1 } } }),
+      dayRow('empty', { tokens: 0, requests: 0 }),
+    ]
+    assert.deepEqual(
+      filterRows(rows, { scope: win('today', now), day: null, query: '' }).map(r => r.id),
+      ['tokens', 'requests', 'turns', 'toolCalls', 'wallMs', 'skills'],
+    )
   })
 
   test('a picked range closes both ends of the window', () => {
