@@ -5,6 +5,8 @@ import type { RowKind } from './browserNodes'
 export interface CatFocus {
   cat: string
   kind?: RowKind
+  step?: number
+  query?: string
 }
 
 export function countOf(asm: Assembled, byCat: Partial<Record<Category, SurfaceNode[]>>, c: string): number {
@@ -18,10 +20,7 @@ export function lastOfTurn(requests: RequestRecord[], turn: number): RequestReco
   return null
 }
 
-/** The turn/step marking where a surface item entered the context: the FIRST request logged after the item's seq is
- * the first that carried it (assemble's inclusion rule is `n.seq < R.seq`); no following request stamps null. */
 export function stepStampOf(requests: RequestRecord[]): (itemSeq: number) => { turn: number; step: number } | null {
-  // Sort a copy: the wire arrives in append order, but the derivation must not depend on it (restored rows can re-order).
   const sorted = requests.slice().sort((a, b) => a.seq - b.seq)
   return (itemSeq) => {
     for (const r of sorted) {
@@ -33,6 +32,4 @@ export function stepStampOf(requests: RequestRecord[]): (itemSeq: number) => { t
   }
 }
 
-/** Bands keep at least this share of the occupied region, so a tiny item stays a hoverable/clickable filament
- * instead of a sub-pixel sliver; tooltips still report true shares. */
 export const DNA_MIN_BAND = 0.35

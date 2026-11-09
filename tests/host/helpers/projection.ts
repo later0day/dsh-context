@@ -1,50 +1,39 @@
-// Fold drivers for the host specs: run event envelopes through the REAL projection units the plugin registers (no harness plumbing — the
-// units are pure init/apply/view), pinning the state's plain-JSON rule on every intermediate state (see assertNoAbsentMembers).
-
 import assert from 'node:assert/strict'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Config } from '../../../src/host/config'
-import type { TimelineEvent, TimelineState } from '../../../src/host/fold'
-import type { HeadersState } from '../../../src/host/headers'
-import type { ContextHeaders, ContextTimeline } from '../../../src/shared/types'
+import { resolveBounds } from '../../../src/host/config'
+import { applyTimeline, type TimelineEvent, type TimelineState } from '../../../src/host/fold'
+import type { RequestRecord } from '../../../src/shared/types'
+import { buildTimelineView } from '../../../src/host/foldWire'
+import type { ContextTimeline } from '../../../src/shared/types'
+import { createTimelineState } from '../../../src/host/foldState'
 import { createContextTimelineDefinition } from '../../../src/host/timeline'
-import { createContextHeadersDefinition } from '../../../src/host/headers'
 
-/** The fold's contract takes the core `SessionEvent` union, but the log also carries declaration-merged
- * plugin events (compaction/*), so it widens to TimelineEvent (src/host/foldState.ts). These faces mirror the
- * supported registry contract (src/host/compat.ts: stateSchema + required `wire`, zero-arg `init` — see
- * ProjectionDefinition) and perform the ONE documented cast here, keeping every spec call site clean. */
-export interface TimelineDefLike {
+interface TimelineDefLike {
   key: string
-  /** The persisted-state gate the projection cache's cold path parses rows with. */
-  stateSchema: { parse(value: unknown): unknown }
+  stateSchema: { parse(value: unknown): unknown; safeParse(value: unknown): { success: boolean; error?: { issues: unknown[] } } }
   init(): TimelineState
   apply(state: TimelineState, event: TimelineEvent): TimelineState
   wire: {
-    /** The wire gate every delivery channel parses the served value with. */
     viewSchema: { parse(value: unknown): unknown; safeParse(value: unknown): { success: boolean } }
     view(state: TimelineState): ContextTimeline
   }
-}
-
-export interface HeadersDefLike {
-  key: string
-  init(): HeadersState
-  apply(state: HeadersState, event: TimelineEvent): HeadersState
-  wire: { view(state: HeadersState): ContextHeaders }
 }
 
 export function timelineDef(config?: Config, slim = false): TimelineDefLike {
   return createContextTimelineDefinition(config ?? {}, () => slim) as unknown as TimelineDefLike
 }
 
-export function headersDef(): HeadersDefLike {
-  return createContextHeadersDefinition() as unknown as HeadersDefLike
+export function fullDef(config?: Config, slim = false): TimelineDefLike {
+  const real = timelineDef(config, slim)
+  const bounds = resolveBounds(config)
+  return {
+    ...real,
+    init: () => createTimelineState(),
+    apply: (state: TimelineState, event: TimelineEvent) => applyTimeline(state, event, bounds),
+    wire: { ...real.wire, view: (state: TimelineState) => buildTimelineView(state, bounds) },
+  }
 }
 
-/** Lossless-JSON probe and detach, inlined with the dsh `snapshotJsonValue` semantics (the export lives in
- * `@deepseek-ai/dsh-util-values`; the test fixtures must track no single dsh face). Returns undefined when the
- * value is not losslessly JSON-serializable. Shared with the compat matrix's registry driver (tests/host/compat/registryDriver.ts). */
 export function snapshotJson(value: unknown, ancestors: Set<object> = new Set()): unknown {
   switch (typeof value) {
     case 'string': case 'boolean': return value
@@ -80,23 +69,12 @@ export function snapshotJson(value: unknown, ancestors: Set<object> = new Set())
   }
 }
 
-/** The projection-cache precondition: every state the fold produces must be
- * losslessly JSON-serializable (a single undefined property fails EVERY cache
- * write for the session — see TimelineState). Returns the detached copy. */
 export function assertPlainJson<T>(state: T): T {
   const copy = snapshotJson(state)
   assert.ok(copy !== undefined, 'fold state must be losslessly JSON-serializable')
   return copy as T
 }
 
-/**
- * The one plain-JSON rule a DURABLE log can break (see TimelineState): no own `undefined`-valued property
- * may enter a folded state — one such property fails EVERY projection-cache write for that session from
- * then on. The rest of the lossless contract cannot arrive through a real log (the durable vocabulary is
- * JSON, and dsh validates every payload before appending), so `assertPlainJson` stays the explicit
- * whole-contract check for specs that mean to assert it. Applied to every state the fold PRODUCES, not
- * only the last: a mid-log violation sticks even when a later event overwrites the key.
- */
 function assertNoAbsentMembers(value: unknown, path = '$', seen = new Set<object>()): void {
   if (value === null || typeof value !== 'object' || seen.has(value)) return
   seen.add(value)
@@ -106,16 +84,15 @@ function assertNoAbsentMembers(value: unknown, path = '$', seen = new Set<object
   }
 }
 
-export interface TimelineDrive {
+interface TimelineDrive {
   def: TimelineDefLike
   state: TimelineState
-  /** Every intermediate state, including init (index = events folded). */
   states: TimelineState[]
   view: ContextTimeline
 }
 
-export function driveTimeline(events: TimelineEvent[], config?: Config): TimelineDrive {
-  const def = timelineDef(config)
+export function driveTimeline(events: TimelineEvent[], config?: Config, headOnly = false): TimelineDrive {
+  const def = headOnly ? timelineDef(config) : fullDef(config)
   let state = def.init()
   assertNoAbsentMembers(state)
   const states = [state]
@@ -135,4 +112,6 @@ export function assertStable(state: TimelineState, event: TimelineEvent, def = t
   assert.equal(def.apply(state, event), state, 'uninteresting events must return the same reference')
 }
 
-export type { SessionEvent }
+export function requestsOf(state: TimelineState): RequestRecord[] {
+  return state.requests.filter((r): r is RequestRecord => typeof (r as { system?: unknown }).system === 'number')
+}

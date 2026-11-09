@@ -1,41 +1,111 @@
-/** Scroll an element's nearest operative scrollable ancestor so the element tops that scrollport.
- * Host-agnostic: the conversation tab scrolls a shared container, while the right Sidebar's scroller
- * differs per shell layout. False — never a throw — when no ancestor scrolls or the chain turns hostile. */
+interface ScrollPos {
+  top?: number
+  left?: number
+}
 
-export function revealInScrollParent(anchor: Element): boolean {
+function reducedMotion(): boolean {
+  try {
+    return matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    return false
+  }
+}
+
+function resolveBehavior(behavior: ScrollBehavior): ScrollBehavior {
+  return behavior === 'smooth' && reducedMotion() ? 'instant' : behavior
+}
+
+export function scrollToPos(el: Element, pos: ScrollPos, behavior: ScrollBehavior = 'smooth'): void {
+  const resolved = resolveBehavior(behavior)
+  if (typeof el.scrollTo === 'function') {
+    el.scrollTo({ top: pos.top, left: pos.left, behavior: resolved })
+    return
+  }
+  if (pos.top !== undefined) el.scrollTop = pos.top
+  if (pos.left !== undefined) el.scrollLeft = pos.left
+}
+
+const settleRuns = new WeakMap<Element, number>()
+
+export function settleReveal(el: HTMLElement, align: () => boolean, budget = 90): void {
+  const run = (settleRuns.get(el) ?? 0) + 1
+  settleRuns.set(el, run)
+  let lastTop = el.scrollTop
+  let lastLeft = el.scrollLeft
+  let ticks = 0
+  let active = true
+  const stop = (): void => { active = false }
+  const detach = (): void => {
+    el.removeEventListener('wheel', stop)
+    el.removeEventListener('touchstart', stop)
+    el.removeEventListener('pointerdown', stop)
+    el.removeEventListener('keydown', stop)
+  }
+  el.addEventListener('wheel', stop, { passive: true })
+  el.addEventListener('touchstart', stop, { passive: true })
+  el.addEventListener('pointerdown', stop, { passive: true })
+  el.addEventListener('keydown', stop)
+  const step = (): void => {
+    if (!active || settleRuns.get(el) !== run) {
+      detach()
+      return
+    }
+    ticks += 1
+    if (ticks >= budget) {
+      detach()
+      return
+    }
+    const still = el.scrollTop === lastTop && el.scrollLeft === lastLeft
+    lastTop = el.scrollTop
+    lastLeft = el.scrollLeft
+    if (!still || align()) {
+      requestAnimationFrame(step)
+      return
+    }
+    detach()
+  }
+  align()
+  requestAnimationFrame(step)
+}
+
+export function scrollIntoViewIfPossible(el: Element | null, options?: ScrollIntoViewOptions): void {
+  if (el === null || typeof el.scrollIntoView !== 'function') return
+  if (options?.behavior === 'smooth' && reducedMotion()) {
+    el.scrollIntoView({ ...options, behavior: 'instant' })
+    return
+  }
+  el.scrollIntoView(options)
+}
+
+export function revealInScrollParent(anchor: Element, behavior: ScrollBehavior = 'smooth'): boolean {
   try {
     for (let el = anchor.parentElement; el !== null && el !== document.body; el = el.parentElement) {
       const oy = window.getComputedStyle(el).overflowY
-      // The OPERATIVE scroller, not just an overflow-styled one: a box that grows with its content
-      // (the Context tab's own `.lc-root` where an outer container scrolls) reports auto yet never moves.
       if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) {
-        el.scrollTop += anchor.getBoundingClientRect().top - el.getBoundingClientRect().top
+        scrollToPos(el, { top: el.scrollTop + anchor.getBoundingClientRect().top - el.getBoundingClientRect().top }, behavior)
         return true
       }
     }
-  } catch { /* the reveal degrades to nothing */ }
+  } catch {}
   return false
 }
 
-/** Bring `row` into its nearest overflowing ancestor INSIDE `card`, and nothing above it: the card's
- * hosts — the capped tab column, the filled /context dialog — fit their pane together, so the rows
- * region is the only scroller that may move. A band scrub or row pick must never drag the page (and
- * the card's fixed head) out of view. When no region inside the card overflows, the row is already
- * fully visible and nothing moves. */
-export function revealRowInCard(card: Element | null, row: Element | null): void {
-  if (card === null || row === null || !card.contains(row)) return
+function scrollerInCard(card: Element, row: Element): HTMLElement | null {
   let scroller: HTMLElement | null = row.parentElement
   while (scroller !== null && scroller !== card && scroller.scrollHeight <= scroller.clientHeight) {
     scroller = scroller.parentElement
   }
-  /* v8 ignore next 1 -- a contained row's parent chain always reaches the card; the null bound is unreachable. */
-  if (scroller === null || scroller === card) return
+  return scroller === null || scroller === card ? null : scroller
+}
+
+export function revealRowInCard(card: Element | null, row: Element | null, behavior: ScrollBehavior = 'smooth'): void {
+  if (card === null || row === null || !card.contains(row)) return
+  const scroller = scrollerInCard(card, row)
+  if (scroller === null) return
   const rb = row.getBoundingClientRect()
   const sb = scroller.getBoundingClientRect()
-  // The row only has to reach the scrollport's VISIBLE slice: a pane usually extends below the window
-  // fold, so its own box bottom is no visibility boundary.
   const visTop = Math.max(sb.top, 0)
   const visBottom = Math.min(sb.bottom, window.innerHeight)
-  if (rb.top < visTop) scroller.scrollTop -= visTop - rb.top
-  else if (rb.bottom > visBottom) scroller.scrollTop += rb.bottom - visBottom
+  if (rb.top < visTop) scrollToPos(scroller, { top: scroller.scrollTop - (visTop - rb.top) }, behavior)
+  else if (rb.bottom > visBottom) scrollToPos(scroller, { top: scroller.scrollTop + rb.bottom - visBottom }, behavior)
 }

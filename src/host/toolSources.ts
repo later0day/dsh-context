@@ -1,17 +1,11 @@
-/**
- * Tool-to-plugin attribution for the Context browser's tool schema rows.
- *
- * The durable `request/header` event logs each tool as a plain `ToolSchema`
- * (`name`/`description`/`parameters` only), so the registering plugin is not in the log. Three
- * recovery sources: a `plugin` field a foreign producer carries on the raw header entry (passed
- * through by headers.ts), the `dsh-mcp-client` name grammar, and a pinned name → package map of
- * the shipped first-party tools. Third-party tools stay unattributed rather than guessed.
- */
+import { parseVersion } from '../shared/version'
 
 export const MCP_PREFIX = 'mcp__'
 
-/** Recover the MCP server label from a proxied tool name: `dsh-mcp-client` names tools
- * `mcp__<server>__<rawName>`, so the server is the text before the LAST `__`, past the prefix. */
+const LEGACY_SCHEDULE_PACKAGE = '@deepseek-ai/dsh-schedule'
+const SCHEDULE_PACKAGE = '@deepseek-ai/dsh-tool-schedule'
+const LEGACY_SCHEDULE_TOOLS = new Set(['schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete'])
+
 export function mcpServerOf(name: string): string | undefined {
   if (!name.startsWith(MCP_PREFIX)) return undefined
   const cut = name.lastIndexOf('__')
@@ -25,17 +19,21 @@ export function mcpSourceOf(name: string): string | undefined {
   return server !== undefined ? `mcp:${server}` : undefined
 }
 
-export function pinnedSourceOf(name: string): string | undefined {
-  return FIRST_PARTY_SOURCES[name]
+function legacyScheduleTool(name: string, version: string | undefined): boolean {
+  if (!LEGACY_SCHEDULE_TOOLS.has(name)) return false
+  const parsed = version === undefined ? null : parseVersion(version)
+  return parsed !== null && parsed.major === 0 && parsed.minor === 2 && parsed.patch === 0
 }
 
-/** Pinned first-party tool → package map: one entry per model-facing name of the shipped tool
- * packages at the supported dsh baseline (tests/baselines.ts). Packages mounting under distinct
- * names per composition (bash/pwsh variants, the `subagent_fork` alias) map to their primary one. */
+export function pinnedSourceOf(name: string, version?: string): string | undefined {
+  return legacyScheduleTool(name, version) ? LEGACY_SCHEDULE_PACKAGE : FIRST_PARTY_SOURCES[name]
+}
+
 export const FIRST_PARTY_SOURCES: Readonly<Record<string, string>> = Object.freeze({
   read: '@deepseek-ai/dsh-tool-fs',
   write: '@deepseek-ai/dsh-tool-fs',
   edit: '@deepseek-ai/dsh-tool-fs',
+  apply_patch: '@deepseek-ai/dsh-tool-fs',
   read_image: '@deepseek-ai/dsh-tool-fs',
   glob: '@deepseek-ai/dsh-tool-fs-search',
   grep: '@deepseek-ai/dsh-tool-fs-search',
@@ -60,9 +58,13 @@ export const FIRST_PARTY_SOURCES: Readonly<Record<string, string>> = Object.free
   ralph: '@deepseek-ai/dsh-tool-ralph',
   workflow: '@deepseek-ai/dsh-tool-workflow',
   run_code: '@deepseek-ai/dsh-tools',
-  schedule_create: '@deepseek-ai/dsh-schedule',
-  schedule_list: '@deepseek-ai/dsh-schedule',
-  schedule_delete: '@deepseek-ai/dsh-schedule',
+  schedule_create: SCHEDULE_PACKAGE,
+  schedule_list: SCHEDULE_PACKAGE,
+  schedule_view: SCHEDULE_PACKAGE,
+  schedule_edit: SCHEDULE_PACKAGE,
+  schedule_update: SCHEDULE_PACKAGE,
+  schedule_delete: SCHEDULE_PACKAGE,
+  working_directory: '@deepseek-ai/dsh-tool-working-directory',
   create_goal: '@deepseek-ai/dsh-tool-goal',
   get_goal: '@deepseek-ai/dsh-tool-goal',
   update_goal: '@deepseek-ai/dsh-tool-goal',

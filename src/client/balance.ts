@@ -1,13 +1,12 @@
-/** The DeepSeek platform balance behind the Context Insights page's header capsule: the figure the previous
- * open remembered paints at once, and one background read of the plugin's `/api/dsh-context/balance`
- * route (host/balance.ts) corrects it. Nothing remembered and nothing answered renders nothing — never a
- * spinner or an error where a pill should be. */
-
+import { amountOf } from '../shared/decode'
 import type { PlatformBalance, PlatformBalanceEntry } from '../shared/types'
 import { BALANCE_ROUTE } from './apiRoutes'
+import { postRouteQuietly } from './route'
 import { asRecord } from './services'
 
 const STORAGE_KEY = 'dsh-context:platform-balance'
+
+export const BALANCE_STORAGE_TTL_MS = 10 * 60 * 1000
 
 export interface StorageFace {
   getItem(key: string): string | null
@@ -15,17 +14,11 @@ export interface StorageFace {
   removeItem(key: string): void
 }
 
-/** Test seam: swap the storage backing the remembered figure; undefined re-detects. */
 export function setPlatformBalanceStorage(next: StorageFace | null | undefined): void {
   storage = next
 }
 
 export const PLATFORM_BALANCE_STORAGE_KEY = STORAGE_KEY
-
-function amountOf(value: unknown): number | null {
-  const n = typeof value === 'string' ? Number(value) : value
-  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null
-}
 
 export function platformBalanceOf(value: unknown): PlatformBalance | null {
   const data = asRecord(value)
@@ -33,7 +26,6 @@ export function platformBalanceOf(value: unknown): PlatformBalance | null {
   const infos = Array.isArray(data.balances) ? data.balances : []
   const balances: PlatformBalanceEntry[] = []
   for (const info of infos) {
-    // A hostile entry may throw on property access; it drops whole, the entries that prove their shape serve on.
     try {
       const entry = asRecord(info)
       if (entry === null) continue
@@ -53,7 +45,6 @@ export function platformBalanceOf(value: unknown): PlatformBalance | null {
     : null
 }
 
-/** Display-currency entry, falling back to the account's first — a number in another currency beats none. */
 export function balanceEntryOf(
   balance: PlatformBalance | null | undefined,
   currency: 'cny' | 'usd',
@@ -64,10 +55,7 @@ export function balanceEntryOf(
 }
 
 let cached: PlatformBalance | null = null
-/** The route read in flight, so a second open joins it instead of starting one. */
 let refreshing: Promise<void> | null = null
-/** Every open riding the in-flight read, joiners included; cleared when the read settles, so the next
- *  open starts a fresh read and a fresh set. */
 const landingCallbacks = new Set<(value: PlatformBalance) => void>()
 
 let storage: StorageFace | null | undefined
@@ -78,7 +66,6 @@ function storageFn(): StorageFace | null {
     const found: unknown = globalThis.localStorage
     storage = found === null || found === undefined ? null : found as StorageFace
   } catch {
-    // Storage can throw on mere access (some privacy modes): the capsule then has no remembered figure.
     storage = null
   }
   return storage
@@ -87,7 +74,16 @@ function storageFn(): StorageFace | null {
 function storedBalance(): PlatformBalance | null {
   try {
     const raw = storageFn()?.getItem(STORAGE_KEY)
-    return raw === null || raw === undefined ? null : platformBalanceOf(JSON.parse(raw))
+    if (raw === null || raw === undefined) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return platformBalanceOf(parsed)
+    const envelope = parsed as Record<string, unknown>
+    if (typeof envelope.at !== 'number' || !Number.isFinite(envelope.at)) return platformBalanceOf(parsed)
+    if (Date.now() - envelope.at > BALANCE_STORAGE_TTL_MS) {
+      storageFn()?.removeItem(STORAGE_KEY)
+      return null
+    }
+    return platformBalanceOf(envelope.balance)
   } catch {
     return null
   }
@@ -95,32 +91,15 @@ function storedBalance(): PlatformBalance | null {
 
 function rememberBalance(value: PlatformBalance | null): void {
   try {
-    storageFn()?.setItem(STORAGE_KEY, JSON.stringify(value))
+    storageFn()?.setItem(STORAGE_KEY, JSON.stringify({ at: Date.now(), balance: value }))
   } catch {
-    // A refused write (quota, privacy mode) costs only the next open's head start; the live figure renders.
   }
 }
 
-/** One route POST, narrowed through `platformBalanceOf`. Never rejects. */
 async function readRoute(): Promise<PlatformBalance | null> {
-  try {
-    const response = await fetch(BALANCE_ROUTE, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-    })
-    if (!response.ok) return null
-    const r = asRecord(await response.json())
-    if (r === null || r.ok !== true || r.value === null || r.value === undefined) return null
-    return platformBalanceOf(r.value)
-  } catch {
-    return null
-  }
+  return postRouteQuietly(BALANCE_ROUTE, {}, platformBalanceOf)
 }
 
-/** One route read per open, `onRefresh` once it lands on a figure. `refreshing` is assigned before anything
- * awaits, so an open arriving mid-flight joins the read rather than starting a second one, and the read's
- * landing reports to every open riding it. A failed or absent read notifies nobody and keeps serving the
- * remembered figure; `null` means nothing to show yet. */
 export function readPlatformBalance(onRefresh: (value: PlatformBalance) => void): PlatformBalance | null {
   landingCallbacks.add(onRefresh)
   if (refreshing === null) {
@@ -145,7 +124,6 @@ export function resetPlatformBalance(): void {
   try {
     storageFn()?.removeItem(STORAGE_KEY)
   } catch {
-    /* nothing to drop */
   }
   storage = undefined
 }

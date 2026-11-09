@@ -1,38 +1,24 @@
-/**
- * The Fleet inspector — the network card's right column, following the cursor (hover), the pin
- * (list/team/comms picks), or falling back to the current session. It stacks everything the tab
- * knows about one agent: identity badges, live figures, composition, team membership and owned
- * tasks, the descriptor composition and delegation prompt off the fleet-detail route, and the
- * inter-agent messages the landed details attest.
- */
-
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AgentNode } from '../agentTree'
-import { fmtDurationCompact } from '../agentTree'
+import { fmtDurationCompact, modelLabelOf } from '../agentTree'
 import { type CommsRow } from '../fleetDetail'
 import { CommsParties, commsTextOf } from './commsRow'
-import { tasksOfOwner, teamMemberOf, type FleetTeam } from '../fleetTeam'
+import { tasksOfOwnerId, teamMemberOf, type FleetTeam } from '../fleetTeam'
 import { fmtTime } from '../format'
 import type { FleetDetail, FleetMemberInfo } from '../../shared/types'
 import type { ViewKit } from '../viewkit'
 
 export interface AgentInspectorProps {
   node: AgentNode
-  /** The pin (list/member/comms pick) this inspector is stuck to; null = hover-follow/current. */
   pinned: boolean
   team: FleetTeam | null
-  /** The node's fleet-detail read: undefined while in flight, null detail = the route served nothing. */
   detail: { detail: FleetDetail | null } | undefined
-  /** The lead's roster facts (duty descriptions ride these, not the projection). */
   roster: readonly FleetMemberInfo[]
-  /** Merged comms rows involving this node (sender or recipient). */
   comms: CommsRow[]
-  /** Display label of any session id (forest label, else the roster name, else the raw id). */
   labelOf: (id: string) => string
   onOpen: (id: string) => void
   onPin: (id: string | null) => void
-  /** An owned-task chip flashes the task on the task board. */
   onFocusTask: (id: string | null) => void
   t: ViewKit['t']
   fmt: ViewKit['fmt']
@@ -45,16 +31,14 @@ export function AgentInspector(props: AgentInspectorProps): ReactElement {
   const promptRef = useRef<HTMLDivElement | null>(null)
   const [promptClamped, setPromptClamped] = useState(false)
   const prompt = props.detail?.detail?.initialPrompt
-  // The expand toggle only earns its place when the clamp actually cut the prompt.
   useEffect(() => {
     setPromptOpen(false)
     const el = promptRef.current
     setPromptClamped(el !== null && el.scrollHeight > el.clientHeight + 1)
   }, [prompt])
   const member = teamMemberOf(team, node.id)
-  const owned = member !== null ? tasksOfOwner(team, member.name) : []
+  const owned = tasksOfOwnerId(team, node.id)
   const detail = props.detail?.detail ?? null
-  // The member's duty description rides the lead's roster facts, not the projection.
   const memberInfo = member !== null ? props.roster.find(r => r.name === member.name) : undefined
 
   const bits: string[] = []
@@ -73,10 +57,14 @@ export function AgentInspector(props: AgentInspectorProps): ReactElement {
 
   const descriptor = detail?.descriptor
   const descriptorBits: string[] = []
-  if (node.model !== undefined) descriptorBits.push(node.model)
+  const modelLabel = modelLabelOf(node.model, node.reasoningEffort)
+  if (modelLabel !== undefined) descriptorBits.push(modelLabel)
   if (descriptor !== undefined) {
     if (descriptor.provider !== undefined) descriptorBits.push(descriptor.provider)
-    if (descriptor.agentModel !== undefined && descriptor.agentModel !== node.model) descriptorBits.push(descriptor.agentModel)
+    const declared = descriptor.agentModel !== undefined && descriptor.agentModel !== node.model
+      ? modelLabelOf(descriptor.agentModel, descriptor.agentReasoningEffort)
+      : undefined
+    if (declared !== undefined) descriptorBits.push(declared)
     if (descriptor.persona !== undefined) descriptorBits.push(descriptor.persona)
   }
 
@@ -127,21 +115,23 @@ export function AgentInspector(props: AgentInspectorProps): ReactElement {
         </div>
       ) : null}
 
-      {member !== null ? (
+      {member !== null || owned.length > 0 ? (
         <div className="lc-inspector-section">
-          <div className="lc-inspector-caption">{t('fleet.membership')}</div>
-          <div className="lc-inspector-member">
-            <span className="lc-agents-badge lc-inspector-member-name">{member.name}</span>
-            <span className="lc-agents-badge">{t(member.role === 'lead' ? 'fleet.role.lead' : 'fleet.role.teammate')}</span>
-            {member.phase !== 'active'
-              ? (
-                <span className={'lc-agents-badge' + (member.phase === 'failed' ? ' lc-agents-badge-err' : '')}>
-                  {t(member.phase === 'failed' ? 'fleet.phase.failed' : 'fleet.phase.provisioning')}
-                </span>
-              )
-              : null}
-            {member.error !== undefined ? <span className="lc-inspector-error">{member.error}</span> : null}
-          </div>
+          <div className="lc-inspector-caption">{t(member !== null ? 'fleet.membership' : 'fleet.pulse.tasks')}</div>
+          {member !== null ? (
+            <div className="lc-inspector-member">
+              <span className="lc-agents-badge lc-inspector-member-name">{member.name}</span>
+              <span className="lc-agents-badge">{t(member.role === 'lead' ? 'fleet.role.lead' : 'fleet.role.teammate')}</span>
+              {member.phase !== 'active'
+                ? (
+                  <span className={'lc-agents-badge' + (member.phase === 'failed' ? ' lc-agents-badge-err' : '')}>
+                    {t(member.phase === 'failed' ? 'fleet.phase.failed' : 'fleet.phase.provisioning')}
+                  </span>
+                )
+                : null}
+              {member.error !== undefined ? <span className="lc-inspector-error">{member.error}</span> : null}
+            </div>
+          ) : null}
           {memberInfo !== undefined && memberInfo.description !== '' ? (
             <div className="lc-inspector-member-desc">{memberInfo.description}</div>
           ) : null}
