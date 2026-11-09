@@ -1,76 +1,20 @@
-// The attachment-location route (src/host/attachment.ts): session-authorized named-path resolution
-// for verbatim file attachments, plus the route's gating/transport behavior.
-
 import assert from 'node:assert/strict'
-import { describe, test } from 'vitest'
-import type { Context } from '@deepseek-ai/cordis'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { describe, test, afterEach } from 'vitest'
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach } from 'vitest'
-import { ATTACHMENT_ROUTE, referencedAttachmentOf, imagePreviewNameOf, watchAttachmentChannel } from '../../src/host/attachment'
+import { basename, join } from 'node:path'
+import { ATTACHMENT_ROUTE, makePreviewSweeper, PREVIEWS_MAX_DIRS, PREVIEWS_TTL_MS, referencedAttachmentOf, imagePreviewNameOf, watchAttachmentChannel } from '../../src/host/attachment'
 import type { ColdReadGate } from '../../src/host/coldRead'
+import { connectionOf, fakeCtx, observing, OPEN_GATE, postJson, SKIP_GATE } from './helpers/ctx'
+import type { FakeCtx, FakeRoute } from './helpers/ctx'
 
-type RouteFetch = (request: Request) => Promise<Response>
-
-interface CtxSpec {
-  connection?: unknown
-  sessionQuery?: unknown
-  attachments?: unknown
+function armed(spec: Record<string, unknown> = {}, gate: ColdReadGate = OPEN_GATE): FakeCtx {
+  const fake = fakeCtx({ connection: connectionOf(), ...spec })
+  watchAttachmentChannel(fake.ctx, gate)
+  return fake
 }
 
-/** The fleet route spec's host ctx double: cordis inject semantics over a service map. */
-function ctxOf(spec: CtxSpec): { ctx: Context; captured: { path?: string; fetch?: RouteFetch }; disposers: (() => void)[] } {
-  const captured: { path?: string; fetch?: RouteFetch } = {}
-  const disposers: (() => void)[] = []
-  const services = new Map<string, unknown>()
-  if ('connection' in spec) services.set('connection', spec.connection)
-  if ('sessionQuery' in spec) services.set('sessionQuery', spec.sessionQuery)
-  if ('attachments' in spec) services.set('attachments', spec.attachments)
-  const ctx = {
-    get: (name: string) => services.get(name),
-    effect(fn: () => unknown, _label?: string) {
-      const d = fn()
-      if (typeof d === 'function') disposers.push(d as () => void)
-      return () => {}
-    },
-    inject(deps: string[], cb: (c: unknown) => unknown) {
-      if (!deps.every(d => services.has(d))) return
-      const d = cb(ctx)
-      if (typeof d === 'function') disposers.push(d as () => void)
-    },
-  }
-  if (spec.connection !== undefined && spec.connection !== null) {
-    const conn = spec.connection as { fetch?: { register?: unknown } }
-    if (typeof conn.fetch?.register === 'function') {
-      conn.fetch.register = (route: { path: string; fetch: RouteFetch }) => {
-        captured.path = route.path
-        captured.fetch = route.fetch
-        return () => {}
-      }
-    }
-  }
-  return { ctx: ctx as unknown as Context, captured, disposers }
-}
-
-const OPEN_GATE: ColdReadGate = { admit: read => read() }
-const SKIP_GATE: ColdReadGate = { admit: () => Promise.resolve(undefined) }
-
-function armed(spec: CtxSpec = {}, gate: ColdReadGate = OPEN_GATE): { captured: { path?: string; fetch?: RouteFetch } } {
-  const { ctx, captured } = ctxOf({ connection: { fetch: { register: () => () => {} } }, ...spec })
-  watchAttachmentChannel(ctx, gate)
-  return { captured }
-}
-
-async function call(captured: { fetch?: RouteFetch }, body: unknown): Promise<Record<string, unknown>> {
-  const request = new Request(`http://dsh.test${ATTACHMENT_ROUTE}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  })
-  const response = await captured.fetch!(request)
-  return await response.json() as Record<string, unknown>
-}
+const call = (captured: FakeRoute, body: unknown): Promise<Record<string, unknown>> => postJson(captured, ATTACHMENT_ROUTE, body)
 
 const BARE_IMAGE_EVENT = {
   type: 'user/message',
@@ -79,7 +23,6 @@ const BARE_IMAGE_EVENT = {
   data: { content: [{ type: 'image', attachment: { attachmentId: 'sha256:i2' } }] },
 }
 
-/** The screenshot session's own content: three verbatim files, then an image, then the text. */
 const USER_EVENT = {
   type: 'user/message',
   seq: 9,
@@ -94,21 +37,6 @@ const USER_EVENT = {
   },
 }
 
-function basename(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1)
-}
-
-function observing(events: unknown): { observeSession(id: string, options: unknown): Promise<unknown>; disposed(): boolean } {
-  let disposed = false
-  return {
-    observeSession: () => Promise.resolve({
-      events,
-      [Symbol.dispose]() { disposed = true },
-    }),
-    disposed: () => disposed,
-  }
-}
-
 const ALIAS = '/home/me/.dsh/attachments/v1/files/a3/a3f0/report.md'
 
 describe('referencedAttachmentOf', () => {
@@ -117,7 +45,6 @@ describe('referencedAttachmentOf', () => {
       referencedAttachmentOf([USER_EVENT], 'sha256:f1'),
       { kind: 'file', attachmentId: 'sha256:f1', name: 'report.md', bytes: 47320 },
     )
-    // A tool result's own content, and a nested block inside it.
     assert.deepEqual(
       referencedAttachmentOf([
         { type: 'tool/result', seq: 2, time: 2, data: { message: { content: [{ type: 'image', attachment: { attachmentId: 'sha256:i9', width: 1, height: 1 } }] } } },
@@ -135,7 +62,6 @@ describe('referencedAttachmentOf', () => {
       ], 'sha256:i10'),
       { kind: 'image', attachmentId: 'sha256:i10', width: 2, height: 2 },
     )
-    // A spliced inbox delivery, before its user/message materializes.
     assert.deepEqual(
       referencedAttachmentOf([
         { type: 'agent/inbox/spliced', seq: 4, time: 4, data: { target: 'next-turn', inserted: [{ content: [{ type: 'file', attachment: { attachmentId: 'sha256:f9', name: 'delivered.md', bytes: 7 } }] }] } },
@@ -144,21 +70,16 @@ describe('referencedAttachmentOf', () => {
     )
   })
 
-  test('the walk is bounded and total over a hostile log', () => {
-    // Deeper than the cap: the block is out of reach, so nothing resolves.
+  test('the walk is bounded and total over a hostile log; an id the log never cites resolves null', () => {
     let deep: Record<string, unknown> = { type: 'file', attachment: { attachmentId: 'sha256:deep', name: 'x.md', bytes: 1 } }
     for (let i = 0; i < 10; i++) deep = { nest: deep }
     assert.equal(referencedAttachmentOf([{ type: 'user/message', data: deep }], 'sha256:deep'), null)
-    // An object that throws on the walk drops that event, and the next one still serves.
     const hostile = new Proxy({}, { ownKeys() { throw new Error('hostile payload') } })
     assert.equal(referencedAttachmentOf([{ type: 'x', data: hostile }], 'sha256:f1'), null)
     assert.deepEqual(
       referencedAttachmentOf([{ type: 'x', data: hostile }, USER_EVENT], 'sha256:f1'),
       { kind: 'file', attachmentId: 'sha256:f1', name: 'report.md', bytes: 47320 },
     )
-  })
-
-  test('an id the log never cites resolves null, over hostile entries', () => {
     assert.equal(referencedAttachmentOf([USER_EVENT], 'sha256:other'), null)
     assert.equal(referencedAttachmentOf([], 'sha256:f1'), null)
     assert.equal(
@@ -177,27 +98,16 @@ describe('referencedAttachmentOf', () => {
 })
 
 describe('watchAttachmentChannel gating', () => {
-  test('no route without the connection service or its fetch registry', () => {
-    assert.equal(ctxOf({}).captured.path, undefined)
-    assert.equal(ctxOf({ connection: {} }).captured.path, undefined)
-    assert.equal(ctxOf({ connection: { fetch: {} } }).captured.path, undefined)
-    assert.equal(armed().captured.path, ATTACHMENT_ROUTE)
-  })
-
-  test('a rejecting registry keeps the route absent without throwing', () => {
-    const ctx = {
-      get: (name: string) => name === 'connection'
-        ? {
-          fetch: {
-            register: () => {
-              throw new Error('registration rejected')
-            },
-          },
-        }
-        : undefined,
-      inject(_deps: string[], cb: (c: unknown) => unknown) { cb(ctx) },
+  test('no route without the connection service or its fetch registry, and a rejecting registry stays up without one', () => {
+    for (const spec of [{}, { connection: {} }, { connection: { fetch: {} } }]) {
+      const { ctx, captured } = fakeCtx(spec)
+      watchAttachmentChannel(ctx, OPEN_GATE)
+      assert.equal(captured.path, undefined, JSON.stringify(spec))
     }
-    assert.doesNotThrow(() => { watchAttachmentChannel(ctx as unknown as Context, OPEN_GATE) })
+    assert.equal(armed().captured.path, ATTACHMENT_ROUTE)
+    const rejecting = fakeCtx({ connection: { fetch: { register: () => { throw new Error('registration rejected') } } } })
+    assert.doesNotThrow(() => { watchAttachmentChannel(rejecting.ctx, OPEN_GATE) })
+    assert.equal(rejecting.captured.path, undefined)
   })
 
   test('bad bodies, a missing session, and a missing attachment are typed failures', async () => {
@@ -222,7 +132,7 @@ describe('watchAttachmentChannel gating', () => {
     const query = observing([USER_EVENT])
     const { captured } = armed({ sessionQuery: query })
     assert.deepEqual(await call(captured, { sessionId: 's1', attachmentId: 'sha256:invented' }), { ok: true, value: null })
-    assert.equal(query.disposed(), true)
+    assert.equal(query.wasDisposed(), true)
   })
 
   test('a throwing observation surfaces as an internal failure', async () => {
@@ -250,26 +160,16 @@ describe('watchAttachmentChannel resolution', () => {
     })
     assert.deepEqual(await call(captured, { sessionId: 's1', attachmentId: 'sha256:f1' }), { ok: true, value: { path: ALIAS } })
     assert.deepEqual(seen, [{ attachmentId: 'sha256:f1', name: 'report.md', bytes: 47320 }])
-    assert.equal(query.disposed(), true)
+    assert.equal(query.wasDisposed(), true)
   })
 
-  test('a store without an image face answers a typed null for an image', async () => {
-    const { captured } = armed({
-      sessionQuery: observing([USER_EVENT]),
-      attachments: { fileHostPath: () => ALIAS },
-    })
-    assert.deepEqual(await call(captured, { sessionId: 's1', attachmentId: 'sha256:i1' }), { ok: true, value: null })
-  })
-
-  test('every unlocatable attachment shape resolves a typed null', async () => {
+  test('every unlocatable file shape resolves a typed null', async () => {
     const cases: { attachments: unknown; id: string }[] = [
-      // No store composed, a store without the verb, and a store answering nothing path-shaped.
       { attachments: undefined, id: 'sha256:f1' },
       { attachments: {}, id: 'sha256:f1' },
       { attachments: { fileHostPath: () => undefined }, id: 'sha256:f1' },
       { attachments: { fileHostPath: () => '' }, id: 'sha256:f1' },
       { attachments: { fileHostPath: () => 42 }, id: 'sha256:f1' },
-      // A hostile reference (bad digest, unsanitized name) throws inside the store.
       {
         attachments: {
           fileHostPath: () => {
@@ -280,39 +180,32 @@ describe('watchAttachmentChannel resolution', () => {
       },
     ]
     for (const c of cases) {
-      const { captured } = armed({ sessionQuery: observing([USER_EVENT]), attachments: c.attachments })
+      const { captured } = armed({ sessionQuery: observing([USER_EVENT, BARE_IMAGE_EVENT]), attachments: c.attachments })
       assert.deepEqual(await call(captured, { sessionId: 's1', attachmentId: c.id }), { ok: true, value: null }, JSON.stringify(c))
     }
   })
 
-  test('an observation without a dispose method still serves', async () => {
+  test('an observation without a dispose method and a nameless file reference still serve', async () => {
     const { captured } = armed({
       sessionQuery: { observeSession: () => Promise.resolve({ events: [USER_EVENT] }) },
       attachments: { fileHostPath: () => ALIAS },
     })
     assert.deepEqual(await call(captured, { sessionId: 's1', attachmentId: 'sha256:f1' }), { ok: true, value: { path: ALIAS } })
-  })
-
-  test('a nameless file reference still resolves through the store', async () => {
-    const { captured } = armed({
+    const nameless = armed({
       sessionQuery: observing([{ type: 'user/message', seq: 1, data: { content: [{ type: 'file', attachment: { attachmentId: 'sha256:f3' } }] } }]),
       attachments: { fileHostPath: (ref: unknown) => `${ALIAS}:${JSON.stringify(ref)}` },
     })
-    const r = await call(captured, { sessionId: 's1', attachmentId: 'sha256:f3' })
+    const r = await call(nameless.captured, { sessionId: 's1', attachmentId: 'sha256:f3' })
     assert.deepEqual(r.value, { path: `${ALIAS}:${JSON.stringify({ attachmentId: 'sha256:f3', name: '', bytes: 0 })}` })
   })
 })
 
 describe('image preview names', () => {
-  test('an image keeps a viewable suffix, leaf only', () => {
+  test('a viewable leaf suffix wins; otherwise the verified media type names the preview', () => {
     assert.equal(imagePreviewNameOf({ kind: 'image', attachmentId: 'a', name: 'photo.PNG', mediaType: 'image/jpeg' }), 'photo.PNG')
     assert.equal(imagePreviewNameOf({ kind: 'image', attachmentId: 'a', name: '../../evil.svg' }), 'evil.svg')
     assert.equal(imagePreviewNameOf({ kind: 'image', attachmentId: 'a', name: 'C:\\tmp\\x.webp' }), 'x.webp')
-  })
-
-  test('anything the column cannot view is named by the verified media type', () => {
     assert.equal(imagePreviewNameOf({ kind: 'image', attachmentId: 'a', name: 'clipboard', mediaType: 'image/jpeg' }), 'attachment.jpg')
-    assert.equal(imagePreviewNameOf({ kind: 'image', attachmentId: 'a', name: 'shot.png', mediaType: 'image/webp' }), 'shot.png', 'a suffix a viewer claims keeps the displayed name; the viewer renders the stored bytes')
     assert.equal(imagePreviewNameOf({ kind: 'image', attachmentId: 'a', name: 'scan.tiff', mediaType: 'image/png' }), 'attachment.png')
     assert.equal(imagePreviewNameOf({ kind: 'image', attachmentId: 'a', mediaType: 'image/gif' }), 'attachment.gif')
     assert.equal(imagePreviewNameOf({ kind: 'image', attachmentId: 'a', mediaType: 'image/tiff' }), null)
@@ -326,7 +219,6 @@ describe('watchAttachmentChannel image aliases', () => {
     for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
   })
 
-  /** A real store layout: `<home>/attachments/v1/objects/<xx>/<digest>` holding the image bytes. */
   function storeOf(bytes: string): { home: string; objectPath: string; store: { imageHostPath: () => string } } {
     const home = mkdtempSync(join(tmpdir(), 'dsh-context-att-'))
     homes.push(home)
@@ -344,12 +236,11 @@ describe('watchAttachmentChannel image aliases', () => {
     const path = (r.value as { path: string }).path
     assert.equal(path, join(home, 'cache', 'dsh-context', 'previews', 'ab', basename(objectPath), 'result-image.jpg'))
     assert.equal(readFileSync(path, 'utf8'), 'image-bytes', 'the link shares the stored bytes')
-    // A second read reuses the link instead of failing on EEXIST.
     const again = await call(captured, { sessionId: 's1', attachmentId: 'sha256:i1' })
     assert.deepEqual(again.value, { path })
   })
 
-  test('an unfamiliar object layout and an unlocatable object both answer a typed null', async () => {
+  test('an unfamiliar layout, an unlocatable object, and a hostile or empty image reference all answer a typed null', async () => {
     const flat = armed({
       sessionQuery: observing([USER_EVENT]),
       attachments: { imageHostPath: () => join(tmpdir(), 'objects', 'ab', 'digest') },
@@ -362,9 +253,7 @@ describe('watchAttachmentChannel image aliases', () => {
       attachments: { imageHostPath: () => join(home, 'attachments', 'v1', 'objects', 'ab', 'gone') },
     })
     assert.deepEqual(await call(missing.captured, { sessionId: 's1', attachmentId: 'sha256:i1' }), { ok: true, value: null })
-  })
 
-  test('a hostile or empty image reference resolves a typed null', async () => {
     const cases: { store: unknown; id: string }[] = [
       { store: {}, id: 'sha256:i1' },
       {
@@ -377,12 +266,83 @@ describe('watchAttachmentChannel image aliases', () => {
       },
       { store: { imageHostPath: () => '' }, id: 'sha256:i1' },
       { store: { imageHostPath: () => 42 }, id: 'sha256:i1' },
-      // The cited image carries no media type and no usable suffix.
       { store: { imageHostPath: () => '/x/attachments/v1/objects/ab/digest' }, id: 'sha256:i2' },
     ]
     for (const c of cases) {
       const { captured } = armed({ sessionQuery: observing([USER_EVENT, BARE_IMAGE_EVENT]), attachments: c.store })
       assert.deepEqual(await call(captured, { sessionId: 's1', attachmentId: c.id }), { ok: true, value: null }, JSON.stringify(c.id))
+    }
+  })
+})
+
+
+const sweepHomes: string[] = []
+
+function sweeperStoreOf(): { home: string; previews: string } {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-context-att-sweep-'))
+  sweepHomes.push(home)
+  mkdirSync(join(home, 'cache', 'dsh-context'), { recursive: true })
+  return { home, previews: join(home, 'cache', 'dsh-context', 'previews') }
+}
+
+describe('attachment previews sweeper', () => {
+  afterEach(() => {
+    for (const home of sweepHomes.splice(0)) rmSync(home, { recursive: true, force: true })
+  })
+
+  test('an expired preview directory is swept; a fresh one survives; the cap trims the oldest', async () => {
+    const { home, previews } = sweeperStoreOf()
+    const clock = 1_000_000
+    const sweeper = makePreviewSweeper(() => clock, 0)
+    try {
+      const staleDir = join(previews, 'stale')
+      const freshDir = join(previews, 'fresh')
+      mkdirSync(staleDir, { recursive: true })
+      mkdirSync(freshDir, { recursive: true })
+      writeFileSync(join(staleDir, 'a.jpg'), 'x')
+      writeFileSync(join(freshDir, 'b.jpg'), 'x')
+      writeFileSync(join(previews, 'loose.txt'), 'not a directory')
+      const staleTime = new Date(clock - PREVIEWS_TTL_MS - 60_000)
+      const freshTime = new Date(clock)
+      utimesSync(staleDir, staleTime, staleTime)
+      utimesSync(freshDir, freshTime, freshTime)
+      await sweeper.sweepNow(previews)
+      assert.ok(!existsSync(staleDir), 'the expired directory is removed')
+      assert.ok(existsSync(freshDir), 'the fresh directory survives')
+
+      for (let i = 0; i < PREVIEWS_MAX_DIRS + 40; i++) {
+        const dir = join(previews, 'cap-' + String(i).padStart(4, '0'))
+        mkdirSync(dir, { recursive: true })
+        const at = new Date(clock - i * 1_000)
+        utimesSync(dir, at, at)
+      }
+      await sweeper.sweepNow(previews)
+      const all = readdirSync(previews)
+      assert.ok(all.filter(name => name !== 'loose.txt').length <= PREVIEWS_MAX_DIRS, 'the cap bounds every directory under the previews root')
+      assert.ok(all.includes('loose.txt'), 'a loose file at the root is ignored, not swept')
+      const left = all.filter(name => name.startsWith('cap-'))
+      assert.ok(left.length <= PREVIEWS_MAX_DIRS - 1, 'the cap trims down to the budget alongside the surviving fresh directory')
+      assert.ok(left.every(name => name <= 'cap-0510'), 'the kept set is the newest slice of the created directories')
+    } finally {
+      sweeper.dispose()
+      void home
+    }
+  })
+
+  test('a scheduled sweep runs once per debounce window and the disposer cancels it', async () => {
+    const { previews } = sweeperStoreOf()
+    const sweeper = makePreviewSweeper(() => Date.now(), 5)
+    try {
+      sweeper.schedule(previews)
+      sweeper.schedule(previews)
+      await new Promise(resolve => setTimeout(resolve, 30))
+      assert.ok(true, 'a debounced sweep neither throws nor double-runs')
+      sweeper.dispose()
+      sweeper.schedule(previews)
+      await new Promise(resolve => setTimeout(resolve, 20))
+      assert.ok(!existsSync(join(previews, 'nothing')), 'a disposed sweeper never fires')
+    } finally {
+      sweeper.dispose()
     }
   })
 })

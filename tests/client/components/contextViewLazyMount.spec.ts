@@ -9,7 +9,7 @@ import { makeView, projectionsFor, timeline } from './contextViewHarness'
 
 type ObserverCallback = IntersectionObserverCallback
 
-function stubIntersection(): { callbacks: ObserverCallback[]; restore: () => void } {
+function stubIntersection(): { callbacks: ObserverCallback[] } {
   const callbacks: ObserverCallback[] = []
   class FakeObserver {
     constructor(callback: ObserverCallback) { callbacks.push(callback) }
@@ -17,13 +17,13 @@ function stubIntersection(): { callbacks: ObserverCallback[]; restore: () => voi
     disconnect = (): void => {}
   }
   vi.stubGlobal('IntersectionObserver', FakeObserver)
-  return { callbacks, restore: () => { vi.unstubAllGlobals() } }
+  return { callbacks }
 }
 
 describe('ContextView below-fold lazy mount', () => {
   afterEach(() => { vi.unstubAllGlobals() })
 
-  test('keeps two skeletons until the row nears the viewport, then mounts both cards', async () => {
+  test('keeps the skeletons until the rows near the viewport, then mounts every card', async () => {
     const observer = stubIntersection()
     const idle: (() => void)[] = []
     vi.stubGlobal('requestIdleCallback', (callback: () => void) => { idle.push(callback); return 1 })
@@ -38,19 +38,18 @@ describe('ContextView below-fold lazy mount', () => {
       useChat: (selector => selector({ legacy: { nodes: [] } })) as UseChatLike,
     }))
     try {
-      // The visible browser card and the below-fold event/file row both hold cards-shaped skeletons.
-      assert.equal(queryAll(m.container, '.lc-deferred-skeleton').length, 3)
+      assert.equal(queryAll(m.container, '.lc-deferred-skeleton').length, 4)
       assert.equal(queryAll(m.container, '.lc-fa-card').length, 0)
       await act(async () => {
         for (const callback of observer.callbacks) callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
       })
-      assert.equal(idle.length, 2)
+      assert.equal(idle.length, 3)
       await act(async () => { for (const run of idle) run() })
       await flush()
       assert.equal(queryAll(m.container, '.lc-deferred-skeleton').length, 0)
       assert.equal(queryAll(m.container, '.lc-fa-card').length, 1)
+      assert.equal(queryAll(m.container, '.lc-cmd-card').length, 1)
 
-      // A stats file-pill jump forces the lazy row: the card exists and the jump can land on it.
       await m.unmount()
       const second = await mount(h(View, {
         sessionId: 'sv-lazy-jump',
@@ -59,7 +58,7 @@ describe('ContextView below-fold lazy mount', () => {
         })),
         useChat: (selector => selector({ legacy: { nodes: [] } })) as UseChatLike,
       }))
-      const pill = queryAll(second.container, '.lc-flow-pill').find(el => text(el).startsWith(DICT_EN['files.kind.read']))
+      const pill = queryAll(second.container, '.lc-ledger-in-chips .lc-ledger-chip').find(el => text(el).startsWith(DICT_EN['files.kind.read']))
       assert.ok(pill !== undefined)
       await click(pill)
       await flush()
@@ -67,7 +66,6 @@ describe('ContextView below-fold lazy mount', () => {
       await second.unmount()
     } finally {
       await m.unmount()
-      observer.restore()
     }
   })
 })

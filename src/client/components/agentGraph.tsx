@@ -1,147 +1,177 @@
-/**
- * The Agent network card — the head of the Fleet tab, and (compact) the right Sidebar's Context
- * panel. The current agent's whole family (ancestors, siblings, subagents) as a node graph, where
- * every node is a live card of that session's own context — title, occupancy, and a composition
- * bar. Links are bezier curves fanned out from the parent's foot, hued per level-1 family; hovering
- * a card lights its whole lineage (ancestors and subtree). A card click follows the mount: the
- * sidebar jumps straight to that agent's session; the Fleet tab selects instead (`onSelect` —
- * ring + cross-panel linkage), and the jump lives on the boards' own open buttons.
- *
- * The sidebar mount pairs the graph with the inspector (agentInspector.tsx) on its right — the
- * `lc-card` container query folds that split to stacked on the narrow pane — following the hovered
- * card, the pinned pick, or the current session. The Fleet tab's mount drops the inspector
- * (`inspector={false}`): its own members and task boards carry that detail beside the graph.
- *
- * The forest derivation lives in fleetModel.ts (`useFleetModel`): the Fleet tab derives the family
- * once and passes both halves in (`forest`/`team`), so every panel reads the same family; the
- * sidebar mount leaves them undefined and the card derives its own.
- */
-
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from 'react'
 import { IconWorkspaceTreeOutlineRegular, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { CATS } from '../categories'
 import type { AgentHeads } from '../agentHeads'
 import { makeAgentHeads } from '../agentHeads'
-import { billedTokensOf, displayCurrencyOf, estimateSessionCost, formatCost, type CostCurrency, type ModelBook } from '../cost'
-import { useModelPrices } from '../modelPrices'
+import { billedTokensOf, displayCurrencyOf, formatCost, toCurrency, type CostCurrency } from '../cost'
+import { avatarLabelsOf, avatarNameOf, type CommsAgent, type CommsRole } from '../commsModel'
 import { containHorizontalOverscroll } from '../overscroll'
+import { scrollIntoViewIfPossible, scrollToPos } from '../revealScroll'
 import { openSessionVia, type ClientCtx } from '../services'
 import type { ViewKit } from '../viewkit'
 import type { FleetDetail } from '../../shared/types'
 import { useFleetModel } from '../fleetModel'
-import { teammateNameOf, type FleetTeam } from '../fleetTeam'
+import { teammateNameOf, teamMemberOf, type FleetTeam, type FleetTeamMember } from '../fleetTeam'
 import type { AgentForest, AgentNode, AgentSelfStats } from '../agentTree'
 import {
+  AGENT_CARD_COMPACT_H,
+  AGENT_CARD_H,
+  LEAD_HUE,
   barSegments,
+  familyHue,
   fmtDurationCompact,
   layoutForest,
-  lineageOf,
+  neighborhoodOf,
   pressureColorOf,
 } from '../agentTree'
 import { AgentInspector } from './agentInspector'
+import { AgentAvatar } from './commsAgent'
+import { useElementSize, useScrollMetrics } from './useElementMetrics'
+function memberStyle(hue: string): CSSProperties {
+  return { '--lc-member-hue': hue } as CSSProperties
+}
 
 export interface AgentGraphProps {
   sessionId?: string
-  /** Live stats of the current session from the tab's own projections (internal derivation only). */
+  compact?: boolean
   self?: AgentSelfStats
-  /** The Fleet tab's shared derivation; undefined = the card derives its own (the sidebar mount). */
   forest?: AgentForest | null
-  /** The family's team projection for the header chip; undefined = the internal derivation's own. */
   team?: FleetTeam | null
-  /** The pinned session (the Fleet tab's list/board picks); its card rings. */
   pinnedId?: string | null
-  /** Controlled hover (the Fleet tab lifts it so the list rows light graph nodes too). */
   hoverId?: string | null
+  focusId?: string | null
   onHover?: (id: string | null) => void
-  /** When set (the Fleet tab), a card click selects the node — ring + cross-panel linkage —
-   * instead of jumping to its session; a small corner button keeps the jump. */
   onSelect?: (id: string) => void
-  /** The preview pane beside the graph: the sidebar's compact mount keeps it, the Fleet tab paints the graph alone. */
   inspector?: boolean
 }
 
-/** Entrance stagger cap for the cards and their bar segments (the stackedBar idiom). */
 const STAGGER_CAP = 8
+const STAGE_H = 560
+const GRAPH_OVERSCAN = 320
+const GRAPH_WINDOW_SEED = 60
 
-/** The link's S-curve: vertical tangents at both card edges, curvature proportional to the drop, clamped to [24, 96]. */
+function hueOf(node: AgentNode, team: FleetTeam | null, members: readonly FleetTeamMember[]): string {
+  const member = teamMemberOf(team, node.id)
+  return member?.role === 'lead' ? LEAD_HUE
+    : member !== null ? familyHue(members.indexOf(member))
+      : node.isCurrent ? LEAD_HUE : familyHue(node.family)
+}
+
 function linkPath(x1: number, y1: number, x2: number, y2: number): string {
   const k = Math.min(96, Math.max(24, (y2 - y1) * 0.5))
   return `M ${x1} ${y1} C ${x1} ${y1 + k}, ${x2} ${y2 - k}, ${x2} ${y2}`
 }
 
+function avatarIdentityOf(team: FleetTeam | null, node: AgentNode, t: ViewKit['t']): { name: string; role: CommsRole } {
+  const member = teamMemberOf(team, node.id)
+  const role: CommsRole = member === null ? (node.isCurrent ? 'agent' : 'subagent') : member.role
+  return { name: avatarNameOf(member === null ? node.label : member.name, role, t), role }
+}
+
 export function makeAgentGraph(
   ctx: ClientCtx,
   kit: ViewKit,
-  /** The shared page-scope cold-head cache — the stats board's subagent-cost cell reads the same fetches. */
   heads: AgentHeads = makeAgentHeads(),
 ): (props: AgentGraphProps) => ReactElement | null {
   const { t, fmt, catLabel } = kit
 
   function AgentGraph(props: AgentGraphProps): ReactElement | null {
     const sessionId = props.sessionId
-    // The internal derivation runs only when the caller passes no forest in; the flag is a
-    // mount-stable prop split (the Fleet tab always passes one, the sidebar never does).
     const internal = useFleetModel(ctx, heads, sessionId, props.self, props.forest === undefined)
     const forest = props.forest !== undefined ? props.forest : internal.forest
     const team = props.team !== undefined ? props.team : internal.team
+    const members = team?.members ?? []
 
     const [internalHover, setInternalHover] = useState<string | null>(null)
+    const [showAll, setShowAll] = useState(false)
+    useEffect(() => { setShowAll(false) }, [sessionId])
     const hoverId = props.hoverId !== undefined ? props.hoverId : internalHover
+    const focusId = hoverId ?? (props.focusId ?? null)
+    const pinnedId = props.pinnedId ?? null
+    const litId = hoverId ?? pinnedId ?? props.focusId ?? null
     const onHover = props.onHover ?? setInternalHover
-    // The shared price book (the stats board's own store): a card's cost estimate
-    // appears once the book lands, and never blocks the rest of the card.
-    const { book } = useModelPrices()
     const currency = displayCurrencyOf(ctx.locale)
 
-    // The layout is fully responsive: re-run it whenever the stage's visible
-    // width changes (sidebar toggles, window resizes, split views).
     const stageRef = useRef<HTMLDivElement | null>(null)
-    const [stageWidth, setStageWidth] = useState(0)
-    useEffect(() => {
-      /* v8 ignore start -- jsdom has neither ResizeObserver nor layout; tests exercise the natural-pitch fallback (stageWidth 0). */
-      const el = stageRef.current
-      if (el === null || typeof ResizeObserver !== 'function') return
-      // contentRect, not clientWidth: the stage's 4px side padding is breathing room for
-      // hover shadows, and sizing to clientWidth would overshoot the content box by exactly
-      // that padding, arming a phantom horizontal scrollbar whenever the layout fits exactly.
-      const observer = new ResizeObserver(([entry]) => { setStageWidth(entry.contentRect.width) })
-      observer.observe(el)
-      return () => { observer.disconnect() }
-      /* v8 ignore stop */
-    }, [])
-    // A horizontal swipe running off the stage's edge must not chain into the browser's history navigation
-    // (overscroll.ts): the sheet's overscroll-behavior-x covers Chromium/Firefox, this covers WebKit.
+    const heardFocus = props.focusId ?? null
+    const stageSize = useElementSize(stageRef, 'content', forest !== null)
+    const stageScroll = useScrollMetrics(stageRef, forest !== null)
     useEffect(() => {
       const el = stageRef.current
-      /* v8 ignore next 1 -- the stage renders whenever the card does, and React
-         attaches refs before effects run; el is never null here. */
+      /* v8 ignore next 1 */
       if (el === null) return
       return containHorizontalOverscroll(el)
     }, [])
 
-    const layout = useMemo(() => (forest !== null ? layoutForest(forest, stageWidth) : null), [forest, stageWidth])
+    const layout = useMemo(
+      () => (forest !== null ? layoutForest(forest, stageSize.width, props.compact === true) : null),
+      [forest, props.compact, stageSize.width],
+    )
+    const avatarLabels = useMemo(
+      () => forest === null
+        ? null
+        : avatarLabelsOf(forest.nodes.map(node => ({ id: node.id, name: avatarIdentityOf(team, node, t).name }))),
+      [forest, team, t],
+    )
+    const cardHeight = props.compact === true ? AGENT_CARD_COMPACT_H : AGENT_CARD_H
+    const seededHeight = !stageScroll.measured && forest !== null && forest.nodes.length > GRAPH_WINDOW_SEED ? STAGE_H : 0
+    const viewportHeight = stageScroll.height > 0 ? stageScroll.height : seededHeight
+    const band = viewportHeight > 0
+      ? { from: stageScroll.scrollTop - GRAPH_OVERSCAN, to: stageScroll.scrollTop + viewportHeight + GRAPH_OVERSCAN }
+      : null
+    const graph = useMemo(() => {
+      if (forest === null || layout === null) return null
+      const points = new Map(layout.points.map(point => [point.id, point]))
+      const nodes = new Map(forest.nodes.map(node => [node.id, node]))
+      const entries = forest.nodes.map(node => ({ node, hue: hueOf(node, team, members) }))
+      const hues = new Map(entries.map(entry => [entry.node.id, entry.hue]))
+      const visible = band === null ? entries : entries.filter(({ node }) => {
+        const point = points.get(node.id)
+        return point !== undefined && point.y <= band.to && point.y + cardHeight >= band.from
+      })
+      return {
+        points,
+        nodes,
+        hues,
+        visible,
+        lit: neighborhoodOf(forest, litId),
+        links: band === null
+          ? layout.links
+          : layout.links.filter(link => Math.min(link.y1, link.y2) - cardHeight <= band.to && Math.max(link.y1, link.y2) >= band.from),
+      }
+    }, [band?.from, band?.to, cardHeight, forest, layout, litId, members, team])
+    useEffect(() => {
+      if (heardFocus === null || graph === null) return
+      const point = graph.points.get(heardFocus)
+      const el = stageRef.current
+      /* v8 ignore next 1 */
+      if (point !== undefined && el !== null && (point.y < el.scrollTop || point.y + cardHeight > el.scrollTop + el.clientHeight)) {
+        scrollToPos(el, { top: Math.max(0, point.y - 24) })
+      }
+      /* v8 ignore next 1 */
+      const card = stageRef.current?.querySelector<HTMLElement>(`[data-agent="${CSS.escape(heardFocus)}"]`) ?? null
+      scrollIntoViewIfPossible(card, { block: 'center', behavior: 'smooth' })
+    }, [cardHeight, graph, heardFocus])
 
-    if (forest === null || layout === null) return null
-    const byId = new Map(forest.nodes.map(n => [n.id, n]))
-    /** v8 ignore next 1 -- agentForestOf anchors the forest at the current session, so a current node always exists. */
+    if (forest === null || layout === null || graph === null) return null
+    const tallFamily = layout.height > STAGE_H
+    const overflowsStage = showAll || (tallFamily && layout.height > stageSize.height)
+    const byId = graph.nodes
+    /* v8 ignore next 1 */
     const current = forest.nodes.find(n => n.isCurrent) ?? forest.nodes[0]
-    const pinnedId = props.pinnedId ?? null
     const pinnedNode = pinnedId !== null ? byId.get(pinnedId) : undefined
-    const hoverNode = hoverId !== null ? byId.get(hoverId) : undefined
+    const hoverNode = focusId !== null ? byId.get(focusId) : undefined
     const inspected = pinnedNode ?? hoverNode ?? current
     const runningCount = forest.nodes.filter(n => n.running).length
     let totalTokens = 0
     for (const n of forest.nodes) totalTokens += n.head !== null ? n.head.tokens : 0
 
-    // The hovered card's lineage (ancestor chain + own subtree) lights its links; the rest dim.
-    const lit = lineageOf(forest, hoverId)
+    const lit = graph.lit
 
     const open = (id: string): void => {
       if (id === current.id) return
       openSessionVia(ctx, id)
     }
-    // Select mode (the Fleet tab): a card click rings the node and steers the sibling panels;
-    // even the current card is pickable. The jump stays with the boards' own open buttons.
     const select = props.onSelect
     const keyOpen = (id: string) => (ev: KeyboardEvent) => {
       if (ev.key !== 'Enter' && ev.key !== ' ') return
@@ -150,7 +180,6 @@ export function makeAgentGraph(
       else open(id)
     }
 
-    // The sidebar's preview follows the hover, the pin, or the current session.
     const inspector = (
       <AgentInspector
         node={inspected}
@@ -170,7 +199,7 @@ export function makeAgentGraph(
     )
 
     return (
-      <div className="lc-card lc-agents">
+      <div className={'lc-card lc-agents' + (props.compact === true ? ' lc-agents-compact' : '')}>
         <div className="lc-card-title">
           <span className="lc-card-title-text">
             <IconWorkspaceTreeOutlineRegular size={14} />
@@ -180,7 +209,7 @@ export function makeAgentGraph(
         </div>
 
         <div className="lc-agents-chips">
-          <span className="lc-agents-chip">{t('agents.chip.count', { n: forest.nodes.length + forest.overflow })}</span>
+          <span className="lc-agents-chip">{t('agents.chip.count', { n: forest.nodes.length })}</span>
           <span className={'lc-agents-chip' + (runningCount > 0 ? ' lc-agents-chip-on' : '')}>
             {t('agents.chip.running', { n: runningCount })}
           </span>
@@ -194,8 +223,17 @@ export function makeAgentGraph(
               </span>
             )
             : null}
-          {forest.overflow > 0
-            ? <span className="lc-agents-chip">{t('agents.more', { n: forest.overflow })}</span>
+          {overflowsStage
+            ? (
+              <button
+                type="button"
+                className="lc-agents-chip lc-agents-toggle"
+                aria-expanded={showAll}
+                onClick={() => { setShowAll(v => !v) }}
+              >
+                {t(showAll ? 'agents.showLess' : 'agents.showAll')}
+              </button>
+            )
             : null}
         </div>
 
@@ -218,7 +256,7 @@ export function makeAgentGraph(
 
         <div className="lc-agents-split">
           <div className="lc-agents-main">
-            <div className="lc-agents-stage" ref={stageRef}>
+            <div className={'lc-agents-stage' + (tallFamily ? ' lc-agents-stage-tall' : '') + (showAll ? ' lc-agents-stage-all' : '')} ref={stageRef}>
               <div
                 className={'lc-agents-canvas' + (lit !== null ? ' lc-agents-focus' : '')}
                 style={{ width: layout.width, height: layout.height }}
@@ -229,29 +267,31 @@ export function makeAgentGraph(
                   height={layout.height}
                   viewBox={`0 0 ${layout.width} ${layout.height}`}
                 >
-                  {layout.links.map((link) => {
+                  {graph.links.map((link) => {
                     const d = linkPath(link.x1, link.y1, link.x2, link.y2)
-                    const on = lit !== null && lit.has(link.to)
+                    const parentId = graph.nodes.get(link.to)?.parentId
+                    const on = lit !== null && parentId !== undefined && lit.has(link.to) && lit.has(parentId)
+                    const color = graph.hues.get(link.to)
                     return (
                       <g key={link.to} className={on ? 'lc-agents-on' : undefined}>
                         <path
                           className={'lc-agents-link stroke-[1.5px]' + (link.running ? ' lc-agents-link-live' : '')}
                           d={d}
-                          stroke={link.color}
+                          stroke={color}
                           fill="none"
                         />
                         {link.running
-                          ? <path className="lc-agents-flow animate-lc-agent-flow fill-none stroke-2" d={d} stroke={link.color} />
+                          ? <path className="lc-agents-flow animate-lc-agent-flow fill-none stroke-2" d={d} stroke={color} />
                           : null}
-                        <circle className="lc-agents-joint" cx={link.x1} cy={link.y1} r={2} fill={link.color} />
-                        <circle className="lc-agents-joint" cx={link.x2} cy={link.y2} r={3} fill={link.color} />
+                        <circle className="lc-agents-joint" cx={link.x1} cy={link.y1} r={2} fill={color} />
+                        <circle className="lc-agents-joint" cx={link.x2} cy={link.y2} r={3} fill={color} />
                       </g>
                     )
                   })}
                 </svg>
-                {forest.nodes.map((node, index) => {
-                  const point = layout.points.find(p => p.id === node.id)
-                  /** v8 ignore next 2 -- layoutForest positions every forest node, so the lookup never misses. */
+                {graph.visible.map(({ node, hue }, index) => {
+                  const point = graph.points.get(node.id)
+                  /* v8 ignore next 2 */
                   if (point === undefined) return null
                   return (
                     <AgentCard
@@ -260,17 +300,24 @@ export function makeAgentGraph(
                       x={point.x}
                       y={point.y}
                       width={layout.cardW}
+                      hue={hue}
                       index={index}
-                      hovered={hoverId === node.id}
+                      hovered={focusId === node.id}
                       on={lit !== null && lit.has(node.id)}
                       pinned={pinnedId === node.id}
                       onHover={onHover}
                       onOpen={open}
                       onSelect={select}
                       onKeyOpen={keyOpen(node.id)}
-                      book={book}
                       currency={currency}
                       memberName={teammateNameOf(team, node)}
+                      avatar={{
+                        id: node.id,
+                        ...avatarIdentityOf(team, node, t),
+                        self: node.isCurrent,
+                        hue,
+                        initials: avatarLabels?.get(node.id),
+                      }}
                       t={t}
                       fmt={fmt}
                     />
@@ -291,40 +338,32 @@ export function makeAgentGraph(
   return AgentGraph
 }
 
-/** The sidebar mount's inspector carries no fleet-detail read: a settled-empty detail hides those sections. */
 const nullDetail: { detail: FleetDetail | null } = { detail: null }
-/* v8 ignore next -- the sidebar's inspector never pins, so unpin/focus never fire. */
+/* v8 ignore next */
 const noopPin = (): void => {}
 
-/** The sidebar's inspector never lists comms, so sender labels fall back to the forest's own rows. */
-/* v8 ignore next 2 -- unreachable while the comms list is always empty. */
+/* v8 ignore next 2 */
 function fallbackLabel(byId: ReadonlyMap<string, AgentNode>): (id: string) => string {
   return id => byId.get(id)?.label ?? id
 }
 
 interface CardProps {
   node: AgentNode
-  /** Card center x and top y in canvas coordinates; the card box derives from them. */
   x: number
   y: number
   width: number
-  /** DFS order — the entrance stagger slot. */
+  hue: string
   index: number
   hovered: boolean
-  /** The hovered card's lineage (ancestors + subtree): the focus dim spares these cards. */
   on: boolean
-  /** The list/team/comms pick this card echoes with a ring. */
   pinned: boolean
   onHover: (id: string | null) => void
   onOpen: (id: string) => void
-  /** Set on the Fleet tab: card click selects (ring + panel linkage) instead of opening. */
   onSelect?: (id: string) => void
   onKeyOpen: (ev: KeyboardEvent) => void
-  /** The price book and display currency for the cost estimate (null book → no estimate shown). */
-  book: ModelBook | null
   currency: CostCurrency
-  /** The roster name when the node belongs to the team (undefined family outsiders and the self card). */
   memberName?: string
+  avatar: CommsAgent
   t: ViewKit['t']
   fmt: ViewKit['fmt']
 }
@@ -333,25 +372,20 @@ function AgentCard(props: CardProps): ReactElement {
   const { node, x, y, width } = props
   const pct = node.head !== null ? node.head.pct : null
   const segs = node.head !== null ? barSegments(node.head.parts, pct, pressureColorOf(pct)) : []
-  // The headline figure is the agent's CONSUMPTION: the tokenUsage tally, with the
-  // fold's own cost ledger standing in when the tally is absent (cold relatives).
   const consumed = node.billed !== null && node.billed > 0 ? node.billed
     : node.costUsage !== null ? billedTokensOf(node.costUsage) : null
-  const cost = estimateSessionCost(node.costUsage, props.book, props.currency)
+  const costRead = node.costRead ?? null
+  const usd = costRead !== null && costRead.ready && costRead.usd !== null ? costRead.usd : null
+  const cost = usd === null ? null : formatCost(toCurrency(usd, props.currency), props.currency)
   const metricBits: string[] = []
   if (consumed !== null && consumed > 0) metricBits.push(props.fmt(consumed))
-  if (cost !== null) metricBits.push(formatCost(cost, props.currency))
-  // Activity footer: the run's duration, then its step count. Either bit may be missing —
-  // a node that never ran has no steps, a cold one no timing yet.
+  if (cost !== null) metricBits.push(cost)
   const meta: string[] = []
   if (node.durationMs !== null) meta.push(fmtDurationCompact(node.durationMs))
   if (node.requests > 0) meta.push(props.t('agents.steps', { n: node.requests }))
   const selectable = props.onSelect !== undefined
   const cls = 'lc-agent-card animate-lc-agent-in motion-reduce:animate-none'
     + (node.isCurrent ? ' lc-agent-self' : '')
-    // lc-agent-hover shares the card's own :hover rule, so the boards' linked hover
-    // lifts the card exactly like pointing at it (and stays the specs' state anchor).
-    // lc-agent-on marks the hovered card's lineage — the canvas' focus dim spares it.
     + (props.hovered ? ' lc-agent-hover' : '')
     + (props.on ? ' lc-agent-on' : '')
     + (props.pinned ? ' lc-agent-pinned' : '')
@@ -359,10 +393,11 @@ function AgentCard(props: CardProps): ReactElement {
   return (
     <div
       className={cls}
-      style={{ left: x - width / 2, top: y, width, '--lc-i': Math.min(props.index, STAGGER_CAP) } as CSSProperties}
+      style={{ left: x - width / 2, top: y, width, ...memberStyle(props.hue), '--lc-i': Math.min(props.index, STAGGER_CAP) } as CSSProperties}
       data-agent={node.id}
       role={selectable || !node.isCurrent ? 'button' : undefined}
       tabIndex={selectable || !node.isCurrent ? 0 : undefined}
+      aria-pressed={selectable ? props.pinned : undefined}
       onClick={() => {
         if (props.onSelect !== undefined) props.onSelect(node.id)
         else props.onOpen(node.id)
@@ -374,28 +409,17 @@ function AgentCard(props: CardProps): ReactElement {
       onBlur={() => { props.onHover(null) }}
     >
       <div className="lc-agent-card-head">
+        <AgentAvatar agent={props.avatar} size="sm" t={props.t} />
         {node.running || node.completed
           ? <StateDot state={node.running ? 'ongoing' : 'done'} size={11} className="lc-agent-state" />
           : null}
-        <div className="lc-agent-label">
-          {props.memberName === undefined
-            ? node.label
-            : (
-              <>
-                <b className="lc-agent-member">{props.memberName}</b>
-                <span className="lc-agent-duty" title={node.label}>{node.label}</span>
-              </>
-            )}
-        </div>
-        {/* The badge sits OUTSIDE the clamped label: an inline badge would be clipped away
-            whenever a long title claims both lines. The lc-agent-self-badge class carries no
-            rule of its own — it stays as the specs' anchor for the self marker. */}
+        <div className="lc-agent-label" title={props.memberName ?? node.label}>{props.memberName ?? node.label}</div>
         {node.isCurrent ? <span className="lc-agents-badge lc-agent-self-badge">{props.t('agents.self')}</span> : null}
       </div>
+      {props.memberName !== undefined ? <div className="lc-agent-duty" title={node.label}>{node.label}</div> : null}
       <div className="lc-agent-metric">
         <span className="lc-agent-tokens">{metricBits.length > 0 ? metricBits.join(' · ') : '—'}</span>
       </div>
-      {/* The free remainder is the bar's own track, so only occupied segments render. */}
       <div className="lc-agent-bar">
         {segs.filter(seg => !seg.free).map((seg, i) => (
           <i

@@ -1,33 +1,134 @@
-/**
- * The timeline source behind the Context tab and the /context modal. It
- * reconciles the two `contextTimeline` wire generations, marked by `detailRev`:
- *
- * - INLINE (older hosts, channel-less deployments, the gate fallback): the
- *   collections ride the value in place.
- * - SPLIT (current host, detail route live): a slim head small enough for every
- *   session.list row and push frame, with the collections read from
- *   `/api/dsh-context/detail` and refetched once the pushed revision outruns
- *   the served detail.
- *
- * One store per session, single-flight refetches, race-safe by generation and
- * revision; a failed read keeps the last good detail and backs off. A session
- * with no pushed value opens the channel itself (rev 0).
- */
-
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
-import type { ContextTimeline, ContextTimelineDetail } from '../shared/types'
-import { DETAIL_ROUTE } from './apiRoutes'
+import type { ContextTimeline, ContextTimelineDetail, RequestRecord, SurfaceNode } from '../shared/types'
+import { DETAIL_ROUTE, FACTS_ROUTE } from './apiRoutes'
+import { subscribeInvalidations } from './invalidation'
+import { noteCostPending } from './costRefresh'
+import { makeRetentionCache } from './retention'
+import { postRoute } from './route'
 import type { SessionStandardProps } from './services'
 import { asRecord, collectionsOf, projectionOf, timelineOf } from './services'
 
-/** Narrow the detail endpoint's payload; a missing or NaN revision rejects the
- * whole payload so the caller shows its retryable note, never half-merged data. */
+export type FactPart = 'requests' | 'nodes' | 'events' | 'files' | 'commands' | 'spans'
+
+export interface FactWindow {
+  requestsTail?: number
+  nodesTail?: number
+  eventsTail?: number
+  filesTail?: number
+  commandsTail?: number
+  spansTail?: number
+}
+
+interface FactParts {
+  head?: ContextTimeline
+  series?: RequestRecord[]
+  requests?: RequestRecord[]
+  nodes?: { nodes: SurfaceNode[]; archive: SurfaceNode[]; droppedNodes: number; surfaceFloor?: number; archiveFloor?: number }
+  events?: ContextTimeline['events']
+  files?: { fileOps: NonNullable<ContextTimeline['fileOps']>; fileOpsFloor?: number }
+  commands?: { commands: NonNullable<ContextTimeline['commands']>; commandsFloor?: number; commandStats?: ContextTimeline['commandStats'] }
+  spans?: NonNullable<ContextTimeline['spans']>
+}
+
+export interface FactsRead {
+  rev: number
+  live: boolean
+  asOfSeq?: number
+  parts: FactParts
+  missing?: readonly string[]
+}
+
+function numOf(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function rowsOf(value: unknown): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  return value.filter((entry): entry is Record<string, unknown> => entry !== null && typeof entry === 'object')
+}
+
+function nodesPartOf(value: unknown): FactParts['nodes'] | undefined {
+  const data = asRecord(value)
+  if (data === null) return undefined
+  const nodes = rowsOf(data.nodes) as SurfaceNode[] | undefined
+  const archive = rowsOf(data.archive) as SurfaceNode[] | undefined
+  if (nodes === undefined || archive === undefined) return undefined
+  return {
+    nodes,
+    archive,
+    droppedNodes: numOf(data.droppedNodes) ?? 0,
+    ...(numOf(data.surfaceFloor) === undefined ? {} : { surfaceFloor: numOf(data.surfaceFloor) }),
+    ...(numOf(data.archiveFloor) === undefined ? {} : { archiveFloor: numOf(data.archiveFloor) }),
+  }
+}
+
+export function factsOf(value: unknown): FactsRead | null {
+  const data = asRecord(value)
+  if (data === null) return null
+  const rev = numOf(data.rev)
+  if (rev === undefined) return null
+  const parts = asRecord(data.parts)
+  if (parts === null) return null
+  const head = parts.head === undefined ? undefined : timelineOf(parts.head)
+  const series = rowsOf(parts.series) as RequestRecord[] | undefined
+  const requests = rowsOf(parts.requests) as RequestRecord[] | undefined
+  const events = rowsOf(parts.events) as ContextTimeline['events'] | undefined
+  const spans = rowsOf(parts.spans) as NonNullable<ContextTimeline['spans']> | undefined
+  const files = asRecord(parts.files)
+  const fileOps = files === null ? undefined : rowsOf(files.fileOps) as NonNullable<ContextTimeline['fileOps']> | undefined
+  const commands = asRecord(parts.commands)
+  const commandRows = commands === null ? undefined : rowsOf(commands.commands) as NonNullable<ContextTimeline['commands']> | undefined
+  const stats = asRecord(commands?.commandStats)
+  const nodes = nodesPartOf(parts.nodes)
+  const fileOpsFloor = files === null ? undefined : numOf(files.fileOpsFloor)
+  const commandsFloor = commands === null ? undefined : numOf(commands.commandsFloor)
+  const missing = Array.isArray(data.missing) ? data.missing.filter((entry): entry is string => typeof entry === 'string') : undefined
+  return {
+    rev,
+    live: data.live === true,
+    ...(numOf(data.asOfSeq) === undefined ? {} : { asOfSeq: numOf(data.asOfSeq) }),
+    parts: {
+      ...(head === null || head === undefined ? {} : { head }),
+      ...(series === undefined ? {} : { series }),
+      ...(requests === undefined ? {} : { requests }),
+      ...(nodes === undefined ? {} : { nodes }),
+      ...(events === undefined ? {} : { events }),
+      ...(fileOps === undefined
+        ? {}
+        : {
+          files: {
+            fileOps,
+            ...(fileOpsFloor === undefined ? {} : { fileOpsFloor }),
+          },
+        }),
+      ...(commandRows === undefined
+        ? {}
+        : {
+          commands: {
+            commands: commandRows,
+            ...(commandsFloor === undefined ? {} : { commandsFloor }),
+            ...(stats === null
+              ? {}
+              : {
+                commandStats: {
+                  runs: numOf(stats.runs) ?? 0,
+                  failed: numOf(stats.failed) ?? 0,
+                  ms: numOf(stats.ms) ?? 0,
+                  bg: numOf(stats.bg) ?? 0,
+                },
+              }),
+          },
+        }),
+      ...(spans === undefined ? {} : { spans }),
+    },
+    ...(missing === undefined || missing.length === 0 ? {} : { missing }),
+  }
+}
+
 export function detailOf(value: unknown): ContextTimelineDetail | null {
   const data = asRecord(value)
   if (data === null) return null
   if (typeof data.rev !== 'number' || !Number.isFinite(data.rev) || data.rev < 0) return null
-  // The slim head rides the payload for the Agent network's cold-node ring
-  // fetch; a malformed head drops out rather than rejecting the whole payload.
   const head = timelineOf(data.head)
   return {
     rev: data.rev,
@@ -36,30 +137,41 @@ export function detailOf(value: unknown): ContextTimelineDetail | null {
   }
 }
 
-/** The detail reader over the plugin's own `/api` route (host/detail.ts); failures and malformed payloads reject. */
 export function makeDetailFetcher(
   sessionId: string,
 ): (() => Promise<ContextTimelineDetail | null>) | undefined {
   if (sessionId === '') return undefined
-  return async () => {
-    const response = await fetch(DETAIL_ROUTE, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId }),
-    })
-    if (!response.ok) throw new Error(`dsh-context: detail route HTTP ${response.status}`)
-    const r = asRecord(await response.json())
-    if (r === null || r.ok !== true) throw new Error('dsh-context: detail read failed')
-    if (r.value === null) return null
-    const detail = detailOf(r.value)
-    if (detail === null) throw new Error('dsh-context: detail read malformed')
-    return detail
+  return () => postRoute(DETAIL_ROUTE, { sessionId }, detailOf, { label: 'detail' })
+}
+
+type CoreRead = FactsRead | ContextTimelineDetail
+
+export interface FactsFetchers {
+  core: () => Promise<CoreRead | null>
+  part: (part: FactPart, window: FactWindow) => Promise<CoreRead | null>
+  legacy?: CoreFetcher
+}
+
+export function makeFactsFetchers(sessionId: string): FactsFetchers | undefined {
+  if (sessionId === '') return undefined
+  const read = (parts: readonly (FactPart | 'head' | 'series')[], window?: FactWindow): Promise<CoreRead | null> => postRoute(
+    FACTS_ROUTE,
+    { sessionId, parts, ...(window === undefined ? {} : { window }) },
+    value => factsOf(value) ?? detailOf(value),
+    { label: 'facts' },
+  )
+  return {
+    core: () => read(['head', 'series']),
+    part: (part, window) => read([part], window),
+    legacy: makeDetailFetcher(sessionId) as CoreFetcher,
   }
 }
 
-/** The store's snapshot, rebuilt on every transition and identity-gated for `useSyncExternalStore`. */
-export interface DetailSnap {
-  /** The newest accepted detail, kept while a refetch is in flight so the cards never flicker back to loading. */
+type CoreFetcher = () => Promise<ContextTimelineDetail | null>
+
+type StoreFetcher = CoreFetcher | FactsFetchers
+
+interface DetailSnap {
   detail: ContextTimelineDetail | null
   failed: boolean
   pending: boolean
@@ -69,42 +181,133 @@ const EMPTY_SNAP: DetailSnap = { detail: null, failed: false, pending: false }
 
 const DETAIL_DEBOUNCE_MS = 300
 
-/** One session's detail ledger; exported for tests, reached by the app through `detailStoreOf`. */
+const EAGER_DELAY_MS = 16
+
+const CATCH_UP_MS = 1_000
+
+const PART_RETRY_MS = 1_000
+
+const PART_RETRY_LIMIT = 3
+
+function emptyDetail(rev: number, head?: ContextTimeline, requests?: RequestRecord[]): ContextTimelineDetail {
+  return {
+    rev,
+    ...(head === undefined ? {} : { head }),
+    requests: requests ?? [],
+    events: [],
+    nodes: [],
+    droppedNodes: 0,
+    archive: [],
+  }
+}
+
+function seriesHasBreakdown(series: readonly RequestRecord[]): boolean {
+  return series.every(request => typeof request.system === 'number' || typeof request.assistant === 'number' || typeof request.tool === 'number')
+}
+
+function sameWindow(a: FactWindow, b: FactWindow): boolean {
+  return a.requestsTail === b.requestsTail && a.nodesTail === b.nodesTail && a.eventsTail === b.eventsTail
+    && a.filesTail === b.filesTail && a.commandsTail === b.commandsTail && a.spansTail === b.spansTail
+}
+
+function detailFromFacts(facts: FactsRead): ContextTimelineDetail {
+  const base = emptyDetail(facts.rev, facts.parts.head, facts.parts.series ?? facts.parts.requests)
+  return mergeFactsInto(base, facts)
+}
+
+function mergeFactsInto(detail: ContextTimelineDetail, facts: FactsRead): ContextTimelineDetail {
+  const parts = facts.parts
+  const next: ContextTimelineDetail = {
+    ...detail,
+    ...(parts.requests === undefined ? {} : { requests: parts.requests }),
+    ...(parts.events === undefined ? {} : { events: parts.events }),
+    ...(parts.nodes === undefined
+      ? {}
+      : {
+        nodes: parts.nodes.nodes,
+        archive: parts.nodes.archive,
+        droppedNodes: parts.nodes.droppedNodes,
+        ...(parts.nodes.surfaceFloor === undefined ? {} : { surfaceFloor: parts.nodes.surfaceFloor }),
+        ...(parts.nodes.archiveFloor === undefined ? {} : { archiveFloor: parts.nodes.archiveFloor }),
+      }),
+    ...(parts.files === undefined
+      ? {}
+      : {
+        fileOps: parts.files.fileOps,
+        ...(parts.files.fileOpsFloor === undefined ? {} : { fileOpsFloor: parts.files.fileOpsFloor }),
+      }),
+    ...(parts.commands === undefined
+      ? {}
+      : {
+        commands: parts.commands.commands,
+        ...(parts.commands.commandsFloor === undefined ? {} : { commandsFloor: parts.commands.commandsFloor }),
+        ...(parts.commands.commandStats === undefined ? {} : { commandStats: parts.commands.commandStats }),
+      }),
+    ...(parts.spans === undefined ? {} : { spans: parts.spans }),
+  }
+  return next
+}
+
 export class DetailStore {
   private detail: ContextTimelineDetail | null = null
-  /** The revision of `detail` (latest-wins cursor); -1 before the first landing. */
   private acceptedRev = -1
   private wantedRev = -1
-  /** The head rev the in-flight (or scheduled) read targets — the refold exception's acceptance key. */
   private targetRev = -1
-  /** The head rev seen last; a DECREASE means the host refolded and revisions restarted. */
   private lastHeadRev = -1
   private generation = 0
   private failed = false
   private inFlight = false
   private timer: ReturnType<typeof setTimeout> | null = null
   private failures = 0
-  /** No view holds this store. It keeps its cached payload so a re-open renders
-   * instantly but arms no read: the map is page-lifetime, so a view-less store would otherwise trail a dead route forever. */
   private parked = false
+  private bytes = 0
+  private background = false
+  private catchUp: ReturnType<typeof setTimeout> | null = null
+  private catchUpTarget = -1
+  private factsDisabled = false
+  private readonly wantedParts = new Map<FactPart, FactWindow>()
+  private readonly partRev = new Map<FactPart, number>()
+  private readonly partRetries = new Map<FactPart, ReturnType<typeof setTimeout>>()
+  private readonly partFailures = new Map<FactPart, number>()
+  private readonly inflightParts = new Set<FactPart>()
+  private readonly unavailableParts = new Set<FactPart>()
   private readonly listeners = new Set<() => void>()
   private snap: DetailSnap = EMPTY_SNAP
 
   constructor(
-    private readonly fetcher: (() => Promise<ContextTimelineDetail | null>) | undefined,
+    private readonly fetcher: StoreFetcher | undefined,
     private readonly baseDelay: number = DETAIL_DEBOUNCE_MS,
+    private readonly eagerFirst: boolean = false,
+    private readonly onResize?: () => void,
   ) {}
+
+  private get facts(): FactsFetchers | undefined {
+    return this.fetcher !== undefined && typeof this.fetcher === 'object' ? this.fetcher : undefined
+  }
+
+  private get legacy(): CoreFetcher | undefined {
+    return typeof this.fetcher === 'function' ? this.fetcher : this.fetcher?.legacy
+  }
+
+  readonly ensurePart = (part: FactPart, window: FactWindow = {}): void => {
+    if (this.facts === undefined || this.factsDisabled) return
+    const prev = this.wantedParts.get(part)
+    const same = prev !== undefined && sameWindow(prev, window)
+    if (same && this.partRev.get(part) === this.acceptedRev) return
+    this.wantedParts.set(part, window)
+    if (prev !== undefined && !same) this.partRev.delete(part)
+    this.fetchWantedParts()
+  }
 
   readonly subscribe = (fn: () => void): (() => void) => {
     this.listeners.add(fn)
     if (this.parked) {
       this.parked = false
-      // Resume with nothing cached: clear the ledger and the old backoff, so the
-      // mount's own request reads again instead of sticking on the note.
       if (this.detail === null) {
         this.resetLedger()
         this.failures = 0
       }
+      this.fetchWantedParts()
     }
     return () => {
       this.listeners.delete(fn)
@@ -114,19 +317,65 @@ export class DetailStore {
 
   readonly getSnapshot = (): DetailSnap => this.snap
 
-  /** The head's revision arrived: schedule the trailing-edge read when it
-   * outruns the served detail. A DECREASE means the host refolded, so revisions restart and the ledger resets. */
   request(rev: number): void {
+    this.background = false
     if (rev < this.lastHeadRev) this.resetLedger()
+    if (rev >= this.lastHeadRev) {
+      this.clearCatchUp()
+      this.catchUpTarget = -1
+    }
     this.lastHeadRev = rev
     if (rev <= this.acceptedRev || rev <= this.wantedRev) return
     this.wantedRev = rev
     this.schedule()
   }
 
+  warm(rev = 0): void {
+    this.background = this.listeners.size === 0
+    if (rev > this.lastHeadRev) this.lastHeadRev = rev
+    if (rev > this.wantedRev) this.wantedRev = rev
+    if (this.inFlight) return
+    if (this.timer !== null) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
+    this.parked = false
+    if (this.detail === null || rev > this.acceptedRev) void this.fire()
+  }
+
+  get byteSize(): number {
+    return this.bytes
+  }
+
+  refresh(): void {
+    if (!this.active) {
+      this.release()
+      return
+    }
+    this.partRev.clear()
+    this.unavailableParts.clear()
+    this.clearPartRetries()
+    if (this.timer !== null) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
+    if (this.detail !== null) {
+      this.failed = false
+      this.failures = 0
+      this.wantedRev = Math.max(this.wantedRev, this.acceptedRev)
+    }
+    if (!this.inFlight) void this.fire()
+  }
+
   readonly retry = (): void => {
+    this.background = false
     this.failures = 0
-    if (this.detail !== null) return
+    if (this.detail !== null) {
+      this.clearPartRetries()
+      this.unavailableParts.clear()
+      this.fetchWantedParts()
+      return
+    }
     if (this.timer !== null) {
       clearTimeout(this.timer)
       this.timer = null
@@ -135,12 +384,18 @@ export class DetailStore {
   }
 
   private resetLedger(): void {
+    this.clearCatchUp()
+    this.clearPartRetries()
+    this.catchUpTarget = -1
     this.generation++
     this.acceptedRev = -1
     this.wantedRev = -1
     this.detail = null
+    this.bytes = 0
     this.failed = false
-    // Drop the snapshot's own payload reference too: it is the second place a released detail could stay reachable from.
+    this.partRev.clear()
+    this.unavailableParts.clear()
+    this.inflightParts.clear()
     this.snap = EMPTY_SNAP
   }
 
@@ -152,10 +407,9 @@ export class DetailStore {
     return this.detail !== null
   }
 
-  /** Demote the store: drop its cached payload and pending work, called on an idle store once the page cache exceeds its bound.
-   */
   release(): void {
-    // Clear again on its own, so the demotion contract holds here too.
+    this.clearCatchUp()
+    this.catchUpTarget = -1
     if (this.timer !== null) {
       clearTimeout(this.timer)
       this.timer = null
@@ -166,6 +420,8 @@ export class DetailStore {
 
   private park(): void {
     this.parked = true
+    this.clearCatchUp()
+    this.clearPartRetries()
     if (this.timer !== null) {
       clearTimeout(this.timer)
       this.timer = null
@@ -173,9 +429,23 @@ export class DetailStore {
     this.emit()
   }
 
+  private clearCatchUp(): void {
+    if (this.catchUp !== null) {
+      clearTimeout(this.catchUp)
+      this.catchUp = null
+    }
+  }
+
   private schedule(): void {
-    // Nobody reads a parked store's answer, so never arm one.
     if (this.parked || this.timer !== null) return
+    if (this.eagerFirst && this.detail === null && !this.failed) {
+      this.timer = setTimeout(() => {
+        this.timer = null
+        void this.fire()
+      }, EAGER_DELAY_MS)
+      this.emit()
+      return
+    }
     this.timer = setTimeout(() => {
       this.timer = null
       void this.fire()
@@ -183,51 +453,175 @@ export class DetailStore {
     this.emit()
   }
 
+  private fetchWantedParts(): void {
+    const facts = this.facts
+    if (facts === undefined || this.detail === null || this.acceptedRev < 0 || this.factsDisabled) return
+    for (const [part, window] of this.wantedParts) {
+      if (this.unavailableParts.has(part) || this.inflightParts.has(part) || this.partRev.get(part) === this.acceptedRev) continue
+      void this.fetchPart(facts, part, window)
+    }
+  }
+
+  private async fetchCore(): Promise<ContextTimelineDetail | null> {
+    const facts = this.facts
+    if (facts !== undefined && !this.factsDisabled) {
+      const read = await facts.core()
+      if (read === null) return null
+      if ('missing' in read && read.missing?.includes('series') === true) return null
+      if (!('parts' in read)) {
+        this.factsDisabled = true
+        this.wantedParts.clear()
+        return read
+      }
+      return detailFromFacts(read)
+    }
+    const legacy = this.legacy
+    return legacy === undefined ? null : legacy()
+  }
+
+  private async fetchPart(facts: FactsFetchers, part: FactPart, window: FactWindow): Promise<void> {
+    const generation = this.generation
+    const rev = this.acceptedRev
+    this.inflightParts.add(part)
+    this.emit()
+    try {
+      const read = await facts.part(part, window)
+      if (generation !== this.generation || this.acceptedRev !== rev) return
+      if (read === null) {
+        this.schedulePartRetry(part)
+        return
+      }
+      if (!('parts' in read)) {
+        this.unavailableParts.add(part)
+        return
+      }
+      if (read.rev !== rev) {
+        this.wantedRev = Math.max(this.wantedRev, read.rev)
+        this.schedule()
+        return
+      }
+      if (read.missing?.includes(part) === true) {
+        this.unavailableParts.add(part)
+        return
+      }
+      const merged = mergeFactsInto(this.detail as ContextTimelineDetail, read)
+      this.detail = merged
+      this.bytes = detailBytesOf(merged)
+      this.partRev.set(part, rev)
+      this.clearPartRetry(part)
+      this.onResize?.()
+    } catch {
+      if (generation === this.generation && this.acceptedRev === rev) this.schedulePartRetry(part)
+    } finally {
+      this.inflightParts.delete(part)
+      this.emit()
+    }
+  }
+
+  private schedulePartRetry(part: FactPart): void {
+    if (!this.active || this.partRetries.has(part)) return
+    const failures = (this.partFailures.get(part) ?? 0) + 1
+    this.partFailures.set(part, failures)
+    if (failures > PART_RETRY_LIMIT) return
+    const delay = PART_RETRY_MS * 2 ** (failures - 1)
+    this.partRetries.set(part, setTimeout(() => {
+      this.partRetries.delete(part)
+      this.fetchWantedParts()
+      this.emit()
+    }, delay))
+  }
+
+  private clearPartRetry(part: FactPart): void {
+    const timer = this.partRetries.get(part)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.partRetries.delete(part)
+    this.partFailures.delete(part)
+  }
+
+  private clearPartRetries(): void {
+    for (const timer of this.partRetries.values()) clearTimeout(timer)
+    this.partRetries.clear()
+    this.partFailures.clear()
+  }
+
   private async fire(): Promise<void> {
-    // A trailing timer fired while an earlier read is still in flight; that
-    // read's settle re-arms if the wanted rev still outruns the served one.
     if (this.inFlight) return
     if (this.fetcher === undefined) {
-      // No session id to read for: the typed failure arms the cards' note.
       this.failed = true
       this.emit()
       return
     }
     this.inFlight = true
     this.targetRev = this.wantedRev
+    const background = this.background
     const generation = this.generation
     this.emit()
     try {
-      const d = await this.fetcher()
+      const d = await this.fetchCore()
       if (generation !== this.generation) return
+      if (d === null && this.facts !== undefined && !this.factsDisabled) {
+        this.factsDisabled = true
+        this.wantedParts.clear()
+        this.failures = 0
+        this.wantedRev = Math.max(this.wantedRev, this.targetRev, 0)
+        return
+      }
       if (d !== null) {
         if (d.rev >= this.acceptedRev || d.rev === this.targetRev) {
           this.detail = d
+          this.bytes = detailBytesOf(d)
           this.acceptedRev = d.rev
+          this.onResize?.()
+          this.unavailableParts.clear()
+          this.partRev.clear()
+          if (!seriesHasBreakdown(d.requests)) this.ensurePart('requests')
+          this.fetchWantedParts()
+        }
+        if (d.rev >= this.acceptedRev && d.rev < this.targetRev) {
+          this.wantedRev = d.rev
+          if (this.listeners.size > 0 && this.catchUpTarget !== this.targetRev) {
+            this.catchUpTarget = this.targetRev
+            this.clearCatchUp()
+            const target = this.targetRev
+            this.catchUp = setTimeout(() => {
+              this.catchUp = null
+              if (this.detail === null || this.acceptedRev < target) {
+                this.wantedRev = target
+                void this.fire()
+              }
+            }, CATCH_UP_MS)
+          }
         }
         this.failures = 0
         this.failed = false
       } else {
-        // Absent (the session left the live set): keep the last detail, stop
-        // the trailing until the head moves again, and arm the note only when nothing is showable.
         this.wantedRev = this.acceptedRev
         this.failed = this.detail === null
         this.failures++
       }
     } catch {
       if (generation === this.generation) {
-        this.failed = this.detail === null
-        this.failures++
+        if (this.facts !== undefined && !this.factsDisabled) {
+          this.factsDisabled = true
+          this.wantedParts.clear()
+          this.failures = 0
+          this.wantedRev = Math.max(this.wantedRev, this.targetRev, 0)
+        } else {
+          this.failed = this.detail === null
+          this.failures++
+        }
       }
     } finally {
       this.inFlight = false
-      if (this.wantedRev > this.acceptedRev) this.schedule()
+      if (this.failed && background && this.listeners.size === 0) this.wantedRev = this.acceptedRev
+      if (this.wantedRev > this.acceptedRev && (this.listeners.size > 0 || !background)) this.schedule()
       this.emit()
     }
   }
 
   private emit(): void {
-    const pending = this.timer !== null || this.inFlight
+    const pending = this.timer !== null || this.inFlight || this.inflightParts.size > 0 || this.partRetries.size > 0
     const next: DetailSnap = { detail: this.detail, failed: this.failed, pending }
     if (next.detail === this.snap.detail && next.failed === this.snap.failed && next.pending === this.snap.pending) return
     this.snap = next
@@ -235,36 +629,42 @@ export class DetailStore {
   }
 }
 
-/** How many sessions keep their fetched detail payload cached. A large payload
- * measured ~194KB of JSON (~300KB of live heap) and this map is page-lifetime, so older idle stores are demoted and read again.
- */
-const DETAIL_STORES_MAX = 8
-
-/** Page-lifetime per-session stores (the tab and the modal share one). */
-const stores = new Map<string, DetailStore>()
-
-function payloadHolders(): number {
-  let held = 0
-  for (const store of stores.values()) if (store.hasPayload) held++
-  return held
+export function detailBytesOf(detail: ContextTimelineDetail): number {
+  return 2048
+    + detail.requests.length * 180
+    + detail.events.length * 120
+    + detail.nodes.length * 160
+    + detail.archive.length * 160
+    + (detail.fileOps?.length ?? 0) * 220
+    + (detail.commands?.length ?? 0) * 420
+    + (detail.spans?.length ?? 0) * 60
 }
+
+const stores = makeRetentionCache<string, DetailStore>('detailStores', {
+  sizeOf: store => store.byteSize,
+  weightOf: store => (store.hasPayload ? 1 : 0),
+  evictable: store => !store.active,
+  onEvict: (store) => { store.release() },
+})
+
+subscribeInvalidations((event) => {
+  if (event.kind !== 'pricing') return
+  stores.forEach((store) => { store.refresh() })
+})
 
 export function detailStoreOf(sessionId: string): DetailStore {
   const known = stores.get(sessionId)
-  const store = known ?? new DetailStore(makeDetailFetcher(sessionId))
-  // Re-inserting moves the entry to the map's newest end, so the demotion
-  // below always targets the least recently opened session.
-  if (known !== undefined) stores.delete(sessionId)
-  stores.set(sessionId, store)
-  // A store without a payload is about to fetch one, so it counts as one more;
-  // an active store is on screen and is never demoted.
-  let excess = payloadHolders() - DETAIL_STORES_MAX + (store.hasPayload ? 0 : 1)
-  for (const candidate of stores.values()) {
-    if (excess <= 0) break
-    if (candidate.active || !candidate.hasPayload) continue
-    candidate.release()
-    excess--
+  if (known !== undefined) {
+    stores.trim({ protect: sessionId })
+    return known
   }
+  stores.trim({ reserveWeight: 1 })
+  const facts = makeFactsFetchers(sessionId)
+  const resize = (): void => { stores.reweight(sessionId) }
+  const store = facts === undefined
+    ? new DetailStore(makeDetailFetcher(sessionId), DETAIL_DEBOUNCE_MS, true, resize)
+    : new DetailStore(facts, DETAIL_DEBOUNCE_MS, true, resize)
+  stores.set(sessionId, store)
   return store
 }
 
@@ -275,29 +675,24 @@ export function resetTimelineDetailStores(): void {
 export type DetailState = 'legacy' | 'loading' | 'ready' | 'failed'
 
 export interface TimelineSource {
-  /** The value the cards render: the inline generation's value, or the slim head merged with the fetched detail collections. */
   data: ContextTimeline | null
   detailState: DetailState
   retryDetail: () => void
+  ensurePart: (part: FactPart, window?: FactWindow) => void
 }
 
 const noopSubscribe = (): (() => void) => () => {}
 const noopRetry = (): void => {}
+const noopEnsurePart = (): void => {}
 
-/** The view's one read of the timeline. Hook-order safe: every hook runs
- * unconditionally, and the branches below only shape the returned record. */
 export function useTimelineSource(props: SessionStandardProps): TimelineSource {
   const head = projectionOf(props, 'contextTimeline', timelineOf)
   const sessionId = typeof props.sessionId === 'string' ? props.sessionId : ''
-  // The split marker: the slim head carries the detail revision; `headRev` null
-  // (an inline value, the gate fallback, a corrupt payload) means no channel.
   const headRev = head !== null && typeof head.detailRev === 'number' ? head.detailRev : null
   const slim = headRev !== null
-  // The cold start arms whenever no value has been pushed: the source opens the
-  // channel itself (rev 0) rather than waiting on a push that may never come.
   const cold = head === null
   const store = useMemo(
-    () => (slim || cold ? detailStoreOf(sessionId) : null),
+    () => (sessionId !== '' && (slim || cold) ? detailStoreOf(sessionId) : null),
     [sessionId, slim, cold],
   )
   const snap = useSyncExternalStore(
@@ -305,41 +700,44 @@ export function useTimelineSource(props: SessionStandardProps): TimelineSource {
     store !== null ? store.getSnapshot : () => EMPTY_SNAP,
   )
   useEffect(() => {
-    // The pushed head's revision drives the trailing refetch; the cold start requests rev 0.
     if (store !== null) store.request(headRev ?? 0)
   }, [store, headRev])
 
   return useMemo<TimelineSource>(() => {
     const detail = snap.detail
     const retry = store !== null ? store.retry : noopRetry
-    if (head !== null && !slim) return { data: head, detailState: 'legacy', retryDetail: noopRetry }
-    // The render head: the pushed value, or the detail read's own slim head.
+    const ensurePart = store !== null ? store.ensurePart : noopEnsurePart
+    if (head !== null && !slim) {
+      noteCostPending(head.costRead)
+      return { data: head, detailState: 'legacy', retryDetail: noopRetry, ensurePart: noopEnsurePart }
+    }
     const base = head !== null ? head : detail !== null ? detail.head ?? null : null
     if (base === null) {
-      // Nothing renderable yet — a cold read still pending, or one settled
-      // without a usable value: the retryable failure, never a dead spinner.
       const failed = store !== null && (snap.failed || detail !== null)
-      return { data: null, detailState: failed ? 'failed' : 'loading', retryDetail: retry }
+      return { data: null, detailState: failed ? 'failed' : 'loading', retryDetail: retry, ensurePart }
     }
     if (detail === null) {
-      // The head's own counters render while the first read is in flight, or
-      // once it settled without data (the failure note rides beside).
-      return { data: base, detailState: snap.failed ? 'failed' : 'loading', retryDetail: retry }
+      noteCostPending(base.costRead)
+      return { data: base, detailState: snap.failed ? 'failed' : 'loading', retryDetail: retry, ensurePart }
     }
+    noteCostPending(detail.head?.costRead ?? base.costRead)
     const data: ContextTimeline = {
       ...base,
+      ...(detail.head?.costRead === undefined ? {} : { costRead: detail.head.costRead }),
       requests: detail.requests,
       events: detail.events,
       nodes: detail.nodes,
       droppedNodes: detail.droppedNodes,
       archive: detail.archive,
-      // Slim heads serve no floors; the detail's pair lands whole here.
       ...(detail.surfaceFloor !== undefined ? { surfaceFloor: detail.surfaceFloor } : {}),
       ...(detail.archiveFloor !== undefined ? { archiveFloor: detail.archiveFloor } : {}),
       ...(detail.fileOps !== undefined ? { fileOps: detail.fileOps } : {}),
       ...(detail.fileOpsFloor !== undefined ? { fileOpsFloor: detail.fileOpsFloor } : {}),
+      ...(detail.commands !== undefined ? { commands: detail.commands } : {}),
+      ...(detail.commandsFloor !== undefined ? { commandsFloor: detail.commandsFloor } : {}),
+      ...(detail.commandStats !== undefined ? { commandStats: detail.commandStats } : {}),
       ...(detail.spans !== undefined ? { spans: detail.spans } : {}),
     }
-    return { data, detailState: 'ready', retryDetail: retry }
+    return { data, detailState: 'ready', retryDetail: retry, ensurePart }
   }, [head, slim, store, snap])
 }

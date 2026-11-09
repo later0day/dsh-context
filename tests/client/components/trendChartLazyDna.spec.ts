@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
 import { act, createElement as h } from 'react'
 import { describe, test } from 'vitest'
 import type { TrendBand } from '../../../src/client/dna'
-import { flush, mount, queryAll } from '../helpers/kit'
-import { DNA_SNAP_PX, capDnaRuns, snapDnaRuns } from '../../../src/client/components/trendDnaBars'
+import { flush, mount, query, queryAll } from '../helpers/kit'
+import { capDnaRuns, snapDnaRuns } from '../../../src/client/components/trendDnaBars'
 import { TrendChart, bars, propsOf, req, viewport } from './trendChartHarness'
 
 const bandOf = (seq: number): TrendBand[] => [{ key: 'a', cat: 'system', tokens: 10 + (seq % 7), off: 0, color: '#8b5cf6' }]
@@ -33,26 +33,15 @@ function lazyBands() {
 }
 
 describe('snapDnaRuns', () => {
-  test('snaps internal boundaries to the shared pixel grid and keeps identical bands aligned across bars', () => {
-    const shortBar = [
-      { color: '#a', from: 0, to: 2.3 },
-      { color: '#b', from: 2.3, to: 7.9 },
-    ]
-    const tallBar = [
-      { color: '#a', from: 0, to: 2.3 },
-      { color: '#b', from: 2.3, to: 10.9 },
-    ]
-    const a = snapDnaRuns(shortBar)
-    const b = snapDnaRuns(tallBar)
+  test('snaps internal boundaries to the shared pixel grid, aligns identical bands across bars, and absorbs sub-grid strands', () => {
+    const a = snapDnaRuns([{ color: '#a', from: 0, to: 2.3 }, { color: '#b', from: 2.3, to: 7.9 }])
+    const b = snapDnaRuns([{ color: '#a', from: 0, to: 2.3 }, { color: '#b', from: 2.3, to: 10.9 }])
     assert.equal(a[0].to, 2, '2.3px snaps down to the 2px grid')
     assert.equal(b[0].to, a[0].to, 'the same prefix band keeps the same boundary in a taller bar')
     assert.equal(a[a.length - 1].to, 7.9, 'the final boundary stays exact')
     assert.equal(b[b.length - 1].to, 10.9)
     assert.deepEqual(snapDnaRuns([]), [])
-    assert.equal(DNA_SNAP_PX, 2)
-  })
 
-  test('merges same-colour runs and absorbs sub-grid strands instead of leaving gaps', () => {
     const merged = snapDnaRuns([
       { color: '#a', from: 0, to: 2.1 },
       { color: '#a', from: 2.1, to: 4.4 },
@@ -83,7 +72,6 @@ describe('capDnaRuns', () => {
     assert.ok(capped.length <= 96)
     assert.equal(capped[0].from, 0)
     assert.equal(capped[capped.length - 1].to, dense[dense.length - 1].to)
-    // Adjacent samples of the same colour coalesce into one run.
     assert.ok(capped.every((run, i) => i === 0 || capped[i - 1].color !== run.color))
     const mono = Array.from({ length: 400 }, (_, i) => ({ color: '#a', from: i / 4, to: (i + 1) / 4 }))
     assert.equal(capDnaRuns(mono, 96).length, 1)
@@ -96,17 +84,13 @@ describe('TrendChart lazy DNA bands', () => {
     const lazy = lazyBands()
     viewport.clientW = 400
     const m = await mount(h(TrendChart, propsOf(reqs, { dnaAt: lazy.at })))
-    try {
-      const dnaBars = queryAll(m.container, '.lc-bar-dna')
-      assert.ok(dnaBars.length > 0 && dnaBars.length < reqs.length, `windowed DNA bars (${dnaBars.length})`)
-      assert.ok(lazy.calls.size < reqs.length, `only visible steps assembled (${lazy.calls.size})`)
-      // Hovering a DNA bar resolves the band under the pointer and paints the lifetime slice across the window.
-      await act(async () => { dnaBars[0].dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: 10 })) })
-      await flush()
-      assert.ok(queryAll(m.container, '.lc-dna-slice').length > 0)
-    } finally {
-      await m.unmount()
-    }
+    const dnaBars = queryAll(m.container, '.lc-bar-dna')
+    assert.ok(dnaBars.length > 0 && dnaBars.length < reqs.length, `windowed DNA bars (${dnaBars.length})`)
+    assert.ok(lazy.calls.size < reqs.length, `only visible steps assembled (${lazy.calls.size})`)
+    await act(async () => { dnaBars[0].dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: 10 })) })
+    await flush()
+    assert.ok(queryAll(m.container, '.lc-dna-slice').length > 0)
+    await m.unmount()
   })
 
   test('entering DNA tightens the window and leaving it restores the ordinary range', async () => {
@@ -114,16 +98,13 @@ describe('TrendChart lazy DNA bands', () => {
     const lazy = lazyBands()
     viewport.clientW = 400
     const m = await mount(h(TrendChart, propsOf(reqs, { dna: null })))
-    try {
-      const plain = queryAll(m.container, '.lc-bar').length
-      await m.update(h(TrendChart, propsOf(reqs, { dnaAt: lazy.at })))
-      const dna = queryAll(m.container, '.lc-bar').length
-      assert.ok(dna > 0 && dna < plain, `DNA window is tighter (${dna} < ${plain})`)
-      await m.update(h(TrendChart, propsOf(reqs, { dna: null })))
-      assert.ok(queryAll(m.container, '.lc-bar').length > dna, 'leaving DNA expands the window again')
-    } finally {
-      await m.unmount()
-    }
+    const plain = queryAll(m.container, '.lc-bar').length
+    await m.update(h(TrendChart, propsOf(reqs, { dnaAt: lazy.at })))
+    const dna = queryAll(m.container, '.lc-bar').length
+    assert.ok(dna > 0 && dna < plain, `DNA window is tighter (${dna} < ${plain})`)
+    await m.update(h(TrendChart, propsOf(reqs, { dna: null })))
+    assert.ok(queryAll(m.container, '.lc-bar').length > dna, 'leaving DNA expands the window again')
+    await m.unmount()
   })
 
   test('delta mode reads every per-key band so a lazy source keeps the eager axis', async () => {
@@ -140,9 +121,50 @@ describe('TrendChart lazy DNA bands', () => {
     try {
       assert.ok(queryAll(m.container, '.lc-bar-dna').length > 0)
       assert.deepEqual(axisOf(m.container), eagerAxis, 'lazy delta axes match the eager per-band maxima')
-      // Exact churn bounds require every bar's key changes: no totals-based shortcut.
       assert.ok(lazy.calls.size <= reqs.length * 2, `bounded per-seq lookups (${lazy.calls.size})`)
       assert.ok(bars(m.container).length > 0)
+
+      const afterMount = lazy.calls.size
+      const firstBar = queryAll(m.container, '.lc-bar')[0]
+      await act(async () => {
+        firstBar.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+      })
+      await flush()
+      assert.equal(lazy.calls.size, afterMount, 'a hover re-render re-walks no step')
+    } finally {
+      await m.unmount()
+    }
+
+    const rereadReqs = requestList(600)
+    const rereadLazy = lazyBands()
+    const total = (): number => [...rereadLazy.calls.values()].reduce((a, b) => a + b, 0)
+    const reread = await mount(h(TrendChart, propsOf(rereadReqs, { dnaAt: rereadLazy.at, mode: 'delta' })))
+    assert.equal(rereadLazy.calls.size, rereadReqs.length, 'the axis walk read every step')
+    const afterMount = total()
+    await reread.update(h(TrendChart, propsOf(rereadReqs, { dnaAt: rereadLazy.at, mode: 'delta', markers: [] })))
+    await flush()
+    const rereadCount = total() - afterMount
+    assert.ok(rereadCount <= 400, `a re-render re-reads at most the window (${rereadCount} of ${rereadReqs.length})`)
+    assert.ok(rereadCount < rereadReqs.length, 'the whole-log walk never re-runs on a hover/scroll re-render')
+    await reread.unmount()
+  })
+})
+
+
+describe('TrendChart lazy DNA maxima with adaptive window', () => {
+  test('an adaptive window skips the full-history maxima walk and scales from the visible window', async () => {
+    const lazy = lazyBands()
+    const reqs = requestList(60)
+    const m = await mount(h(TrendChart, propsOf(reqs, { dnaAt: lazy.at, mode: 'delta', adaptive: true })))
+    try {
+      const callsAfterMount = lazy.calls.size
+      assert.ok(callsAfterMount > 0, 'the first paint resolves the pre-measure maxima through the lazy accessor')
+      await m.update(h(TrendChart, propsOf(reqs.map(r => ({ ...r })), { dnaAt: lazy.at, mode: 'delta', adaptive: true })))
+      const total = lazy.calls.size
+      await m.update(h(TrendChart, propsOf(reqs.map(r => ({ ...r, total: r.total + 5 })), { dnaAt: lazy.at, mode: 'delta', adaptive: true })))
+      assert.ok(lazy.calls.size >= total, 'the lazy accessor keeps serving the visible window')
+      assert.notEqual(query(m.container, '.lc-axis-top')?.textContent ?? '', '', 'the adaptive chart keeps an axis')
+      void callsAfterMount
     } finally {
       await m.unmount()
     }

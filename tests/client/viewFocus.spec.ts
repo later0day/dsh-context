@@ -1,19 +1,16 @@
-// viewFocus (src/client/viewFocus.ts) — the chat→Context jump relay, the sidebar-tab opener, and the
-// conversation-tab activation against a real jsdom tab bar.
-
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
-import { activateViewTab, openContextSidebar, requestContextFocus, subscribeContextFocus, takeContextFocus } from '../../src/client/viewFocus'
+import { act, createElement as h } from 'react'
+import { activateViewTab, currentFleetMemberFocus, openContextSidebar, requestContextFocus, requestFleetMemberFocus, subscribeContextFocus, takeContextFocus, useFleetMemberFocus } from '../../src/client/viewFocus'
+import { disposeRetention } from '../../src/client/retention'
 import { asClientCtx, TestClientCtx } from './helpers/harness'
+import { mount } from './helpers/kit'
 
 describe('context focus relay', () => {
-  test('one request survives until taken, then the map entry is consumed', () => {
+  test('one request survives until taken; a fresh request replaces it and sessions are isolated', () => {
     requestContextFocus('sv-relay', 42)
     assert.equal(takeContextFocus('sv-relay'), 42)
     assert.equal(takeContextFocus('sv-relay'), null, 'one-shot: a second take finds nothing')
-  })
-
-  test('a fresh request replaces an unconsumed one; sessions are isolated', () => {
     requestContextFocus('sv-race', 7)
     requestContextFocus('sv-race', 9)
     assert.equal(takeContextFocus('sv-race'), 9, 'the latest click wins')
@@ -41,7 +38,6 @@ describe('context focus subscription', () => {
   test('a listener unsubscribing another mid-notify skips it (later records do not re-run it)', () => {
     let late = 0
     let offLate: () => void = () => {}
-    // Insertion order matters: the remover runs first and detaches the victim before Set iteration reaches it.
     const offRemover = subscribeContextFocus(() => { offLate() })
     offLate = subscribeContextFocus(() => { late++ })
     requestContextFocus('sv-mid', 1)
@@ -54,14 +50,12 @@ describe('context focus subscription', () => {
 })
 
 describe('openContextSidebar', () => {
-  test('opens the registered kind through the sidebarRight face', () => {
+  test('opens the registered kind through the sidebarRight face; absent or verb-less faces report false', () => {
     const opened: string[] = []
     const ctx = new TestClientCtx({ services: { sidebarRight: { openTab: (kind: string) => { opened.push(kind) } } } })
     assert.equal(openContextSidebar(asClientCtx(ctx)), true)
     assert.deepEqual(opened, ['dsh-context'])
-  })
 
-  test('no service, or a face without the verb, reports false', () => {
     assert.equal(openContextSidebar(asClientCtx(new TestClientCtx())), false)
     assert.equal(openContextSidebar(asClientCtx(new TestClientCtx({ services: { sidebarRight: {} } }))), false)
     assert.equal(openContextSidebar(asClientCtx(new TestClientCtx({ services: { sidebarRight: null } }))), false)
@@ -104,22 +98,70 @@ describe('activateViewTab', () => {
       assert.equal(context.__clicks(), 1)
       assert.equal(chat.__clicks(), 0)
 
-      // Already-active: reported success without a redundant click.
       context.setAttribute('aria-selected', 'true')
       assert.equal(activateViewTab('Context'), true)
       assert.equal(context.__clicks(), 1)
 
-      // Whitespace-padded label text still matches the trimmed comparison.
       context.setAttribute('aria-selected', 'false')
       context.textContent = '  Context '
       assert.equal(activateViewTab('Context'), true)
       assert.equal(context.__clicks(), 2)
 
-      // No tab carries the label → nothing clicked, false.
       assert.equal(activateViewTab('Missing'), false)
       assert.equal(trajectory.__clicks(), 0)
     } finally {
       bar.remove()
+    }
+  })
+})
+
+describe('focus relays stay bounded and release on dispose', () => {
+  test('the pending focus map keeps only its newest sixteen sessions', () => {
+    for (let i = 0; i < 17; i++) requestContextFocus('focus-cap-' + i, i)
+    assert.equal(takeContextFocus('focus-cap-0'), null)
+    assert.equal(takeContextFocus('focus-cap-16'), 16)
+  })
+
+  test('the member focus map keeps only its newest eight sessions', () => {
+    for (let i = 0; i < 9; i++) requestFleetMemberFocus('member-cap-' + i, 'm' + i)
+    assert.equal(currentFleetMemberFocus('member-cap-0'), null)
+    assert.equal(currentFleetMemberFocus('member-cap-8'), 'm8')
+  })
+
+  test('dispose clears pending relays and listeners', () => {
+    let hits = 0
+    subscribeContextFocus(() => { hits++ })
+    requestContextFocus('focus-dispose', 3)
+    requestFleetMemberFocus('member-dispose', 'm')
+    disposeRetention()
+    assert.equal(takeContextFocus('focus-dispose'), null)
+    assert.equal(currentFleetMemberFocus('member-dispose'), null)
+    const before = hits
+    requestContextFocus('focus-after-1', 1)
+    requestContextFocus('focus-after-2', 2)
+    assert.equal(hits, before, 'the disposed listeners hear nothing')
+    takeContextFocus('focus-after-1')
+    takeContextFocus('focus-after-2')
+  })
+})
+
+describe('useFleetMemberFocus', () => {
+  test('follows the recorded member and detaches on a session change', async () => {
+    const box: { current: string | null } = { current: null }
+    function Probe(props: { sessionId?: string }): null {
+      box.current = useFleetMemberFocus(props.sessionId)
+      return null
+    }
+    const m = await mount(h(Probe, { sessionId: 'member-session' }))
+    try {
+      assert.equal(box.current, null, 'no focus recorded yet')
+      await act(async () => { requestFleetMemberFocus('member-session', 'm1') })
+      assert.equal(box.current, 'm1')
+      await m.update(h(Probe, { sessionId: '' }))
+      await act(async () => { requestFleetMemberFocus('member-session', 'm2') })
+      assert.equal(box.current, 'm1', 'the detached probe hears nothing')
+    } finally {
+      await m.unmount()
     }
   })
 })

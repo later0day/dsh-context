@@ -1,22 +1,30 @@
-// fleetModel.ts — the shared family model seat and the fleet-detail read ledger.
-
 import { act, createElement as h } from 'react'
 import assert from 'node:assert/strict'
-import { describe, test, vi } from 'vitest'
+import { afterEach, describe, test, vi } from 'vitest'
 import {
-  commsStaleOf,
   teamOfSnapshot,
-  useFleetDetails,
   useFleetModel,
-  type FleetDetailState,
   type FleetModel,
 } from '../../src/client/fleetModel'
-import { FleetDetailCache } from '../../src/client/fleetDetail'
+import { invalidate, resetInvalidations } from '../../src/client/invalidation'
 import type { AgentNode } from '../../src/client/agentTree'
-import type { FleetDetail } from '../../src/shared/types'
+import type { ContextTimeline } from '../../src/shared/types'
 import { TestClientCtx, asClientCtx } from './helpers/harness'
-import { flush, mount } from './helpers/kit'
+import { flush, mount, until } from './helpers/kit'
 import { makeAgentHeads } from '../../src/client/agentHeads'
+
+function headTimeline(total: number, over: Partial<ContextTimeline> = {}): ContextTimeline {
+  return {
+    ok: true,
+    current: { system: 0, tools: 0, user: total, inject: 0, skill: 0, assistant: 0, tool: 0, total },
+    requests: [],
+    events: [],
+    nodes: [],
+    droppedNodes: 0,
+    archive: [],
+    ...over,
+  }
+}
 
 function nodeOf(id: string, over: Partial<AgentNode> = {}): AgentNode {
   return {
@@ -26,11 +34,18 @@ function nodeOf(id: string, over: Partial<AgentNode> = {}): AgentNode {
   }
 }
 
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  resetInvalidations()
+})
+
 describe('teamOfSnapshot', () => {
   const team = { members: [{ id: 'root', name: 'lead', role: 'lead', phase: 'active' }], tasks: [] }
 
   test('the first carrying family row wins — DFS pre-order starts at the root', () => {
-    const forest = { nodes: [nodeOf('root'), nodeOf('kid', { parentId: 'root' })], edges: [], overflow: 0, solo: false }
+    const forest = { nodes: [nodeOf('root'), nodeOf('kid', { parentId: 'root' })], edges: [], solo: false }
     const snapshot = {
       byId: {
         kid: { projectionValues: { agentTeam: { members: [{ id: 'kid', name: 'k', role: 'lead', phase: 'active' }], tasks: [] } } },
@@ -41,7 +56,7 @@ describe('teamOfSnapshot', () => {
   })
 
   test('degrades: no forest, no byId, no carrier row, or a malformed value', () => {
-    const forest = { nodes: [nodeOf('root')], edges: [], overflow: 0, solo: true }
+    const forest = { nodes: [nodeOf('root')], edges: [], solo: true }
     assert.equal(teamOfSnapshot(null, forest), null)
     assert.equal(teamOfSnapshot({}, forest), null)
     assert.equal(teamOfSnapshot({ byId: null }, forest), null)
@@ -52,22 +67,8 @@ describe('teamOfSnapshot', () => {
   })
 })
 
-describe('commsStaleOf', () => {
-  test('a landed read behind the row stamp is stale', () => {
-    const landed = new Map<string, { detail: FleetDetail | null; updatedAt: number }>([
-      ['a', { detail: null, updatedAt: 5 }],
-    ])
-    assert.equal(commsStaleOf([nodeOf('a', { updatedAt: 6 })], landed), true)
-    assert.equal(commsStaleOf([nodeOf('a', { updatedAt: 5 })], landed), false)
-    assert.equal(commsStaleOf([nodeOf('b', { updatedAt: 99 })], landed), false)
-    assert.equal(commsStaleOf([], landed), false)
-  })
-})
-
-/** A probe component exposing the hook's value to the test. */
 describe('useFleetModel', () => {
   function sessionsFace(byId: Record<string, unknown>, refreshed: string[]) {
-    // The snapshot object must stay reference-stable across reads: useSyncExternalStore loops on a fresh one.
     const snapshot = { byId }
     return {
       list: {
@@ -115,7 +116,210 @@ describe('useFleetModel', () => {
     const m = await mount(h(Probe))
     assert.equal(box.current?.forest?.nodes.length, 2)
     assert.equal(box.current?.team?.members[0]?.name, 'lead')
+    assert.equal(box.current?.titles.get('s1'), 'Main')
     assert.deepEqual(refreshed, ['s1'])
+    await m.unmount()
+    ctx.dispose()
+  })
+
+  test('a wide fleet asks every child once through the batch head channel and keeps the landed ledger', async () => {
+    const byId: Record<string, unknown> = { s1: { displayTitle: 'Main', running: true, updatedAt: 1 } }
+    for (let i = 0; i < 130; i++) byId[`kid-${i}`] = { parentId: 's1', origin: 'subagent', running: false, updatedAt: 2 }
+    const ctx = new TestClientCtx({ services: { sessions: sessionsFace(byId, []) } })
+    const batches: string[][] = []
+    const heads = {
+      headOf: (id: string) => {
+        batches.push([id])
+        return Promise.resolve(headTimeline(5))
+      },
+      headOfMany: (ids: readonly string[]) => {
+        batches.push([...ids])
+        return Promise.resolve(new Map(ids.map(id => [id, headTimeline(5)] as const)))
+      },
+    }
+    const box: { current: FleetModel | null } = { current: null }
+    function Probe(): null {
+      box.current = useFleetModel(asClientCtx(ctx), heads, 's1', undefined, true)
+      return null
+    }
+    const m = await mount(h(Probe))
+    await until(() => box.current?.forest?.nodes.length === 131, 'the whole family never landed')
+    assert.equal(batches.length, 1, 'one batch read covers the fleet')
+    await flush()
+    await m.unmount()
+    ctx.dispose()
+  })
+
+  test('a failed head batch retries on the next snapshot change; an absent head re-asks only when its stamp advances', async () => {
+    let snapshot: { byId: Record<string, unknown> } = {
+      byId: {
+        s1: { displayTitle: 'Main', running: true, updatedAt: 1 },
+        kid: { parentId: 's1', origin: 'subagent', running: false, updatedAt: 2 },
+        kid2: { parentId: 's1', origin: 'subagent', running: false, updatedAt: 2 },
+      },
+    }
+    const listeners = new Set<() => void>()
+    const ctx = new TestClientCtx({
+      services: {
+        sessions: {
+          list: {
+            getSnapshot: (): unknown => snapshot,
+            subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } },
+          },
+        },
+      },
+    })
+    let calls = 0
+   let fail = true
+    const heads = {
+      headOf: (): Promise<ContextTimeline | null> => {
+        calls += 1
+        return Promise.resolve(null)
+      },
+      headOfMany: (): Promise<Map<string, ContextTimeline>> => {
+        calls += 1
+        if (fail) return Promise.reject(new Error('down'))
+        return Promise.resolve(new Map())
+      },
+    }
+    const box: { current: FleetModel | null } = { current: null }
+    function Probe(): null {
+      box.current = useFleetModel(asClientCtx(ctx), heads, 's1', undefined, true)
+      return null
+    }
+    const m = await mount(h(Probe))
+    await until(() => calls === 1, 'the first batch read never fired')
+    fail = false
+    await act(async () => {
+      snapshot = { byId: { ...snapshot.byId, kid: { parentId: 's1', origin: 'subagent', running: false, updatedAt: 3 } } }
+      for (const fn of listeners) fn()
+    })
+    await until(() => calls === 2, 'the failed batch never retried')
+    await flush()
+    await act(async () => {
+      snapshot = { byId: { ...snapshot.byId, kid: { parentId: 's1', origin: 'subagent', running: false, updatedAt: 4 } } }
+      for (const fn of listeners) fn()
+    })
+    await until(() => calls >= 3, 'the advanced child stamp re-asks the heads')
+    await m.unmount()
+    ctx.dispose()
+  })
+
+  test('an unrelated invalidation is ignored and a landed zero-token head is not re-asked on a version bump', async () => {
+    const byId: Record<string, unknown> = {
+      s1: { displayTitle: 'Main', running: true, updatedAt: 1 },
+      kid: { parentId: 's1', origin: 'subagent', running: false, updatedAt: 2 },
+    }
+    const ctx = new TestClientCtx({ services: { sessions: sessionsFace(byId, []) } })
+    const heads = { headOf: () => Promise.resolve(null), headOfMany: undefined as never }
+    const box: { current: FleetModel | null } = { current: null }
+    function Probe(): null {
+      box.current = useFleetModel(asClientCtx(ctx), heads, 's1', undefined, true)
+      return null
+    }
+    const reads = vi.spyOn(heads, 'headOf')
+    const m = await mount(h(Probe))
+    await until(() => reads.mock.calls.length === 1, 'the absent head was never read')
+    await flush()
+    await act(async () => { invalidate('overview') })
+    await act(async () => { invalidate('heads', { sessionId: 'other' }) })
+    await flush()
+    assert.equal(reads.mock.calls.length, 1, 'an absent head with an unchanged stamp is not re-read')
+    await m.unmount()
+    ctx.dispose()
+  })
+
+  test('a pricing invalidation refreshes the heads whose cost read is missing or not ready', async () => {
+    const byId: Record<string, unknown> = {
+      s1: { displayTitle: 'Main', running: true, updatedAt: 1 },
+      a: { parentId: 's1', origin: 'subagent', running: false, updatedAt: 2 },
+      b: { parentId: 's1', origin: 'subagent', running: false, updatedAt: 2 },
+    }
+    const ctx = new TestClientCtx({ services: { sessions: sessionsFace(byId, []) } })
+    const heads = {
+      headOf: (id: string) => Promise.resolve(headTimeline(5, id === 'a' ? { costRead: { usd: 0.2, ready: true } } : {})),
+      headOfMany: (ids: readonly string[]) => Promise.resolve(new Map(ids.map(id => [
+        id,
+        headTimeline(5, id === 'a' ? { costRead: { usd: 0.2, ready: true } } : {}),
+      ] as const))),
+    }
+    const box: { current: FleetModel | null } = { current: null }
+    function Probe(): null {
+      box.current = useFleetModel(asClientCtx(ctx), heads, 's1', undefined, true)
+      return null
+    }
+    const m = await mount(h(Probe))
+    await until(() => box.current?.forest?.nodes.length === 3, 'the family heads never landed')
+    const batches = vi.spyOn(heads, 'headOfMany')
+    const singles = vi.spyOn(heads, 'headOf')
+    await act(async () => { invalidate('pricing') })
+    await until(() => singles.mock.calls.length === 1, 'the stale-cost head never re-asked')
+    assert.deepEqual(singles.mock.calls[0], ['b'])
+    assert.equal(batches.mock.calls.length, 0, 'a single stale head reads alone')
+    await act(async () => { invalidate('heads', { sessionId: 'a' }) })
+    await flush()
+    await act(async () => { invalidate('heads') })
+    await flush()
+    await m.unmount()
+    ctx.dispose()
+  })
+
+  test('an absent single head read settles without landing and retries when its stamp advances', async () => {
+    let snapshot: { byId: Record<string, unknown> } = {
+      byId: {
+        s1: { displayTitle: 'Main', running: true, updatedAt: 1 },
+        kid: { parentId: 's1', origin: 'subagent', running: false, updatedAt: 2 },
+      },
+    }
+    const listeners = new Set<() => void>()
+    const ctx = new TestClientCtx({
+      services: {
+        sessions: {
+          list: {
+            getSnapshot: (): unknown => snapshot,
+            subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } },
+          },
+        },
+      },
+    })
+    const reads = vi.fn(() => Promise.resolve(null))
+    const heads = { headOf: reads }
+    function Probe(): null {
+      useFleetModel(asClientCtx(ctx), heads, 's1', undefined, true)
+      return null
+    }
+    const m = await mount(h(Probe))
+    await until(() => reads.mock.calls.length === 1, 'the absent head was never read')
+    await flush()
+    snapshot = { byId: { ...snapshot.byId, kid: { parentId: 's1', origin: 'subagent', running: false, updatedAt: 3 } } }
+    await act(async () => { for (const fn of listeners) fn() })
+    await until(() => reads.mock.calls.length === 2, 'the advanced stamp never re-read the absent head')
+    await m.unmount()
+    ctx.dispose()
+  })
+
+  test('switching sessions reads each session\'s own child and reuses the landed head on return', async () => {
+    const byId: Record<string, unknown> = {
+      s1: { displayTitle: 'One', running: true, updatedAt: 1 },
+      s2: { displayTitle: 'Two', running: true, updatedAt: 1 },
+      kid: { parentId: 's1', origin: 'subagent', running: false, updatedAt: 2 },
+      kid2: { parentId: 's2', origin: 'subagent', running: false, updatedAt: 2 },
+    }
+    const ctx = new TestClientCtx({ services: { sessions: sessionsFace(byId, []) } })
+    const calls: string[] = []
+    const heads = { headOf: (id: string) => { calls.push(id); return Promise.resolve(headTimeline(5)) } }
+    function Probe(props: { id: string }): null {
+      useFleetModel(asClientCtx(ctx), heads, props.id, undefined, true)
+      return null
+    }
+    const m = await mount(h(Probe, { id: 's1' }))
+    await until(() => calls.length === 1, 'the first session child read never fired')
+    await m.update(h(Probe, { id: 's2' }))
+    await until(() => calls.length === 2, 'the second session child read never fired')
+    assert.deepEqual(calls, ['kid', 'kid2'])
+    await m.update(h(Probe, { id: 's1' }))
+    await flush()
+    assert.deepEqual(calls, ['kid', 'kid2'], 'the already-landed head serves the return')
     await m.unmount()
     ctx.dispose()
   })
@@ -140,217 +344,5 @@ describe('useFleetModel', () => {
     await flush()
     await m.unmount()
     ctx.dispose()
-  })
-})
-
-describe('useFleetDetails', () => {
-  function probeDetails(cache: FleetDetailCache): { box: { current: FleetDetailState | null }; Probe: () => null } {
-    const box: { current: FleetDetailState | null } = { current: null }
-    function Probe(): null {
-      box.current = useFleetDetails(cache)
-      return null
-    }
-    return { box, Probe }
-  }
-
-  function detailCache(serve: (id: string) => FleetDetail | null): FleetDetailCache {
-    const cache = new FleetDetailCache()
-    vi.spyOn(cache, 'fetch').mockImplementation((id: string) => Promise.resolve(serve(id)))
-    return cache
-  }
-
-  test('request lands the detail, dedupes by stamp, and pending drains', async () => {
-    const cache = detailCache(id => ({ messages: [], truncated: false, initialPrompt: `prompt of ${id}` }))
-    const { box, Probe } = probeDetails(cache)
-    const m = await mount(h(Probe))
-    const state = box.current as FleetDetailState
-
-    act(() => { state.request('a', 1) })
-    assert.equal(box.current?.pending.has('a'), true)
-    await act(async () => {})
-    assert.equal(box.current?.pending.size, 0)
-    assert.equal(box.current?.landed.get('a')?.detail?.initialPrompt, 'prompt of a')
-
-    // Same or older stamp: no new read.
-    act(() => { state.request('a', 1) })
-    assert.equal(box.current?.pending.size, 0)
-    // A newer stamp refetches.
-    act(() => { state.request('a', 2) })
-    await act(async () => {})
-    assert.equal(box.current?.landed.get('a')?.updatedAt, 2)
-    await m.unmount()
-  })
-
-  test('two in-flight reads for one session settle into one pending drain', async () => {
-    const cache = new FleetDetailCache()
-    const releases: Array<(d: FleetDetail | null) => void> = []
-    vi.spyOn(cache, 'fetch').mockImplementation(() => new Promise((resolve) => { releases.push(resolve) }))
-    const { box, Probe } = probeDetails(cache)
-    const m = await mount(h(Probe))
-    const state = box.current as FleetDetailState
-
-    // A fresher stamp mid-flight re-reads but never double-marks pending.
-    act(() => { state.request('a', 1) })
-    act(() => { state.request('a', 2) })
-    assert.equal(box.current?.pending.size, 1)
-    // The older read lands first: pending drains (the newer read is untracked by design — its
-    // landing settles the ledger line), then the newer read's landing takes the newer stamp.
-    await act(async () => { releases[0](null) })
-    assert.equal(box.current?.pending.size, 0)
-    assert.equal(box.current?.landed.get('a')?.updatedAt, 1)
-    await act(async () => { releases[1]({ messages: [], truncated: false }) })
-    assert.equal(box.current?.pending.size, 0)
-    assert.equal(box.current?.landed.get('a')?.updatedAt, 2)
-    await m.unmount()
-  })
-
-  test('scan requests every node; refresh re-reads them', async () => {
-    let reads = 0
-    const cache = new FleetDetailCache()
-    vi.spyOn(cache, 'fetch').mockImplementation(() => {
-      reads += 1
-      return Promise.resolve(null)
-    })
-    const { box, Probe } = probeDetails(cache)
-    const m = await mount(h(Probe))
-    const state = box.current as FleetDetailState
-    const nodes = [nodeOf('a', { updatedAt: 1 }), nodeOf('b', { updatedAt: 1 })]
-
-    act(() => { state.scan(nodes) })
-    await act(async () => {})
-    assert.equal(reads, 2)
-    assert.equal(box.current?.landed.size, 2)
-
-    act(() => { box.current?.refresh(nodes) })
-    await act(async () => {})
-    assert.equal(reads >= 3, true)
-    await m.unmount()
-  })
-
-  test('a landing after unmount updates nothing', async () => {
-    const cache = new FleetDetailCache()
-    let release: (d: FleetDetail | null) => void = () => {}
-    vi.spyOn(cache, 'fetch').mockImplementation(() => new Promise((resolve) => { release = resolve }))
-    const { box, Probe } = probeDetails(cache)
-    const m = await mount(h(Probe))
-    const state = box.current as FleetDetailState
-    act(() => { state.request('a', 1) })
-    await m.unmount()
-    release(null)
-    await flush()
-    assert.equal(box.current?.landed.size, 0)
-  })
-
-  test('a full landing after unmount updates nothing', async () => {
-    const cache = new FleetDetailCache()
-    let release: (d: FleetDetail | null) => void = () => {}
-    vi.spyOn(cache, 'fetch').mockImplementation((_id: string, _stamp: number, full?: boolean) => {
-      if (full !== true) return Promise.resolve(null)
-      return new Promise((resolve) => { release = resolve })
-    })
-    const { box, Probe } = probeDetails(cache)
-    const m = await mount(h(Probe))
-    const state = box.current as FleetDetailState
-    act(() => { state.requestFull('a') })
-    await m.unmount()
-    release({ messages: [], truncated: false, lastReply: { time: 1, text: 'late' } })
-    await flush()
-    assert.equal(box.current?.fullLanded.size, 0)
-  })
-
-  test('requestFull reads the full ledger once per session and lands fullLanded', async () => {
-    let fullReads = 0
-    const cache = new FleetDetailCache()
-    vi.spyOn(cache, 'fetch').mockImplementation((_id: string, _stamp: number, full?: boolean) => {
-      if (full === true) {
-        fullReads += 1
-        return Promise.resolve({ messages: [], truncated: false, lastReply: { time: 1, text: 'FULL' } })
-      }
-      return Promise.resolve(null)
-    })
-    const { box, Probe } = probeDetails(cache)
-    const m = await mount(h(Probe))
-    const state = box.current as FleetDetailState
-
-    act(() => { state.requestFull('a') })
-    assert.equal(box.current?.fullPending.has('a'), true)
-    // A second ask is deduped to the same single read.
-    act(() => { state.requestFull('a') })
-    await act(async () => {})
-    assert.equal(fullReads, 1)
-    assert.equal(box.current?.fullPending.size, 0)
-    assert.equal(box.current?.fullLanded.get('a')?.lastReply?.text, 'FULL')
-    assert.equal(box.current?.landed.size, 0, 'the excerpt ledger stays untouched')
-    await m.unmount()
-  })
-
-  test('a read serving nothing lands null once and never re-reads', async () => {
-    let fullReads = 0
-    const cache = new FleetDetailCache()
-    vi.spyOn(cache, 'fetch').mockImplementation((_id: string, _stamp: number, full?: boolean) => {
-      if (full !== true) return Promise.resolve(null)
-      fullReads += 1
-      // A transport failure settles as null inside the cache (its own catch); the hook's
-      // contract is a total promise.
-      return Promise.resolve(null)
-    })
-    const { box, Probe } = probeDetails(cache)
-    const m = await mount(h(Probe))
-    const state = box.current as FleetDetailState
-    act(() => { state.requestFull('a') })
-    await act(async () => {})
-    assert.equal(box.current?.fullLanded.get('a') ?? null, null, 'the absence path lands as null')
-    assert.equal(box.current?.fullPending.size, 0)
-    act(() => { state.requestFull('a') })
-    await act(async () => {})
-    assert.equal(fullReads, 1, 'a settled ask is deduped even when it read nothing')
-    await m.unmount()
-  })
-
-  test('a later full landing replaces the first; the pending set drains exactly once', async () => {
-    const releases: Array<(d: FleetDetail | null) => void> = []
-    const cache = new FleetDetailCache()
-    vi.spyOn(cache, 'fetch').mockImplementation((_id: string, _stamp: number, full?: boolean) => {
-      if (full !== true) return Promise.resolve(null)
-      return new Promise((resolve) => { releases.push(resolve) })
-    })
-    const { box, Probe } = probeDetails(cache)
-    const m = await mount(h(Probe))
-    const state = box.current as FleetDetailState
-
-    // The excerpt arms the stamp the full read rides; the fold's read spells from it.
-    act(() => { state.request('a', 5) })
-    await act(async () => {})
-    act(() => { state.requestFull('a') })
-    // A refresh released the ledger line mid-flight; the next unfold asks again — two reads
-    // in flight, one pending mark.
-    act(() => { state.refresh([nodeOf('a', { updatedAt: 5 })]) })
-    act(() => { state.requestFull('a') })
-    assert.equal(releases.length, 2)
-    assert.equal(box.current?.fullPending.size, 1)
-
-    // Both flights settle on the SAME value (a cache-hit replay): the first landing writes the
-    // map; the second's identity bail-out writes nothing new.
-    const landed: FleetDetail = { messages: [], truncated: false, lastReply: { time: 1, text: 'first' } }
-    await act(async () => { releases[0]!(landed) })
-    assert.equal(box.current?.fullLanded.get('a')?.lastReply?.text, 'first')
-    assert.equal(box.current?.fullPending.size, 0, 'the first landing drains the set')
-    await act(async () => { releases[1]!(landed) })
-    assert.equal(box.current?.fullLanded.get('a')?.lastReply?.text, 'first')
-    assert.equal(box.current?.fullPending.size, 0)
-    await m.unmount()
-  })
-
-  test('refresh drops both ledgers', async () => {
-    const cache = new FleetDetailCache()
-    const invalidated: string[] = []
-    vi.spyOn(cache, 'invalidate').mockImplementation(id => { invalidated.push(id) })
-    const { box, Probe } = probeDetails(cache)
-    const m = await mount(h(Probe))
-    const state = box.current as FleetDetailState
-    act(() => { state.requestFull('a') })
-    act(() => { state.refresh([nodeOf('a', { updatedAt: 1 })]) })
-    assert.deepEqual(invalidated, ['a'])
-    await m.unmount()
   })
 })

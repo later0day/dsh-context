@@ -27,7 +27,6 @@ async function mouseout(target: Element, relatedTarget: EventTarget | null): Pro
   await act(async () => { target.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget })) })
 }
 
-// React implements onFocus/onBlur (and their captures) over the bubbling focusin/focusout pair, so the specs drive those natively.
 async function focusIn(target: Element): Promise<void> {
   await act(async () => { target.dispatchEvent(new FocusEvent('focusin', { bubbles: true })) })
 }
@@ -36,7 +35,6 @@ async function blurOut(target: Element, relatedTarget: EventTarget | null): Prom
   await act(async () => { target.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget })) })
 }
 
-/** Pin an anchor's rect (jsdom's are all zero) so the measure pass exercises real geometry. */
 function pinRect(anchor: Element, rect: { left: number; top: number; width: number; height: number }): void {
   const { left, top, width, height } = rect
   Object.defineProperty(anchor, 'getBoundingClientRect', {
@@ -45,7 +43,6 @@ function pinRect(anchor: Element, rect: { left: number; top: number; width: numb
   })
 }
 
-/** A zone that counts its renders; its single anchor's tip can be rewritten by a test. */
 function CountingZone(props: { onRender: () => void }): ReactElement {
   props.onRender()
   const { zoneProps, bubble } = useHoverTip()
@@ -53,7 +50,6 @@ function CountingZone(props: { onRender: () => void }): ReactElement {
 }
 
 afterEach(() => {
-  // A leaked portal from a failed test never reaches the next one.
   bubble()?.remove()
 })
 
@@ -68,8 +64,6 @@ describe('useHoverTip', () => {
     assert.equal(el.textContent, 'tip A')
     assert.ok(el.className.includes('lc-tip') && el.className.includes('lc-hovertip'))
     assert.equal(el.style.opacity, '1', 'the measured pass revealed the bubble')
-    // Zero-rect jsdom geometry: side 'top' overflows (top < margin), so the
-    // bubble flips below and clamps to the viewport margin.
     assert.equal(el.style.left, '8px')
     assert.equal(el.style.top, '8px')
     assert.equal(a.getAttribute('aria-describedby'), 'lc-hovertip-bubble')
@@ -80,15 +74,13 @@ describe('useHoverTip', () => {
     await m.unmount()
   })
 
-  test('moving across the anchor subtree keeps the tip; switching anchors re-anchors without hiding', async () => {
+  test('moving across the anchor subtree keeps the tip, switching anchors re-anchors, and focus/blur mirror hover', async () => {
     const m = await mount(h(Zone))
     const a = query(m.container, '#a')
     const b = query(m.container, '#b')
     await mouseover(a)
     const shown = bubble()?.style.cssText
 
-    // Moving from the anchor onto its own child, and child events bubbling
-    // up: the same anchor keeps tip and measure (no hidden re-flash).
     await mouseover(query(m.container, '#a-child'))
     assert.equal(bubble()?.style.cssText, shown, 'same anchor keeps the measured spot')
     assert.equal(a.getAttribute('aria-describedby'), 'lc-hovertip-bubble')
@@ -99,13 +91,7 @@ describe('useHoverTip', () => {
     assert.equal(bubble()?.textContent, 'tip B')
     assert.equal(a.getAttribute('aria-describedby'), null, 'the old anchor released')
     assert.equal(b.getAttribute('aria-describedby'), 'lc-hovertip-bubble')
-    await m.unmount()
-  })
 
-  test('focus and blur mirror hover; blur into another anchor keeps the tip', async () => {
-    const m = await mount(h(Zone))
-    const a = query(m.container, '#a')
-    const b = query(m.container, '#b')
     await focusIn(a)
     assert.equal(bubble()?.textContent, 'tip A')
     await blurOut(a, b)
@@ -117,7 +103,7 @@ describe('useHoverTip', () => {
     await m.unmount()
   })
 
-  test('a zone scroll hides the tip; non-anchors and empty labels never show one', async () => {
+  test('a zone scroll or a viewport resize retracts the tip; non-anchors and empty labels never show one', async () => {
     const m = await mount(h(Zone))
     const a = query(m.container, '#a')
     await mouseover(query(m.container, '#plain'))
@@ -132,12 +118,7 @@ describe('useHoverTip', () => {
     })
     assert.equal(bubble(), null, 'any zone scroll retracts the bubble')
     assert.equal(a.getAttribute('aria-describedby'), null)
-    await m.unmount()
-  })
 
-  test('a viewport resize retracts the tip (every anchor just moved)', async () => {
-    const m = await mount(h(Zone))
-    const a = query(m.container, '#a')
     await mouseover(a)
     assert.ok(bubble() !== null)
     await act(async () => {
@@ -145,7 +126,6 @@ describe('useHoverTip', () => {
     })
     assert.equal(bubble(), null, 'the resize retracted the bubble')
     assert.equal(a.getAttribute('aria-describedby'), null)
-    // The listener went with it: a second resize reaches nothing to hide.
     await act(async () => {
       window.dispatchEvent(new Event('resize'))
     })
@@ -156,15 +136,11 @@ describe('useHoverTip', () => {
   test('the measure pass centers on the anchor, clamps horizontally, and flips a bottom tip that overflows', async () => {
     const m = await mount(h(Zone))
     const b = query(m.container, '#b')
-    // Side 'bottom', no overflow: below the anchor, centered (jsdom bubble
-    // measures 0×0, so the center lands on the anchor's own center).
     pinRect(b, { left: 100, top: 100, width: 20, height: 20 })
     await mouseover(b)
     assert.equal(bubble()?.style.left, '110px')
     assert.equal(bubble()?.style.top, '126px', 'anchor bottom + gap')
 
-    // Re-pin beyond the right edge and below the viewport: the left clamp and
-    // the bottom flip both engage (jsdom viewport is 1024×768).
     pinRect(b, { left: 2000, top: 740, width: 20, height: 20 })
     await mouseout(b, m.container)
     await mouseover(b)
@@ -173,60 +149,73 @@ describe('useHoverTip', () => {
     await m.unmount()
   })
 
-  test('a re-shown tip reuses its measurement while the inputs hold', async () => {
-    // A touch tap can hide then re-show the same anchor, rebuilding the tip object; keying the measure pass on
-    // identity would commit once per replay until React throws #185 (dsh-context#162).
+  test('hovering repaints only the bubble, and a re-shown tip reuses its measurement', async () => {
     let renders = 0
     const m = await mount(h(CountingZone, { onRender: () => { renders += 1 } }))
     const a = query(m.container, '#a')
     pinRect(a, { left: 100, top: 100, width: 40, height: 20 })
 
+    renders = 0
     await mouseover(a)
     assert.equal(bubble()?.style.left, '120px')
+    assert.equal(renders, 0, 'the zone never repaints for a hover')
 
     renders = 0
     await mouseout(a, m.container)
     assert.equal(bubble(), null)
-    assert.equal(renders, 1, 'hiding commits once')
+    assert.equal(renders, 0, 'hiding the bubble leaves the zone untouched')
 
-    renders = 0
     await mouseover(a)
     assert.equal(bubble()?.textContent, 'tip A')
     assert.equal(bubble()?.style.left, '120px', 'the measured spot is reused')
-    assert.equal(renders, 1, 'an equivalent tip does not re-measure')
 
-    // A genuinely moved anchor still measures again.
     pinRect(a, { left: 300, top: 100, width: 40, height: 20 })
     await mouseout(a, m.container)
     await mouseover(a)
     assert.equal(bubble()?.style.left, '320px')
 
-    // A relabelled anchor at the same geometry measures again: the bubble's width follows its label.
     a.setAttribute('data-lc-tip', 'tip A, longer')
     await mouseout(a, m.container)
-    renders = 0
     await mouseover(a)
     assert.equal(bubble()?.textContent, 'tip A, longer')
-    assert.equal(renders, 2, 'a relabelled tip re-measures (show + measure)')
+    assert.equal(bubble()?.style.left, '320px')
+
     await m.unmount()
   })
 
-  test('a hidden tip re-measures when the viewport it was clamped against changes', async () => {
-    let renders = 0
-    const m = await mount(h(CountingZone, { onRender: () => { renders += 1 } }))
+  test('a relabelled tip and a changed viewport both re-measure the bubble', async () => {
+    const m = await mount(h(Zone))
     const a = query(m.container, '#a')
-    pinRect(a, { left: 100, top: 100, width: 40, height: 20 })
-    await mouseover(a)
-    await mouseout(a, m.container)
-
-    const width = window.innerWidth
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width - 400 })
+    pinRect(a, { left: 600, top: 100, width: 40, height: 20 })
+    let widths = 0
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+      configurable: true,
+      get: () => { widths += 1; return 10 },
+    })
     try {
-      renders = 0
       await mouseover(a)
-      assert.equal(renders, 2, 'a changed viewport re-measures (show + measure)')
+      assert.equal(bubble()?.style.left, '615px')
+      widths = 0
+      await mouseout(a, m.container)
+      await mouseover(a)
+      assert.equal(widths, 0, 'an unchanged tip reuses its measurement')
+      a.setAttribute('data-lc-tip', 'tip A, longer')
+      await mouseout(a, m.container)
+      await mouseover(a)
+      assert.equal(widths, 1, 'a relabelled tip re-measures')
+      const width = window.innerWidth
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width - 400 })
+      try {
+        await mouseout(a, m.container)
+        await mouseover(a)
+        assert.equal(widths, 2, 'a changed viewport re-measures')
+        assert.equal(bubble()?.style.left, '606px', 'the narrowed viewport re-clamps')
+      } finally {
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+      }
     } finally {
-      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+      if (descriptor !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', descriptor)
     }
     await m.unmount()
   })

@@ -2,9 +2,8 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import type { TimelineEvent } from '../../src/host/fold'
 import { assistantMessage, at, compaction, userMessage } from './helpers/events'
-import { assertStatesPlainJson, driveTimeline, timelineDef } from './helpers/projection'
+import { assertStatesPlainJson, driveTimeline, requestsOf, timelineDef } from './helpers/projection'
 
-// The agent loop logs these blocks when the effective tool registry changes.
 const changes = [
   { type: 'tool-addition', toolName: 'read_file' },
   { type: 'tool-removal', toolName: 'shell' },
@@ -41,7 +40,7 @@ describe('developer/message', () => {
     assert.equal(node.tokens, 35)
     assert.equal(node.name, 'tool-registry')
     assert.equal(result.state.humanInputs, 1)
-    assert.equal(result.state.requests[0].inject, 35)
+    assert.equal(requestsOf(result.state)[0].inject, 35)
     assert.equal(result.state.sums.inject, 35)
     assert.equal(result.view.nodes.some(n => n.seq === 2 && n.tokens === 35), true)
     assert.equal(result.state.events.find(e => e.seq === 2)?.kind, 'inject')
@@ -65,8 +64,8 @@ describe('developer/message', () => {
     const archived = result.state.archived.find(n => n.seq === 2)
     assert.equal(archived?.tokens, 35)
     assert.equal(archived?.gone, 5)
-    assert.equal(result.state.requests[0].inject, 35)
-    assert.equal(result.state.requests[1].inject, 10)
+    assert.equal(requestsOf(result.state)[0].inject, 35)
+    assert.equal(requestsOf(result.state)[1].inject, 10)
     assertStatesPlainJson(result)
   })
 
@@ -95,26 +94,28 @@ describe('developer/message', () => {
     assert.equal(result.state.events[0].tokens, 0)
   })
 
-  test.each([undefined, null, {}, { kind: 'user' }])('a developer source %j never counts as a human input', source => {
-    const event = developerMessage(1)
-    const message = event.data!.message as Record<string, unknown>
-    if (source === undefined) delete message.source
-    else message.source = source
-    const result = driveTimeline([event])
-    assert.equal(result.state.surface[0].cat, 'inject')
-    assert.equal(result.state.sums.inject, 35)
-    assert.equal(result.state.humanInputs, undefined)
-    assert.equal(result.state.events[0].kind, 'inject')
-    assertStatesPlainJson(result)
+  test('no developer source, whatever its shape, ever counts as a human input', () => {
+    for (const source of [undefined, null, {}, { kind: 'user' }]) {
+      const event = developerMessage(1)
+      const message = event.data!.message as Record<string, unknown>
+      if (source === undefined) delete message.source
+      else message.source = source
+      const result = driveTimeline([event])
+      assert.equal(result.state.surface[0].cat, 'inject', JSON.stringify(source))
+      assert.equal(result.state.sums.inject, 35)
+      assert.equal(result.state.humanInputs, undefined)
+      assert.equal(result.state.events[0].kind, 'inject')
+      assertStatesPlainJson(result)
+    }
   })
 
-  test.each([undefined, {}, { message: null }, { message: { content: 'invalid' } }])(
-    'a malformed nested message leaves the state unchanged: %j', data => {
+  test('a malformed nested message leaves the state unchanged', () => {
+    for (const data of [undefined, {}, { message: null }, { message: { content: 'invalid' } }]) {
       const def = timelineDef()
       const initial = def.init()
       const event: TimelineEvent = { type: 'developer/message', seq: 1, time: at(), ...(data === undefined ? {} : { data }) }
-      assert.equal(def.apply(initial, event), initial)
+      assert.equal(def.apply(initial, event), initial, JSON.stringify(data))
       def.stateSchema.parse(initial)
-    },
-  )
+    }
+  })
 })

@@ -1,76 +1,54 @@
 import assert from 'node:assert/strict'
-import { createElement as h } from 'react'
+import { act, createElement as h } from 'react'
 import { afterAll, beforeAll, describe, test, vi } from 'vitest'
 import { makeFileCard } from '../../../src/client/components/fileCard'
 import type { FileActivity, FileEntry, FileOp } from '../../../src/client/fileActivity'
 import { createContextSettings } from '../../../src/client/settings'
-import { makeKit, mount, query, queryAll, until } from '../helpers/kit'
+import { click, fireScroll, makeKit, mount, query, queryAll, settle, text, until } from '../helpers/kit'
+import { restoreLayout, stubClientSizes } from '../helpers/layout'
 
 const kit = makeKit()
 const FileCard = makeFileCard(kit, createContextSettings())
 
-const PITCH = 41
-const GAP = 2
+const LIST_HEIGHT = 320
+const MEASURED = 43
 const T0 = 1700000000000
-/** Some rows wrap to two lines: windowing must fall back to the full list then. */
-let wrapRows = false
-let originals: [string, PropertyDescriptor | undefined][] = []
 
-/** jsdom lays nothing out: give the list a 500×320 box and the rows a fixed 41px pitch so the card's own
- *  windowing path (wide + unexpanded) runs for real: measure → window → scroll. */
+class ControlledResizeObserver {
+  static all: ControlledResizeObserver[] = []
+  readonly targets: Element[] = []
+  constructor(readonly callback: ResizeObserverCallback) { ControlledResizeObserver.all.push(this) }
+  static reset(): void { ControlledResizeObserver.all = [] }
+  static rowObserver(): ControlledResizeObserver {
+    const found = ControlledResizeObserver.all.find(entry => entry.targets.some(target => target.classList.contains('lc-fa-slot')))
+    if (found === undefined) throw new Error('no row observer')
+    return found
+  }
+  observe(target: Element): void { this.targets.push(target) }
+  unobserve(target: Element): void {
+    const at = this.targets.indexOf(target)
+    if (at >= 0) this.targets.splice(at, 1)
+  }
+  disconnect(): void { this.targets.length = 0 }
+  settle(height: number, target: Element | undefined = this.targets[0]): void {
+    this.callback(
+      [{
+        target,
+        borderBoxSize: [{ blockSize: height, inlineSize: 400 }],
+        contentRect: { height },
+      } as unknown as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    )
+  }
+}
+
 beforeAll(() => {
-  // A no-op observer covers the card's ResizeObserver path; the list is measured on mount anyway.
-  vi.stubGlobal('ResizeObserver', class {
-    observe = (): void => {}
-    disconnect = (): void => {}
-  })
-  originals = (['clientWidth', 'clientHeight', 'getBoundingClientRect'] as const)
-    .map(name => [name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)] as [string, PropertyDescriptor | undefined])
-  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
-    configurable: true,
-    get(this: HTMLElement): number {
-      if (this.classList.contains('lc-fa-list')) return 500
-      const own = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth')?.get
-      return own === undefined ? 0 : own.call(this)
-    },
-  })
-  Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
-    configurable: true,
-    get(this: HTMLElement): number {
-      if (this.classList.contains('lc-fa-list')) return 320
-      const own = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight')?.get
-      return own === undefined ? 0 : own.call(this)
-    },
-  })
-  const rect = Object.getOwnPropertyDescriptor(Element.prototype, 'getBoundingClientRect')!.value as () => DOMRect
-  Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
-    configurable: true,
-    value(this: HTMLElement): DOMRect {
-      if (this.classList.contains('lc-fa-list')) {
-        return { left: 0, top: 0, width: 500, height: 320, right: 500, bottom: 320, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
-      }
-      if (this.classList.contains('lc-fa-item')) {
-        const items = [...(this.parentElement?.querySelectorAll('.lc-fa-item') ?? [])]
-        const i = items.indexOf(this)
-        const heightOf = (j: number): number => (wrapRows && j % 7 === 0 ? PITCH + 20 : PITCH) - GAP
-        let top = 0
-        for (let j = 0; j < i; j++) top += heightOf(j) + GAP
-        return {
-          left: 0, top, width: 500, height: heightOf(i),
-          right: 500, bottom: top + heightOf(i), x: 0, y: top, toJSON: () => ({}),
-        } as DOMRect
-      }
-      return rect.call(this) as DOMRect
-    },
-  })
+  stubClientSizes({ 'lc-fa-list': { width: 500, height: LIST_HEIGHT } })
 })
 
 afterAll(() => {
   vi.unstubAllGlobals()
-  for (const [name, desc] of originals) {
-    if (desc === undefined) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name]
-    else Object.defineProperty(HTMLElement.prototype, name, desc)
-  }
+  restoreLayout()
 })
 
 function entry(index: number): FileEntry {
@@ -90,56 +68,170 @@ function activityOf(count: number): FileActivity {
 
 const props = { activity: activityOf(60), state: 'ready' as const, onRetry: undefined }
 
+async function measureRows(height = MEASURED): Promise<void> {
+  const observer = ControlledResizeObserver.rowObserver()
+  for (const target of [...observer.targets]) {
+    await act(async () => { observer.settle(height, target) })
+  }
+}
+
+function activeRowTitle(): string | null {
+  const active = document.activeElement
+  if (!(active instanceof Element)) return null
+  return active.closest<HTMLElement>('.lc-fa-row')?.getAttribute('title') ?? null
+}
+
 describe('FileCard row windowing', () => {
-  test('renders a measured window with full-height pads and follows the scroll', async () => {
-    const m = await mount(h(FileCard, props))
+  test('never mounts the full list: the measured window keeps viewport-bound rows and full-height pads', async () => {
+    vi.stubGlobal('ResizeObserver', ControlledResizeObserver)
+    ControlledResizeObserver.reset()
     try {
+      const m = await mount(h(FileCard, props))
       const list = query<HTMLElement>(m.container, '.lc-fa-list')
-      await until(() => queryAll(m.container, '.lc-fa-item').length < 60, 'the list windows after measuring')
-      const rendered = queryAll(m.container, '.lc-fa-item').length
-      assert.ok(rendered < 60 && rendered > 8)
-      const pads = queryAll<HTMLElement>(m.container, '.lc-row-pad')
-      assert.equal(pads.length, 1)
-      assert.ok(Number.parseFloat(pads[0].style.height) > 0)
-      assert.equal(list.clientHeight, 320) // the list keeps its box; the full height lives in the pads
+      assert.equal(list.clientHeight, LIST_HEIGHT)
+      const initial = queryAll(m.container, '.lc-fa-slot').length
+      assert.ok(initial < 60, `bounded first paint (${initial})`)
+      assert.ok(initial >= 8, 'a window wide enough to scroll through')
+      await measureRows()
+      const afterMeasure = queryAll(m.container, '.lc-fa-slot').length
+      assert.ok(afterMeasure < 60, `bounded after measuring (${afterMeasure})`)
+      const headPads = queryAll<HTMLElement>(m.container, '.lc-row-pad')
+      assert.equal(headPads.length, 1, 'the first window keeps only a bottom pad')
+      assert.ok(Number.parseFloat(headPads[0].style.height) > 0)
       list.scrollTop = 900
-      await new Promise(resolve => setTimeout(resolve, 40))
-      list.dispatchEvent(new Event('scroll'))
-      await until(() => queryAll<HTMLElement>(m.container, '.lc-row-pad').length === 2, 'a top pad appears after scrolling')
-      const afterScroll = queryAll(m.container, '.lc-fa-item').length
-      assert.ok(afterScroll < 60 && afterScroll >= 8)
-      // Pads reproduce the skipped rows' pitch, letting the flex gap supply one slot between pad and row.
+      await act(async () => { list.dispatchEvent(new Event('scroll')) })
+      await settle(20)
+      const titles = queryAll<HTMLElement>(m.container, '.lc-fa-row').map(row => row.title)
+      assert.ok(titles.length < 60, 'scrolled window stays bounded')
+      assert.equal(titles[0], '/src/file-015.ts', 'the measured window starts at the row reaching the viewport top')
+      assert.equal(titles.at(-1), '/src/file-040.ts', 'the window ends at the row covering the viewport bottom plus overscan')
+      assert.equal(titles.length, new Set(titles).size)
+      assert.equal(titles.length, 26)
       const [topPad, bottomPad] = queryAll<HTMLElement>(m.container, '.lc-row-pad')
-      assert.equal(topPad.style.height, `${13 * PITCH - GAP}px`)
-      assert.equal(bottomPad.style.height, `${21 * PITCH - GAP}px`)
+      assert.equal(topPad.style.height, '645px')
+      assert.equal(bottomPad.style.height, '570px')
+      await fireScroll(list)
+      await m.unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  test('mixed wrapped heights keep the window and its pads truthful instead of falling back to the full list', async () => {
+    vi.stubGlobal('ResizeObserver', ControlledResizeObserver)
+    ControlledResizeObserver.reset()
+    try {
+      const m = await mount(h(FileCard, props))
+      const observer = ControlledResizeObserver.rowObserver()
+      for (const target of [...observer.targets]) {
+        const slots = queryAll(m.container, '.lc-fa-slot')
+        const index = slots.indexOf(target as HTMLElement)
+        await act(async () => { observer.settle(MEASURED + (index % 3 === 0 ? 40 : 0), target) })
+      }
+      assert.ok(queryAll(m.container, '.lc-fa-slot').length < 60, 'mixed heights stay windowed')
+      assert.ok(queryAll(m.container, '.lc-row-pad').length <= 2)
+      const heights = queryAll<HTMLElement>(m.container, '.lc-row-pad').map(pad => pad.style.height)
+      assert.ok(heights.every(height => Number.parseFloat(height) > 0))
+      await m.unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  test('an expanded row is measured in place while the rest of the list stays windowed', async () => {
+    vi.stubGlobal('ResizeObserver', ControlledResizeObserver)
+    ControlledResizeObserver.reset()
+    try {
+      const m = await mount(h(FileCard, props))
+      await measureRows()
+      const toggle = query<HTMLElement>(m.container, '.lc-fa-toggle')
+      assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+      assert.ok((toggle.getAttribute('aria-label') ?? '').length > 0)
+      await act(async () => { toggle.click() })
+      assert.ok(query(m.container, '.lc-fa-ops') !== null, 'the row expands')
+      assert.equal(query<HTMLElement>(m.container, '.lc-fa-toggle').getAttribute('aria-expanded'), 'true')
+      assert.ok(queryAll(m.container, '.lc-fa-slot').length < 60, 'the expanded row keeps the list windowed')
+      const observer = ControlledResizeObserver.rowObserver()
+      const expanded = observer.targets.find(target => (target as HTMLElement).querySelector('.lc-fa-ops') !== null)
+      assert.ok(expanded !== undefined, 'the expanded slot is observed')
+      await act(async () => { observer.settle(240, expanded) })
+      assert.ok(queryAll(m.container, '.lc-fa-slot').length < 60, 'a tall expanded row does not expand the window')
+      await act(async () => { query<HTMLElement>(m.container, '.lc-fa-toggle').click() })
+      assert.ok(queryAll(m.container, '.lc-fa-slot').length < 60, 'closing keeps the window')
+      await m.unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  test('entries without operations still sort and window without a pitch source', async () => {
+    const bare: FileActivity = {
+      entries: [
+        { path: '/src/a.ts', form: 'text', reads: 0, writes: 0, searches: 0, added: 0, removed: 0, ops: [] },
+        { path: '/src/b.ts', form: 'text', reads: 0, writes: 0, searches: 0, added: 0, removed: 0, ops: [] },
+        {
+          path: '/src/c.ts', form: 'text', reads: 1, writes: 0, searches: 0, added: 0, removed: 0,
+          ops: [{ seq: 5, kind: 'read', tool: 'read', time: T0, err: false, added: 0, removed: 0, path: '' }],
+        },
+      ],
+      totals: {
+        read: { files: 0, ops: 0 }, write: { files: 0, ops: 0 }, search: { files: 0, ops: 0 }, image: { files: 0, ops: 0 },
+        added: 0, removed: 0,
+      },
+    }
+    const m = await mount(h(FileCard, { activity: bare, state: 'ready' as const }))
+    try {
+      const latest = queryAll<HTMLElement>(m.container, '.lc-fa-sort .lc-gran-btn')
+        .find(button => text(button) === kit.t('files.sort.latest'))
+      assert.ok(latest !== undefined)
+      await click(latest)
+      assert.equal(queryAll(m.container, '.lc-fa-slot').length, 3)
+      assert.ok(text(query(m.container, '.lc-fa-meta')).includes('3 files'))
     } finally {
       await m.unmount()
     }
   })
 
-  test('mixed wrapped row heights keep the full list so the scroll geometry stays truthful', async () => {
-    wrapRows = true
-    const m = await mount(h(FileCard, props))
+  test('a narrow pane and a filtered model keep the DOM bounded while counts still come from the full model', async () => {
+    stubClientSizes({ 'lc-fa-list': { width: 300, height: LIST_HEIGHT } })
     try {
-      await until(() => queryAll(m.container, '.lc-fa-item').length === 60, 'the full list renders')
-      assert.equal(queryAll(m.container, '.lc-row-pad').length, 0, 'no spacers on a non-uniform list')
-    } finally {
-      wrapRows = false
+      const m = await mount(h(FileCard, { activity: activityOf(200), state: 'ready' as const }))
+      const rendered = queryAll(m.container, '.lc-fa-slot').length
+      assert.ok(rendered < 200, `narrow pane bounded (${rendered})`)
+      assert.ok(text(query(m.container, '.lc-fa-meta')).includes('200 files'), 'the header counts the full model')
       await m.unmount()
+    } finally {
+      stubClientSizes({ 'lc-fa-list': { width: 500, height: LIST_HEIGHT } })
     }
   })
 
-  test('an expanded row falls back to the full list, then windows again when closed', async () => {
-    const m = await mount(h(FileCard, props))
+  test('Arrow/Home/End traverse the whole list with one roving tab stop and real buttons for actions', async () => {
+    vi.stubGlobal('ResizeObserver', ControlledResizeObserver)
+    ControlledResizeObserver.reset()
+    const previewed: string[] = []
     try {
-      await until(() => queryAll(m.container, '.lc-fa-item').length < 60, 'windowed')
-      const first = query<HTMLElement>(m.container, '.lc-fa-row')
-      first.click()
-      await until(() => queryAll(m.container, '.lc-fa-item').length === 60, 'expanded row shows the full list')
-      first.click()
-      await until(() => queryAll(m.container, '.lc-fa-item').length < 60, 'closing the row re-windows')
-    } finally {
+      const m = await mount(h(FileCard, { ...props, onPreview: (e) => { previewed.push(e.path); return true } }))
+      await measureRows()
+      const roving = queryAll<HTMLElement>(m.container, '.lc-fa-toggle').filter(toggle => toggle.tabIndex === 0)
+      assert.equal(roving.length, 1, 'one tab stop for the row enumeration')
+      roving[0].focus()
+      roving[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
+      await until(() => activeRowTitle() === '/src/file-059.ts', 'End reaches and focuses the oldest row')
+      const tabStops = queryAll<HTMLElement>(m.container, '.lc-fa-toggle').filter(toggle => toggle.tabIndex === 0)
+      assert.equal(tabStops.length, 1, 'a single tab stop follows the active row')
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }))
+      await until(() => activeRowTitle() === '/src/file-000.ts', 'Home returns focus to the first row')
+      await settle(10)
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+      await until(() => activeRowTitle() === '/src/file-001.ts', 'ArrowDown moves one row')
+      const action = query<HTMLElement>(m.container, '.lc-fa-file')
+      assert.equal(action.tagName, 'BUTTON')
+      assert.ok((action.getAttribute('aria-label') ?? '').length > 0, 'the file action has a label')
+      await act(async () => { action.click() })
+      assert.deepEqual(previewed, ['/src/file-000.ts'])
       await m.unmount()
+    } finally {
+      vi.unstubAllGlobals()
     }
   })
 })

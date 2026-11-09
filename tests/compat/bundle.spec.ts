@@ -1,9 +1,3 @@
-// The bundle smoke, as part of the `compat` project: the only check that exercises the BUILT artifacts (lib/client.js) — the packaging glue
-// (the `window.__ModuleLoader__.load({id, factory})` handoff, the CSS channel's data-plugin style tags, platform-module requires) only
-// exists after tsdown runs. Skipped cleanly when lib/ is absent (run `pnpm run build` first); the release workflow builds before `pnpm
-// test`, so it always runs there. Everything here runs against the REAL bundle in its own JSDOM with REAL React and the REAL ui-primitives
-// — only the harness services (locale/slots/effects) are in-memory implementations of their documented contracts.
-
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -14,18 +8,21 @@ import ReactDOM from 'react-dom'
 import * as jsxRuntime from 'react/jsx-runtime'
 import * as staging from './staging'
 
+test('module-table requires are scraped from both the lean and the minified wrapper', () => {
+  assert.deepEqual(staging.moduleRequiresOf('window.__ModuleLoader__.load({ id: "dsh-context", factory: (require) => {\n  require("react");\n  require("react");\n} });'), ['react'])
+  assert.deepEqual(staging.moduleRequiresOf('window.__ModuleLoader__.load({id:`dsh-context`,factory:e=>{e("react"),e("react-dom")}})'), ['react', 'react-dom'])
+  assert.deepEqual(staging.moduleRequiresOf('require("react")'), ['react'])
+})
+
 describe.skipIf(staging.artifactsMissing())('bundle smoke — the built lib/client.js', () => {
   const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { pretendToBeVisual: true })
-  // The bundle evaluates against window-scoped globals; this spec owns its
-  // worker (per-file fork), so the assignment stays file-local.
   const globals = globalThis as { window?: unknown; document?: unknown }
 
   let handoff: { id: string; factory: (require: (spec: string) => unknown) => unknown } | null = null
-  /** Everything the assertions below look at, captured by the setup. */
   const state: {
     plugin?: { name: string; inject: string[]; apply(ctx: unknown): void }
     dicts: Map<string, Record<string, Record<string, string>>>
-    slots: [string, { name?: string; order?: number; id?: string; label?: () => string; inject?: (sessionId?: string) => unknown }][]
+    slots: [string, { name?: string; order?: number; id?: string; label?: () => string; key?: string; inject?: (sessionId?: string) => unknown }][]
     sources: { trigger: string }[]
     disposers: (() => void)[]
   } = { dicts: new Map(), slots: [], sources: [], disposers: [] }
@@ -37,9 +34,6 @@ describe.skipIf(staging.artifactsMissing())('bundle smoke — the built lib/clie
     globals.window = dom.window
     globals.document = dom.window.document
 
-    // The primitives dist ships CSS modules Node cannot parse — the bundle only
-    // references its components as React leaves, so inert stand-ins play the
-    // shell's role here (their real rendering is covered by the vitest jsdom lane).
     const inert = (name: string) => {
       const C = (): null => null
       ;(C as { displayName?: string }).displayName = name
@@ -55,11 +49,10 @@ describe.skipIf(staging.artifactsMissing())('bundle smoke — the built lib/clie
       throw new Error(`bundle required a non-platform module: ${spec}`)
     }
 
-    ;(dom.window as { __ModuleLoader__: unknown }).__ModuleLoader__ = { load: (h: typeof handoff) => { handoff = h } }
+    ;(dom.window as unknown as { __ModuleLoader__: unknown }).__ModuleLoader__ = { load: (h: typeof handoff) => { handoff = h } }
     new Function(readFileSync(join(staging.REPO, 'lib', 'client.js'), 'utf8'))()
     assert.ok(handoff !== null, 'bundle must register through __ModuleLoader__.load')
 
-    // Faithful harness services (documented contracts, in-memory).
     const removeFrom = <T,>(list: T[]) => (item: T) => () => {
       const i = list.indexOf(item)
       if (i >= 0) list.splice(i, 1)
@@ -71,9 +64,6 @@ describe.skipIf(staging.artifactsMissing())('bundle smoke — the built lib/clie
         return undefined
       },
       inject(_deps: string[], cb: (c: unknown) => void) {
-        // Cordis fires the callback once every requested service exists; this
-        // fake answers every name it knows up front, so it fires immediately.
-        // The configForms wiring guards on the absent service itself.
         cb(ctx)
       },
       effect(fn: () => (() => void) | void) {
@@ -90,9 +80,6 @@ describe.skipIf(staging.artifactsMissing())('bundle smoke — the built lib/clie
         },
       },
       slots: {
-        // The registry records every `register()` call and returns its idempotent disposer; an `inject`
-        // callback returns the declaration effect's own disposer (registry.ts `SlotInjectionEffect`), so the
-        // return value is never the registration — one `inject` may declare several.
         inject: (_name: string, fn: () => unknown) => fn(),
         register: (opts: (typeof state.slots)[number][1]) => {
           state.slots.push([opts.name ?? '', opts])
@@ -103,14 +90,14 @@ describe.skipIf(staging.artifactsMissing())('bundle smoke — the built lib/clie
         },
       },
     }
-    state.plugin = handoff.factory(moduleTable) as typeof state.plugin
-    state.plugin.apply(ctx)
+    const plugin = handoff.factory(moduleTable) as NonNullable<typeof state.plugin>
+    state.plugin = plugin
+    plugin.apply(ctx)
   })
 
   test('handoff: the bundle registers as dsh-context with the factory closure', () => {
     assert.ok(handoff !== null, 'bundle must register through __ModuleLoader__.load')
     assert.equal(handoff.id, 'dsh-context', 'handoff id is the package name')
-    assert.equal(typeof handoff.factory, 'function')
     assert.equal(state.plugin?.name, 'dsh-context')
     assert.deepEqual(state.plugin?.inject, ['slots', 'locale'])
   })
@@ -125,6 +112,15 @@ describe.skipIf(staging.artifactsMissing())('bundle smoke — the built lib/clie
       assert.ok(css.includes(marker), `styles carry ${marker}`)
     }
     assert.ok(!css.includes('120ms ease'), 'lightningcss minified the sheet')
+  })
+
+  test('command lists chain their scrolling to the page', () => {
+    const css = styleTags().map(tag => tag.textContent).join('\n')
+    for (const selector of ['.lc-cmd-list', '.lc-cmd-progs-list']) {
+      assert.ok(css.includes(selector + '{'), `styles carry a ${selector} rule`)
+      const contained = new RegExp(selector.replaceAll('.', '\\.') + '[^{}]*\\{[^{}]*overscroll-behavior')
+      assert.ok(!contained.test(css), `${selector} does not contain its scrolling`)
+    }
   })
 
   test('registrations: bilingual dictionaries, six slots, the /context trigger source', () => {

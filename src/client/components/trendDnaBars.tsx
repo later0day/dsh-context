@@ -7,8 +7,6 @@ export const RISE_CLASS = ' animate-lc-bar-in motion-reduce:animate-none'
 export const STAGGER_CAP = 20
 const DNA_MAX_STOPS = 64
 
-/** A 14px-wide DNA bar cannot show one stop per band, and thousands of stops bloat every inline style. Sample the
- *  runs down to a small fixed set: visually indistinguishable at this width, and the tooltip still reads the full model. */
 export function capDnaRuns(
   runs: { color: string; from: number; to: number }[],
   maxStops: number,
@@ -32,10 +30,6 @@ export function capDnaRuns(
 
 
 
-/** DNA bar interior: ONE gradient div, same-color bands coalesced (long runs would bloat the style string) and
- * zero-token bands skipped. */
-/** DNA bars share one px-per-token scale, so band boundaries must snap to ONE shared pixel grid: sampling by each
- *  bar's own height (or bucketing per bar) made identical strands land on different offsets and broke alignment. */
 export const DNA_SNAP_PX = 2
 
 export function snapDnaRuns(
@@ -47,7 +41,6 @@ export function snapDnaRuns(
   const end = runs[runs.length - 1].to
   let from = runs[0].from
   for (let i = 0; i < runs.length; i++) {
-    // Quantize internal boundaries to the shared grid (nearest); the final boundary stays exact so the bar fills.
     const rawTo = runs[i].to
     const to = i === runs.length - 1 ? rawTo : Math.min(end, Math.round(rawTo / grid) * grid)
     if (to <= from) continue
@@ -75,8 +68,6 @@ export const DnaBar = function DnaBar(props: DnaBarProps): ReactElement | null {
   const visible: TrendBand[] = []
   for (const b of props.bands) if (b.tokens > 0) visible.push(b)
   if (visible.length === 0) return null
-  // Shared per-token pixel scale (chartHeight/maxTotal): the same band starts at the same px in every bar. The
-  // stops additionally snap to a shared pixel grid, so adjacent bars keep identical strand boundaries.
   const pxPerToken = props.chartHeight / props.maxTotal
   const runs: { color: string; from: number; to: number }[] = []
   for (const b of visible) {
@@ -87,12 +78,9 @@ export const DnaBar = function DnaBar(props: DnaBarProps): ReactElement | null {
     else runs.push({ color: b.color, from, to })
   }
   const stops = snapDnaRuns(runs, DNA_SNAP_PX)
-  // A token count far below the shared max can round every endpoint to 0px; the bar still has a 1px floor,
-  // so keep its top band's colour instead of emitting an empty gradient.
   const background = stops.length === 0
     ? visible[visible.length - 1].color
     : 'linear-gradient(to top, ' + stops.map(r => `${r.color} ${r.from}px, ${r.color} ${r.to}px`).join(', ') + ')'
-  // A hit always exists (the first visible band starts at off 0; the fraction clamps), so the type carries no null.
   const hitAt = (e: { clientY: number; currentTarget: HTMLDivElement }): TrendBand => {
     const rect = e.currentTarget.getBoundingClientRect()
     const frac = rect.height > 0 ? Math.min(1, Math.max(0, 1 - (e.clientY - rect.top) / rect.height)) : 0
@@ -122,7 +110,6 @@ export const DnaBar = function DnaBar(props: DnaBarProps): ReactElement | null {
 }
 
 
-/** DNA+delta bar interior: ONE gradient div spans both arms — the down arm's bands in REVERSE read order, then the up arm. */
 interface DnaDeltaBarProps {
   d: DnaDelta
   scale: number
@@ -177,7 +164,6 @@ export const DnaDeltaBar = function DnaDeltaBar(props: DnaDeltaBarProps): ReactE
         bottom: `${Math.round(props.zeroBottom - downSum * props.scale)}px`,
         height: `${height}px`,
         background: 'linear-gradient(to top, ' + stops.map(r => `${r.color} ${r.from}%, ${r.color} ${r.to}%`).join(', ') + ')',
-        // The entrance rise grows from the zero line, not an arm's end.
         transformOrigin: `50% ${Math.round(downSum / gradSpan * 10000) / 100}%`,
         '--lc-i': Math.min(props.enterIndex, STAGGER_CAP),
       } as CSSProperties}
@@ -189,7 +175,6 @@ export const DnaDeltaBar = function DnaDeltaBar(props: DnaDeltaBarProps): ReactE
 }
 
 
-/** Cross-bar lifetime highlight: a flex row mirroring the bar grid, one slice per bar still holding the hovered item; memoized. */
 interface DnaHighlightsProps {
   slices: ({ bottom: number; height: number } | null)[] | null
   from: number

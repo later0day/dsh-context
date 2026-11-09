@@ -1,13 +1,12 @@
 import { act, createElement as h } from 'react'
 import assert from 'node:assert/strict'
-import { describe, test } from 'vitest'
+import { describe, test, vi } from 'vitest'
 import type { SurfaceNode } from '../../../src/shared/types'
 import type { ConversationNodeLike } from '../../../src/client/services'
 import { click, flush, mount, query, queryAll, surfaceNode, text, type Mounted } from '../helpers/kit'
 import { Browser, catRow, elemRows, props, silenceFetchWarn, tl } from './browserHarness'
 
 describe('ContextBrowser tool results', () => {
-  // The tail-status matrix: dsh settles failing commands as completed calls, so trailing markers are the failure signal.
   const cases: { seq: number; tail: string; err: boolean; label: string }[] = [
     { seq: 80, tail: 'boom\n[exit code: 3]', err: true, label: 'Failed · exit 3' },
     { seq: 81, tail: '[killed by signal: SIGKILL]', err: true, label: 'Failed' },
@@ -27,11 +26,8 @@ describe('ContextBrowser tool results', () => {
     content: [{ type: 'image', attachment: { attachmentId: 'x' + String(c.seq) } }, null, { type: 'text', text: c.tail }],
   }))
   convNodes.push(
-    // Fold-stamped failure without any marker.
     { kind: 'tool-result', seq: 91, call: { name: 'read', argsRaw: '{}' }, content: [{ type: 'text', text: 'denied' }], isError: true },
-    // No call record → no call card.
     { kind: 'tool-result', seq: 92, call: null, content: [{ type: 'text', text: 'orphan' }] },
-    // Content that is not an array → no body sections.
     { kind: 'tool-result', seq: 93, call: { name: 'bash', argsRaw: '' }, content: 'raw-text' as never },
   )
   const nodes: SurfaceNode[] = [
@@ -39,12 +35,9 @@ describe('ContextBrowser tool results', () => {
     surfaceNode({ seq: 91, cat: 'tool', tokens: 9, tool: 'read' }),
     surfaceNode({ seq: 92, cat: 'tool', tokens: 9, tool: 'bash' }),
     surfaceNode({ seq: 93, cat: 'tool', tokens: 9, tool: 'bash' }),
-    // Fold-stamped err flag, no join.
     surfaceNode({ seq: 94, cat: 'tool', tokens: 9, tool: 'write', err: true }),
-    // No join at all → placeholder preview; missing tool name → '?'.
     surfaceNode({ seq: 95, cat: 'tool', tokens: 9, tool: 'bash' }),
     surfaceNode({ seq: 96, cat: 'tool', tokens: 9 }),
-    // A joined, clean result: the OK-state expansion target below.
     surfaceNode({ seq: 97, cat: 'tool', tokens: 9, tool: 'bash' }),
   ]
   convNodes.push({ kind: 'tool-result', seq: 97, call: { name: 'bash', argsRaw: '{}' }, content: [{ type: 'text', text: 'skill body' }] })
@@ -59,11 +52,8 @@ describe('ContextBrowser tool results', () => {
     await click(catRow(m, 'tool'))
     const rows = elemRows(m)
     assert.equal(rows.length, nodes.length)
-    // Dot presence per case (collapsed rows): every marker failure + the two
-    // fold-stamped failures (isError, err flag) — nothing else.
     const dots = queryAll(m.container, '.lc-br-err-dot')
     assert.equal(dots.length, 9, 'one red dot per failing result')
-    // Newest-first order: rows[0] is seq 97 (joined clean result), then 96, 95, ...
     assert.ok(text(rows[0]).includes('bash'))
     assert.ok(text(rows[1]).includes('?'), 'missing tool name tags as ?')
     assert.ok(text(rows[1]).includes('Tool Result'), 'no join → placeholder preview')
@@ -88,7 +78,6 @@ describe('ContextBrowser tool results', () => {
     const m = await mount(h(Browser, props({ data, convNodes })))
     await click(catRow(m, 'tool'))
     const rows = elemRows(m)
-    // Newest first: index map by seq (97, 96, 95, 94, 93, 92, 91, 90..80).
     const byIdx = Object.fromEntries([97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80].map((s, i) => [s, i]))
     const expand = async (seq: number) => {
       await click(rows[byIdx[seq]])
@@ -98,25 +87,20 @@ describe('ContextBrowser tool results', () => {
     assert.ok(text(content).includes('OK'))
     assert.ok(!queryAll(content, '.lc-br-err-dot').length)
     await click(elemRows(m)[byIdx[89]])
-    // Exit-code failure with the pill.
     content = await expand(80)
     assert.ok(text(content).includes('Failed · exit 3'))
     await click(elemRows(m)[byIdx[80]])
-    // Killed by signal: failure without an exit code.
     content = await expand(81)
     assert.ok(text(content).includes('Failed'))
     assert.ok(!text(content).includes('exit'))
     await click(elemRows(m)[byIdx[81]])
-    // Shell killed after a failing command: the command's code wins.
     content = await expand(86)
     assert.ok(text(content).includes('Failed · exit 7'))
     await click(elemRows(m)[byIdx[86]])
-    // Orphan result: no call card, but the result body renders.
     content = await expand(92)
     assert.ok(!text(content).includes('→'), 'no call card without a call record')
     assert.ok(text(content).includes('orphan'))
     await click(elemRows(m)[byIdx[92]])
-    // Non-array content: call card only.
     content = await expand(93)
     assert.ok(text(content).includes('OK'))
     assert.ok(!text(content).includes('raw-text'))
@@ -132,7 +116,7 @@ describe('ContextBrowser targeted content fetch', () => {
 
   const openFirstRow = async (m: Mounted) => {
     await click(catRow(m, 'user'))
-    await click(elemRows(m)[1]) // seq 5 (newest first: 6, 5)
+    await click(elemRows(m)[1])
   }
 
   test('a missed join fetches the seq once, and the fetched body renders', async () => {
@@ -150,7 +134,6 @@ describe('ContextBrowser targeted content fetch', () => {
     await act(async () => { release?.() })
     await flush()
     assert.ok(text(query(m.container, '.lc-br-content')).includes('FULL BODY'))
-    // Close and reopen the same row: the fetched node is merged state — no re-read.
     await click(elemRows(m)[1])
     await click(elemRows(m)[1])
     assert.ok(text(query(m.container, '.lc-br-content')).includes('FULL BODY'))
@@ -174,29 +157,49 @@ describe('ContextBrowser targeted content fetch', () => {
 
   test('a failed read arms the retry button; retrying succeeds', async () => {
     silenceFetchWarn()
-    let calls = 0
-    const fetchContent = async (seq: number) => {
-      calls += 1
-      if (calls === 1) throw new Error('transport down')
-      return { kind: 'user', seq, content: [{ type: 'text', text: 'RETRY BODY' }] } as ConversationNodeLike
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      let failing = true
+      const fetchContent = async (seq: number) => {
+        calls += 1
+        if (failing) throw new Error('transport down')
+        return { kind: 'user', seq, content: [{ type: 'text', text: 'RETRY BODY' }] } as ConversationNodeLike
+      }
+      const m = await mount(h(Browser, props({ data, convNodes: [], fetchContent })))
+      await openFirstRow(m)
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      const failed = query(m.container, '.lc-br-content')
+      assert.ok(text(failed).includes('Load failed'))
+      assert.equal(calls, 4, 'the bounded auto-retry exhausts before arming the manual retry')
+      failing = false
+      await click(query(failed, '.lc-br-retry'))
+      await act(async () => { await Promise.resolve() })
+      assert.ok(text(query(m.container, '.lc-br-content')).includes('RETRY BODY'))
+      assert.equal(calls, 5)
+      await m.unmount()
+    } finally {
+      vi.useRealTimers()
     }
-    const m = await mount(h(Browser, props({ data, convNodes: [], fetchContent })))
-    await openFirstRow(m)
-    await flush()
-    const failed = query(m.container, '.lc-br-content')
-    assert.ok(text(failed).includes('Load failed'))
-    await click(query(failed, '.lc-br-retry'))
-    await flush()
-    assert.ok(text(query(m.container, '.lc-br-content')).includes('RETRY BODY'))
-    assert.equal(calls, 2)
-    await m.unmount()
   })
 
-  test('without a fetcher (older host) an un-joined row keeps the static note', async () => {
-    const m = await mount(h(Browser, props({ data, convNodes: [] })))
+  test('a session scope change refetches instead of reusing another session value', async () => {
+    const fetched: string[] = []
+    let session = 'A'
+    const fetchContent = async (seq: number) => {
+      fetched.push(session + ':' + String(seq))
+      return { kind: 'user', seq, content: [{ type: 'text', text: session + ' BODY' }] } as ConversationNodeLike
+    }
+    const mountWith = (value: string) => props({ data, convNodes: [], fetchContent, session: value })
+    const m = await mount(h(Browser, mountWith('A')))
     await openFirstRow(m)
     await flush()
-    assert.ok(text(query(m.container, '.lc-br-content')).includes('outside the loaded message window'))
+    assert.ok(text(query(m.container, '.lc-br-content')).includes('A BODY'))
+    session = 'B'
+    await m.update(h(Browser, mountWith('B')))
+    await flush()
+    assert.ok(text(query(m.container, '.lc-br-content')).includes('B BODY'))
+    assert.deepEqual(fetched, ['A:5', 'B:5'])
     await m.unmount()
   })
 
@@ -212,17 +215,16 @@ describe('ContextBrowser targeted content fetch', () => {
     let snap: { nodes?: readonly ConversationNodeLike[] } = { nodes: [] }
     const el = () => h(Browser, props({ data, convNodes: snap.nodes, fetchContent }))
     const m = await mount(el())
-    await openFirstRow(m) // seq 5 hangs in flight
+    await openFirstRow(m)
     assert.equal(deferreds.length, 1)
-    await click(elemRows(m)[0]) // switch to seq 6 while seq 5 is pending
+    await click(elemRows(m)[0])
     await flush()
     assert.ok(text(query(m.container, '.lc-br-content')).includes('BODY 6'))
-    // The abandoned promise settles after the row was left — both outcomes are ignored.
     await act(async () => {
       deferreds[0]?.resolve({ kind: 'user', seq: 5, content: [{ type: 'text', text: 'STALE BODY' }] })
     })
     assert.ok(!text(m.container).includes('STALE BODY'), 'stale result ignored')
-    await click(elemRows(m)[1]) // seq 5 again: another deferred hangs
+    await click(elemRows(m)[1])
     await click(elemRows(m)[0])
     await flush()
     await act(async () => {
@@ -237,7 +239,6 @@ describe('ContextBrowser targeted content fetch', () => {
     await flush()
     assert.ok(text(query(m.container, '.lc-br-content')).includes('BODY 5'))
     assert.deepEqual(fetchedFor, [5, 6, 5, 5], 'one call per miss (seq 6 stays cached)')
-    // The conversation window catching up later wins over fetched state.
     snap = { nodes: [{ kind: 'user', seq: 5, content: [{ type: 'text', text: 'WINDOW BODY' }] }] }
     await m.update(el())
     assert.ok(text(query(m.container, '.lc-br-content')).includes('WINDOW BODY'))

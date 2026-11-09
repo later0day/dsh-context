@@ -1,9 +1,8 @@
-/** The dsh-context preference card, keyed on the Host-served `dsh-context` namespace: while that namespace is
- * unavailable (a deployment without the Host half, or a remote browser) the card renders nothing. */
-
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import { IconChevronDown } from '../primitives'
+import { seatKeyOf, seatOf } from '../services'
+import { ClearButton, clearOnEscape } from './clearableInput'
 import type { SettingsField, SettingsState } from '../settings'
 import type { ViewKit } from '../viewkit'
 
@@ -11,6 +10,10 @@ interface SettingsCardProps {
   useContextSettings?: <T>(selector: (state: SettingsState) => T) => T
   set?: (field: SettingsField, value: string) => void
 }
+
+type SettingsSeat = (selector: (state: SettingsState) => SettingsState | undefined) => SettingsState | undefined
+
+const NO_SETTINGS: SettingsSeat = () => undefined
 
 interface PrefRowProps {
   label: string
@@ -59,45 +62,54 @@ interface PromptTextRowProps {
   placeholder: string
   value: string
   disabled: boolean
+  clearLabel: string
   onCommit: (text: string) => void
 }
 
-/** One free-text preference row: a local draft committed on blur (and on an
- *  unmount without a prior blur), so typing never writes the wire per keystroke. */
 function PromptTextRow(props: PromptTextRowProps): ReactElement {
   const [draft, setDraft] = useState(props.value)
   const [focused, setFocused] = useState(false)
+  const areaRef = useRef<HTMLTextAreaElement>(null)
   const latest = useRef({ draft: props.value, value: props.value, commit: props.onCommit })
   latest.current = { draft, value: props.value, commit: props.onCommit }
-  // Follow the served value only while the row is idle: a host push (or the
-  // optimistic echo) must never clobber in-progress typing.
   if (!focused && draft !== props.value) setDraft(props.value)
   useEffect(() => () => {
     const { draft: text, value, commit } = latest.current
     if (text !== value) commit(text)
   }, [])
   const rows = Math.min(8, Math.max(2, draft.split('\n').length))
+  const clear = (): void => {
+    setDraft('')
+    areaRef.current?.focus()
+  }
   return (
     <div className="lc-settings-row lc-settings-textrow">
       <span className="lc-settings-label">{props.label}</span>
-      <textarea
-        className="lc-settings-textarea"
-        rows={rows}
-        placeholder={props.placeholder}
-        disabled={props.disabled}
-        value={draft}
-        onFocus={() => { setFocused(true) }}
-        onBlur={() => {
-          setFocused(false)
-          if (draft !== props.value) props.onCommit(draft)
-        }}
-        onChange={(event) => { setDraft(event.target.value) }}
-      />
+      <div className="lc-settings-textwrap">
+        <textarea
+          ref={areaRef}
+          className="lc-settings-textarea"
+          rows={rows}
+          placeholder={props.placeholder}
+          disabled={props.disabled}
+          value={draft}
+          data-lc-clearable=""
+          onFocus={() => { setFocused(true) }}
+          onBlur={() => {
+            setFocused(false)
+            if (draft !== props.value) props.onCommit(draft)
+          }}
+          onChange={(event) => { setDraft(event.target.value) }}
+          onKeyDown={(event) => { clearOnEscape(event, clear) }}
+        />
+        {!props.disabled && draft !== '' ? (
+          <ClearButton label={props.clearLabel} className="lc-settings-textx" onClick={clear} />
+        ) : null}
+      </div>
     </div>
   )
 }
 
-/** The three on/off gates (entry visibility, the Fleet tab, the trend duration curve) share one row shape. */
 function ShowHideRow(props: { t: Translate; label: string; value: string; disabled: boolean; onPick: (id: string) => void }): ReactElement {
   return (
     <PrefRow
@@ -113,9 +125,6 @@ function ShowHideRow(props: { t: Translate; label: string; value: string; disabl
   )
 }
 
-/** One titled preference group: the harness projects no group chrome into the
- *  `plugins.bundle.config` slot, so the card draws its own — a small heading over
- *  its rows, a hairline separating the groups. */
 function Group(props: { title: string; children: ReactNode }): ReactElement {
   return (
     <div className="lc-settings-group" role="group" aria-label={props.title}>
@@ -139,6 +148,7 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
             { id: 'all', label: t('placement.all') },
             { id: 'tab', label: t('placement.tab') },
             { id: 'sidebar', label: t('placement.sidebar') },
+            { id: 'hide', label: t('placement.hide') },
           ]}
           onPick={(id) => { set?.('defaultPlacement', id) }}
         />
@@ -148,6 +158,18 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
           onPick={(id) => { set?.('fleetTab', id) }} />
       </Group>
       <Group title={t('settings.group.view')}>
+        <PrefRow
+          label={t('settings.overviewRange')}
+          value={state.overviewRange}
+          disabled={disabled}
+          options={[
+            { id: 'today', label: t('ov.range.today') },
+            { id: '7d', label: t('ov.range.7d') },
+            { id: '30d', label: t('ov.range.30d') },
+            { id: 'all', label: t('ov.range.all') },
+          ]}
+          onPick={(id) => { set?.('defaultOverviewRange', id) }}
+        />
         <PrefRow
           label={t('settings.gran')}
           value={state.granularity}
@@ -170,6 +192,18 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
         />
         <ShowHideRow t={t} label={t('settings.durationCurve')} value={state.durationCurve} disabled={disabled}
           onPick={(id) => { set?.('defaultDurationCurve', id) }} />
+        <PrefRow
+          label={t('settings.overviewAuto')}
+          value={state.overviewAutoSteps}
+          disabled={disabled}
+          options={[
+            { id: '100', label: t('settings.overviewAutoSteps', { n: 100 }) },
+            { id: '200', label: t('settings.overviewAutoSteps', { n: 200 }) },
+            { id: '300', label: t('settings.overviewAutoSteps', { n: 300 }) },
+            { id: 'off', label: t('settings.overviewAutoOff') },
+          ]}
+          onPick={(id) => { set?.('overviewAutoSteps', id) }}
+        />
         <PrefRow
           label={t('settings.deltaBase')}
           value={state.deltaBase}
@@ -197,6 +231,7 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
           disabled={disabled}
           options={[
             { id: 'count', label: t('files.sort.count') },
+            { id: 'lines', label: t('files.sort.lines') },
             { id: 'latest', label: t('files.sort.latest') },
             { id: 'path', label: t('files.sort.path') },
             { id: 'name', label: t('files.sort.name') },
@@ -211,6 +246,7 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
           placeholder={t('settings.promptPlaceholder')}
           value={state.promptPrefix}
           disabled={disabled}
+          clearLabel={t('field.clear')}
           onCommit={(text) => { set?.('promptPrefix', text) }}
         />
         <PromptTextRow
@@ -218,6 +254,7 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
           placeholder={t('settings.promptPlaceholder')}
           value={state.promptSuffix}
           disabled={disabled}
+          clearLabel={t('field.clear')}
           onCommit={(text) => { set?.('promptSuffix', text) }}
         />
       </Group>
@@ -225,11 +262,14 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
   )
 }
 
-/** The Plugins page owns the bundle's page and section chrome, so the rows render flat; unserved or absent degrades to nothing. */
 export function makePluginConfigCard(kit: ViewKit): (props: SettingsCardProps) => ReactElement | null {
   const { t } = kit
   return function PluginConfigCard(props: SettingsCardProps): ReactElement | null {
-    const state = typeof props.useContextSettings === 'function' ? props.useContextSettings(s => s) : undefined
+    return <PluginConfigCardBody key={seatKeyOf(props)} {...props} />
+  }
+  function PluginConfigCardBody(props: SettingsCardProps): ReactElement | null {
+    const read = seatOf<SettingsSeat>(props.useContextSettings, NO_SETTINGS)
+    const state = read(s => s)
     if (state === undefined || state.status === 'unavailable') return null
     return (
       <div className="lc-settings-prefs">
