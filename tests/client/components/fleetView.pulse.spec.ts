@@ -148,6 +148,43 @@ describe('Multi-Agent Fleet', () => {
     ctx.dispose()
   })
 
+  test('names members of a members-less team view from the carrier Lead catalog synthesis', async () => {
+    stubFleetRoute()
+    const modernTeam = {
+      enabled: true,
+      tasks: [{
+        id: 'task-7',
+        subject: 'Modern task',
+        description: 'Rendered with a synthesized roster.',
+        status: 'in_progress',
+        ownerId: 'w1',
+        blockedBy: [],
+        writeScopes: [],
+        ready: false,
+        writeScopeWarnings: [],
+      }],
+    }
+    const catalog = [
+      { id: 'w1', createdAt: 1, mode: 'continuable', label: 'worker-bee', name: 'agent-1' },
+      { id: 'w2', createdAt: 2, mode: 'one-shot', name: 'agent-2' },
+    ]
+    const ctx = new TestClientCtx({ services: { sessions: familySessions({}) } })
+    const View = makeView(ctx)
+    const m = await mount(h(View, {
+      sessionId: 'root',
+      useProjection: projectionsFor(richTimeline(), { agentTeam: modernTeam, subagentCatalog: catalog }),
+    }))
+    const group = query(m.container, '[data-owner-group="id:w1"]')
+    assert.ok(text(query(group, '.lc-pulse-work-group-head')).includes('worker-bee'))
+    const card = query(m.container, '[data-agent="w1"]')
+    assert.equal(text(query(card, '.lc-agent-label')), 'agent-1', 'the named catalog child carries its name as the card label')
+    assert.equal(text(query(card, '.lc-agent-duty')), 'worker-bee')
+    const side = query(m.container, '[data-agent="w2"]')
+    assert.equal(text(query(side, '.lc-agent-label')), 'side-quest', 'a one-shot catalog child keeps the plain label')
+    await m.unmount()
+    ctx.dispose()
+  })
+
   test('modern ownerId team projections keep team tasks, their agent status, and one work item per owner', async () => {
     stubFleetRoute()
     const modernTeam = {

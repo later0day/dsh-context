@@ -5,9 +5,9 @@ import { displayCurrencyOf } from '../cost'
 import { mergeComms, mergeDelegations } from '../fleetDetail'
 import { attestedNamesOf, commsAgentsOf } from '../fleetAgents'
 import { mergedDetailOf, useFleetDetails, useFleetModel } from '../fleetModel'
-import { teamOf } from '../fleetTeam'
+import { teamOfProjection, teamWithSummaryRosterOf } from '../fleetTeam'
 import type { ClientCtx, SessionStandardProps } from '../services'
-import { CONTEXT_VIEW_ID, openChildAsideVia, openSessionVia, projectionOf, seatKeyOf, seedConversationViewVia, unsupportedOf } from '../services'
+import { CONTEXT_VIEW_ID, openChildAsideVia, openSessionVia, seatKeyOf, seedConversationViewVia, unsupportedOf } from '../services'
 import { useFleetMemberFocus } from '../viewFocus'
 import { useContextSession } from '../sessionData'
 import type { ViewKit } from '../viewkit'
@@ -48,9 +48,9 @@ export function makeFleetView(
     }, [sessionId])
     const self = data !== null ? agentSelfOf(data, pressure, breakdown, usage) : undefined
     const { forest, team: rowTeam, titles } = useFleetModel(ctx, heads, sessionId, self, data !== null, 120)
-    const teamDirect = projectionOf(props, 'agentTeam', teamOf)
-    const team = teamDirect ?? rowTeam
+    const teamDirect = teamOfProjection(props, sessionId)
     const details = useFleetDetails(undefined, { scopeKey: sessionId })
+    const team = teamWithSummaryRosterOf(teamDirect ?? rowTeam, details.summary?.members)
     const focusMember = useFleetMemberFocus(sessionId)
     const byId = useMemo(
       () => new Map((forest?.nodes ?? []).map(node => [node.id, node])),

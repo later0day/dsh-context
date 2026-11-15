@@ -3,11 +3,11 @@
 import assert from 'node:assert/strict'
 import { afterEach, describe, test, vi } from 'vitest'
 import { detailBytes, FleetDetailCache, fleetBatchOf, fleetDetailOf, fleetSummaryOf, makeFleetBatchFetcher, makeFleetDetailFetcher, makeFleetSummaryFetcher, mergeComms, mergeDelegations, settledVariantOf, type CommsRow } from '../../src/client/fleetDetail'
-import { type FleetDetail, type FleetMemberInfo } from '../../src/shared/types'
+import { type FleetDetail, type FleetMemberInfo, type FleetSummaryMember } from '../../src/shared/types'
 import { LEAD_HUE, familyHue, type AgentNode } from '../../src/client/agentTree'
 import { agentResolverOf, attestedNamesOf, commsAgentsOf, fallbackAgentOf } from '../../src/client/fleetAgents'
 import { NAME_PARTY_PREFIX, NEUTRAL_HUE, UNKNOWN_PARTY } from '../../src/client/commsModel'
-import { type FleetTeam, memberIdByName, taskOwnerIdOf, tasksOfOwnerId, teammateNameOf, teamMemberOf, teamOf } from '../../src/client/fleetTeam'
+import { type FleetTeam, memberIdByName, taskOwnerIdOf, tasksOfOwnerId, teammateNameOf, teamMemberOf, teamOf, teamWithSummaryRosterOf } from '../../src/client/fleetTeam'
 import { makeKit } from './helpers/kit'
 import { clearAttachmentPaths, makeAttachmentLocator, makeAttachmentOpener, pathOfValue } from '../../src/client/attachmentSource'
 import { type AttachmentRef } from '../../src/shared/attachment'
@@ -622,6 +622,44 @@ describe('teamOf — the sanitizing parse', () => {
     assert.equal(teamOf({ members: 'nope' }), null)
   })
 
+  test('a members-less view synthesizes the carrier Lead and its named continuable catalog children', () => {
+    const catalog = [
+      { id: 's1', createdAt: 1, mode: 'one-shot', label: 'quick lookup' },
+      { id: 'w1', createdAt: 2, mode: 'continuable', label: 'parse the spec', name: 'agent-1' },
+      { id: 'w2', createdAt: 3, mode: 'continuable', label: 'wire the view', name: 'agent-2' },
+      { id: 'w3', createdAt: 4, mode: 'external', label: 'elsewhere', name: 'agent-3' },
+      { id: 'w4', createdAt: 5, mode: 'continuable', label: 'unnamed history' },
+      { id: 'w5', createdAt: 6, mode: 'unknown' },
+      { id: 'w1', createdAt: 7, mode: 'continuable', label: 'dup', name: 'agent-9' },
+      { id: '', createdAt: 8, mode: 'continuable', name: 'agent-10' },
+      { id: 'w6', createdAt: 9, mode: 'continuable', name: '' },
+      null,
+    ]
+    const team = teamOf({ enabled: true, tasks: [] }, catalog, 'root-9')
+    assert.ok(team !== null)
+    assert.deepEqual(team.members, [
+      { id: 'root-9', name: 'lead', role: 'lead', phase: 'active' },
+      { id: 'w1', name: 'agent-1', role: 'teammate', phase: 'active' },
+      { id: 'w2', name: 'agent-2', role: 'teammate', phase: 'active' },
+    ])
+    assert.deepEqual(team.tasks, [])
+
+    assert.deepEqual(teamOf({ enabled: true, tasks: [] }, catalog)?.members,
+      [{ id: 'w1', name: 'agent-1', role: 'teammate', phase: 'active' }, { id: 'w2', name: 'agent-2', role: 'teammate', phase: 'active' }],
+      'no carrier id synthesizes the catalog teammates alone')
+    const named = teamOf({ enabled: true, tasks: [] }, [
+      { id: 'root-9', createdAt: 1, mode: 'continuable', name: 'agent-0' },
+    ], 'root-9')
+    assert.deepEqual(named?.members, [{ id: 'root-9', name: 'lead', role: 'lead', phase: 'active' }],
+      'a catalog row equal to the carrier never shadows the Lead')
+    assert.deepEqual(teamOf({ enabled: true, tasks: [] }, 'nope', 'root-9')?.members,
+      [{ id: 'root-9', name: 'lead', role: 'lead', phase: 'active' }])
+    assert.equal(teamOf({ members: [{ id: 'r', name: 'lead', role: 'lead', phase: 'active' }] }, catalog, 'root-9')?.members.length, 1,
+      'a members array keeps the recorded roster and ignores the catalog')
+    assert.equal(teamOf({ enabled: false, tasks: [] }, catalog, 'root-9'), null,
+      'Team mode stays off for a members-less view marked disabled')
+  })
+
   test('malformed members and tasks drop alone', () => {
     const team = teamOf({
       members: [
@@ -672,6 +710,9 @@ describe('fleetTeam helpers', () => {
     assert.equal(teammateNameOf(team, outsider), undefined)
     assert.equal(teammateNameOf(null, teammate), undefined)
     assert.equal(memberIdByName(team, 'worker-bee'), 'w1')
+    assert.equal(memberIdByName(team, 'worker-bee/nested'), 'w1', 'an owner path resolves by its first segment')
+    assert.equal(memberIdByName(team, '/nested'), undefined)
+    assert.equal(memberIdByName(team, 'ghost/nested'), undefined)
     assert.equal(memberIdByName(team, 'ghost'), undefined)
     assert.equal(memberIdByName(team, undefined), undefined)
     assert.equal(memberIdByName(null, 'worker-bee'), undefined)
@@ -679,6 +720,31 @@ describe('fleetTeam helpers', () => {
     assert.deepEqual(tasksOfOwnerId(team, 'w1').map(task => task.id), ['task-1', 'task-2'])
     assert.deepEqual(tasksOfOwnerId(team, 'nobody'), [])
     assert.deepEqual(tasksOfOwnerId(null, 'w1'), [])
+  })
+
+  test('teamWithSummaryRosterOf appends only named continuable members the team lacks', () => {
+    const roster: FleetSummaryMember[] = [
+      { id: 'w1', mode: 'continuable', name: 'worker-bee' },
+      { id: 'w9', mode: 'continuable', name: 'late-comer', phase: 'failed' },
+      { id: 'w10', mode: 'continuable', name: 'waking', phase: 'provisioning' },
+      { id: 'w11', mode: 'continuable', name: 'odd-phase', phase: 'zombie' },
+      { id: 's1', mode: 'one-shot', name: 'quick lookup' },
+      { id: 's2', mode: 'continuable' },
+      { id: 's3', name: 'modeless' },
+    ]
+    const merged = teamWithSummaryRosterOf(team, roster)
+    assert.ok(merged !== null)
+    assert.deepEqual(merged.members.slice(3), [
+      { id: 'w9', name: 'late-comer', role: 'teammate', phase: 'failed' },
+      { id: 'w10', name: 'waking', role: 'teammate', phase: 'provisioning' },
+      { id: 'w11', name: 'odd-phase', role: 'teammate', phase: 'active' },
+    ])
+    assert.equal(teamWithSummaryRosterOf(team, roster.slice(0, 1)), team, 'an already-covered roster returns the team untouched')
+    assert.equal(teamWithSummaryRosterOf(team, []), team)
+    assert.equal(teamWithSummaryRosterOf(team, undefined), team)
+    assert.equal(teamWithSummaryRosterOf(null, roster), null)
+    const bare = teamOf({ tasks: [{ id: 'task-7', subject: 's', description: '', status: 'pending', ownerId: 'w9', blockedBy: [], writeScopes: [], ready: true }] })!
+    assert.deepEqual(teamWithSummaryRosterOf(bare, roster)?.members.map(member => member.id), ['w1', 'w9', 'w10', 'w11'])
   })
 })
 })

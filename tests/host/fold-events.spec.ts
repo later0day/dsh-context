@@ -457,6 +457,7 @@ describe('unknown event types', () => {
     const { state } = driveTimeline([])
     assertStable(state, foreign(1))
     assertStable(state, foreign(2, 'todo/update'))
+    assertStable(state, { type: 'team/mode', seq: 3, time: at(), data: { enabled: true } })
   })
 })
 
