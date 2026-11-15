@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { HostSession, HostTimeline } from './overviewCorpus'
 import { asRecord } from './record'
-import { activityOf, currentOf, numOf, optionalNumOf, timingOf, usageOf } from './overviewDecode'
+import { activityOf, currentOf, numOf, optionalNumOf, timingOf } from './overviewDecode'
 
 export const OVERVIEW_CACHE_FORMAT = 1
 
@@ -119,8 +119,6 @@ function timelineOf(value: unknown): HostTimeline | null {
   if (maxOutputTokens !== undefined) timeline.maxOutputTokens = maxOutputTokens
   if (typeof data.model === 'string' && data.model !== '') timeline.model = data.model
   if (typeof data.lastUser === 'string' && data.lastUser !== '') timeline.lastUser = data.lastUser
-  const cost = usageOf(data.cost)
-  if (cost !== undefined) timeline.cost = cost
   const timing = timingOf(data.timing)
   if (timing !== undefined) timeline.timing = timing
   for (const field of ['generatedReasoning', 'generatedAnswerTokens', 'generatedCallTokens'] as const) {
@@ -240,19 +238,26 @@ export function createOverviewCache(options: OverviewCacheOptions = {}): Overvie
     const sessions = new Map<string, HostSession>()
     const identities = new Map<string, DurableIdentity | null>()
     const rebuild = new Set<string>()
-    let file: unknown
+    let records: CachedSession[] = []
     try {
-      file = JSON.parse(await fs.readFile(path))
+      records = parsedRecords(JSON.parse(await fs.readFile(path))).filter(record => currentIds.has(record.session.id))
     } catch {
-      return { sessions, identities, rebuild }
+      records = []
     }
-    const records = parsedRecords(file).filter(record => currentIds.has(record.session.id))
+    if (pending !== null) {
+      const staged = new Map(records.map(record => [record.session.id, record]))
+      for (const record of pending) {
+        if (currentIds.has(record.session.id)) staged.set(record.session.id, record)
+      }
+      records = [...staged.values()]
+    }
     await inBatches(records, statConcurrency, async (record) => {
       const id = record.session.id
+      const complete = record.session.timeline !== null && record.session.activity !== null
       if (known !== undefined) {
         const expected = known.get(id) ?? null
         identities.set(id, expected)
-        if (record.identity !== null && sameIdentity(record.identity, expected)) sessions.set(id, record.session)
+        if (complete && record.identity !== null && sameIdentity(record.identity, expected)) sessions.set(id, record.session)
         else rebuild.add(id)
         return
       }
@@ -265,7 +270,8 @@ export function createOverviewCache(options: OverviewCacheOptions = {}): Overvie
         const info = await fs.stat(record.identity.path)
         if (info.size === record.identity.sizeBytes && info.mtimeMs === record.identity.mtimeMs) {
           identities.set(id, record.identity)
-          sessions.set(id, record.session)
+          if (complete) sessions.set(id, record.session)
+          else rebuild.add(id)
           return
         }
         identities.set(id, { path: record.identity.path, sizeBytes: info.size, mtimeMs: info.mtimeMs })
@@ -318,7 +324,9 @@ export function createOverviewCache(options: OverviewCacheOptions = {}): Overvie
 
   const save = (records: readonly CachedSession[]): void => {
     if (disposed) return
-    pending = [...records]
+    const merged = new Map((pending ?? []).map(record => [record.session.id, record]))
+    for (const record of records) merged.set(record.session.id, record)
+    pending = [...merged.values()]
     if (timer !== null) clearTimeout(timer)
     timer = setTimeout(() => {
       timer = null

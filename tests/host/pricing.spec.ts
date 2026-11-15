@@ -1,19 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
-import {
-  estimateAnswerTokens,
-  estimateCallTokens,
-  estimateMessage,
-  estimateReasoningTokens,
-  estimateToolSchema,
-  estimateToolsTotal,
-  firstText,
-  imageCountOf,
-  injectionSourceName,
-  isInjection,
-  toolCallNames,
-} from '../../src/host/pricing'
-import type { ContentBlock } from '../../src/host/pricing'
+import { estimateAnswerTokens, estimateCallTokens, estimateMessage, estimateReasoningTokens, estimateToolSchema, estimateToolsTotal, firstText, imageCountOf, injectionSourceName, isInjection, toolCallNames, type ContentBlock } from '../../src/host/pricing'
+
+describe('pricing', () => {
 
 describe('estimateToolsTotal', () => {
   test('an empty tool list prices zero; a non-empty one prices the whole-array JSON plus one block', () => {
@@ -200,4 +189,5 @@ describe('hostile block shapes', () => {
     assert.equal(imageCountOf(nested), 1)
     assert.ok(estimateMessage({ content: nested }) > 0)
   })
+})
 })

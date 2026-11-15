@@ -483,9 +483,11 @@ export interface ContextEventRecord {
   kind: 'compaction' | 'prune' | 'inject' | 'model' | 'mode'
   form?: string
   tokens?: number
+  grossTokens?: number
   count?: number
   sub?: string
   name?: string
+  agent?: string
   detail?: string
   from?: string
   to?: string
@@ -583,6 +585,13 @@ export interface OverviewPartTotal {
   value: number
 }
 
+export interface OverviewTimingWindow {
+  calls: number
+  toolCalls: number
+  toolsMs: number
+  wallMs: number
+}
+
 export interface OverviewSummary {
   sessions: number
   sessionsTotal: number
@@ -596,6 +605,7 @@ export interface OverviewSummary {
   cacheHit: string | null
   tokenParts: OverviewPartTotal[] | null
   timing: TimingTotals | null
+  windowTiming: OverviewTimingWindow
   coverage: BackfillCoverage
 }
 

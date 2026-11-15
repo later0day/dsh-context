@@ -11,11 +11,11 @@ import type {
 } from '../shared/types'
 import type { CachedSnapshotFace, SnapshotProjectionsFace } from './faces'
 import { asRecord } from './record'
-import { activityOf, currentOf, numOf, optionalNumOf, timingOf, usageOf } from './overviewDecode'
+import { activityOf, currentOf, numOf, optionalNumOf, timingOf } from './overviewDecode'
 
 const OVERVIEW_KEYS = new Set<string>(['contextTimeline', 'contextActivity', 'title', 'sessionListMetadata'])
 
-interface HeaderFacts {
+export interface HeaderFacts {
   id: string
   createdAt: number
   cwd?: string
@@ -31,7 +31,6 @@ export interface HostTimeline {
   model?: string
   turns: number
   steps?: number
-  cost?: SessionCostUsage
   timing?: TimingTotals
   lastUser?: string
   generatedReasoning?: number
@@ -52,6 +51,16 @@ export interface HostSession {
   signature: string
 }
 
+export interface HostTotals {
+  usage: SessionCostUsage | null
+  tokens: number
+  turns: number
+  calls: number
+  toolCalls: number
+  toolsMs: number
+  wallMs: number
+}
+
 export interface HostRow {
   session: HostSession
   archived: boolean
@@ -59,8 +68,7 @@ export interface HostRow {
   running: boolean
   activity: ContextActivity | null
   family: HostSession[]
-  familyCost: SessionCostUsage | null
-  tokens: number
+  totals: HostTotals
   createdDay?: string
 }
 
@@ -100,7 +108,7 @@ function safeGet(get: ((id: string) => unknown) | undefined, id: string): unknow
   }
 }
 
-function headerFactsOf(header: Record<string, unknown>): HeaderFacts | null {
+export function headerFactsOf(header: Record<string, unknown>): HeaderFacts | null {
   if (typeof header.id !== 'string' || header.id === '') return null
   const createdAt = typeof header.createdAt === 'number' && Number.isFinite(header.createdAt) ? header.createdAt : 0
   return {
@@ -241,8 +249,6 @@ function timelineOf(value: unknown): HostTimeline | null {
   if (maxOutputTokens !== undefined) timeline.maxOutputTokens = maxOutputTokens
   if (typeof data.model === 'string' && data.model !== '') timeline.model = data.model
   if (typeof data.lastUser === 'string' && data.lastUser !== '') timeline.lastUser = data.lastUser
-  const cost = usageOf(data.cost)
-  if (cost !== undefined) timeline.cost = cost
   const timing = timingOf(data.timing)
   if (timing !== undefined) timeline.timing = timing
   const reasoning = optionalNumOf(data.generatedReasoning)
@@ -276,27 +282,37 @@ function sessionOf(
       : cache.cachedSnapshot(entry.header, OVERVIEW_KEYS)
     const served = asRecord(block?.values)
     values = served ?? {}
-    cacheable = served !== null && (served.contextTimeline !== undefined || served.contextActivity !== undefined)
+    cacheable = served !== null
+      && served.contextTimeline !== undefined
+      && served.contextActivity !== undefined
   } catch {
     values = null
     cacheable = false
   }
+  return { session: hostSessionOf(entry.id, entry.facts, entry.signature, values), cacheable }
+}
+
+export function hostSessionOf(
+  id: string,
+  facts: HeaderFacts,
+  signature: string,
+  values: Record<string, unknown> | null,
+): HostSession {
   const metadata = asRecord(values?.sessionListMetadata)
   const lastPromptAt = optionalNumOf(metadata?.lastPromptAt)
-  const updatedAt = Math.max(entry.facts.createdAt, lastPromptAt ?? 0)
-  const session: HostSession = {
-    id: entry.id,
-    title: titleOf(values?.title, entry.facts.cwd, entry.id),
+  const updatedAt = Math.max(facts.createdAt, lastPromptAt ?? 0)
+  return {
+    id,
+    title: titleOf(values?.title, facts.cwd, id),
     updatedAt,
     blank: metadata?.blank === true,
     timeline: values === null ? null : timelineOf(values.contextTimeline),
     activity: values === null ? null : activityOf(values.contextActivity),
-    signature: entry.signature,
-    ...(entry.facts.cwd === undefined ? {} : { cwd: entry.facts.cwd }),
-    ...(entry.facts.parentSession === undefined ? {} : { parentSession: entry.facts.parentSession }),
-    ...(entry.facts.origin === undefined ? {} : { origin: entry.facts.origin }),
+    signature,
+    ...(facts.cwd === undefined ? {} : { cwd: facts.cwd }),
+    ...(facts.parentSession === undefined ? {} : { parentSession: facts.parentSession }),
+    ...(facts.origin === undefined ? {} : { origin: facts.origin }),
   }
-  return { session, cacheable }
 }
 
 function mergeActivity(members: readonly (ContextActivity | null)[]): ContextActivity | null {
@@ -357,6 +373,30 @@ function mergeTallies(
   return out
 }
 
+export function activityTotalsOf(
+  activity: ContextActivity | null,
+  admit?: (key: string) => boolean,
+): HostTotals {
+  let usage: SessionCostUsage | null = null
+  let turns = 0
+  let calls = 0
+  let toolCalls = 0
+  let toolsMs = 0
+  let wallMs = 0
+  if (activity !== null) {
+    for (const [key, day] of Object.entries(activity.days)) {
+      if (admit !== undefined && !admit(key)) continue
+      usage = mergeCostUsage(usage, day.cost)
+      turns += day.turns ?? 0
+      calls += day.requests
+      toolCalls += day.toolCalls ?? 0
+      toolsMs += day.toolsMs ?? 0
+      wallMs += day.wallMs ?? 0
+    }
+  }
+  return { usage, tokens: billedTokensOf(usage), turns, calls, toolCalls, toolsMs, wallMs }
+}
+
 function childrenOf(sessions: readonly HostSession[]): Map<string, HostSession[]> {
   const children = new Map<string, HostSession[]>()
   for (const session of sessions) {
@@ -414,7 +454,6 @@ function rowsOf(
     const activity = family.length === 1
       ? session.activity
       : mergeActivity(family.map(member => member.activity))
-    const familyCost = mergeCostUsage(...family.map(member => member.timeline?.cost))
     const group = workspace.groups.get(session.id)
     const createdDay = createdDayOf(activity)
     rows.push({
@@ -424,8 +463,7 @@ function rowsOf(
       running: runningOf(ctx, session.id),
       activity,
       family,
-      familyCost,
-      tokens: billedTokensOf(familyCost),
+      totals: activityTotalsOf(activity),
       ...(createdDay === undefined ? {} : { createdDay }),
     })
   }
