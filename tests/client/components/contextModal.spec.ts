@@ -6,10 +6,14 @@ import { resetTimelineDetailStores } from '../../../src/client/timelineSource'
 import { modalStoreOf, setPendingConsume, takePendingConsume } from '../../../src/client/modalStore'
 import { watchHistoryFaces } from '../../../src/client/historyPage'
 import { createContextSettings } from '../../../src/client/settings'
-import type { ContextTimeline } from '../../../src/shared/types'
-import { DICT_EN } from '../../../src/client/i18n'
+import { type ContextTimeline } from '../../../src/shared/types'
+import { DICT_EN, DICT_ZH } from '../../../src/client/i18n'
 import { TestClientCtx, TestSessions, asClientCtx } from '../helpers/harness'
 import { click, flush, hover, keydown, makeKit, mount, query, queryAll, text, unhover, until } from '../helpers/kit'
+import { makeRecomCard, resetRecomCache } from '../../../src/client/components/recomCard'
+import { DEFAULT_RECOM, type Recom } from '../../../src/shared/recoms'
+
+describe('contextModal', () => {
 
 const kit = makeKit()
 const settings = createContextSettings()
@@ -71,10 +75,11 @@ describe('ContextModal', () => {
       ['sm-load2', () => undefined],
     ] as const) {
       const loading = await mount(h(ContextModal, { sessionId: sid, useContextModal: OPEN, ...(useProjection !== undefined ? { useProjection } : {}), }))
-      assert.ok(text(document.body).includes(DICT_EN.loading), 'no projection hook (or an empty one) shows the loading view')
+      assert.ok(text(document.body).includes(DICT_EN['overview.title']), 'no projection hook (or an empty one) keeps the zero layout')
+      assert.ok(text(document.body).includes(DICT_EN['browser.title']))
       assert.ok(document.body.querySelector('.lc-modal-card') !== null)
       assert.ok(document.body.querySelector('.lc-modal-fill') !== null, 'the modal block keeps its final size class')
-      assert.equal(document.body.querySelectorAll('.lc-modal-skeleton').length, 2, 'the modal paints its final card skeleton')
+      assert.equal(document.body.querySelectorAll('.lc-modal-skeleton').length, 0)
       await loading.unmount()
     }
   })
@@ -89,7 +94,7 @@ describe('ContextModal', () => {
     }))
     try {
       assert.ok(document.body.querySelector('.lc-modal-fill') !== null)
-      assert.ok(document.body.querySelector('.lc-br') !== null || text(document.body).includes(DICT_EN.loading))
+      assert.ok(document.body.querySelector('.lc-br') !== null, 'the browser keeps its card shape without a session id')
     } finally {
       await m.unmount()
     }
@@ -117,7 +122,7 @@ describe('ContextModal', () => {
     const ContextModal = makeContextModal(asClientCtx(ctx), kit, settings)
     const m = await mount(h(ContextModal, { sessionId: 'sm-cold-fail', useContextModal: OPEN, useProjection: () => undefined, }))
     await until(() => text(document.body).includes(DICT_EN['detail.loadFailed']), 'the failure note never surfaced')
-    assert.ok(!text(document.body).includes(DICT_EN.loading), 'no spinner remains once failed')
+    assert.ok(document.body.querySelector('.lc-modal-card') !== null, 'the modal keeps its frame once failed')
     await act(async () => {
       const hit = queryAll(document.body, 'button').find(b => text(b) === DICT_EN['detail.loadFailed'])
       if (hit === undefined) throw new Error('retry button not found')
@@ -135,7 +140,6 @@ describe('ContextModal', () => {
       useProjection: (key: string) =>
         key === 'contextTimeline' ? { current: 'junk', requests: 'nope', nodes: 7, archive: null } : undefined,
     }))
-    assert.ok(!text(document.body).includes(DICT_EN.loading))
     assert.ok(text(document.body).includes(DICT_EN['overview.title']))
     assert.ok(document.body.querySelector('.lc-br-cats') !== null)
     await m.unmount()
@@ -382,11 +386,14 @@ describe('ContextModal — the split generation', () => {
     })
     const m = await mount(h(ContextModal, { sessionId: 'sm-slim', useContextModal: OPEN, useProjection: (key: string) => (key === 'contextTimeline' ? head : undefined), }))
     assert.ok(text(document.body).includes(DICT_EN['overview.title']))
-    assert.ok(text(document.body).includes(DICT_EN['detail.loading']))
+    assert.ok(document.body.querySelector('.lc-br-note .lc-skel-note') !== null, 'the browser reserves its loading bar')
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
     await act(async () => { release() })
-    await until(() => !text(document.body).includes(DICT_EN['detail.loading']), 'the modal detail never landed')
-    assert.equal(queryAll(document.body, '.lc-br-pick option').length, 2, 'live + the one served step')
+    await until(() => document.body.querySelector('.lc-br-note .lc-skel-note') === null, 'the modal detail never landed')
+    const picker = query<HTMLButtonElement>(document.body, '.lc-br-pick')
+    await click(picker)
+    assert.equal(queryAll(document.body, '.lc-br-pick-opt').length, 2, 'live + the one served step')
+    await click(picker)
     assert.ok(text(document.body).includes('1 Item'), 'the assistant section counts the served node')
     await m.unmount()
 
@@ -498,4 +505,278 @@ describe('ContextModal — opt-in session warm-up', () => {
     await m.unmount()
     vi.useRealTimers()
   })
+})
+})
+
+describe('recomCard', () => {
+
+function remoteRecom(): Recom {
+  return {
+    ...DEFAULT_RECOM,
+    id: 'remote',
+    name: 'Remote Model',
+    slogan: { en: 'Remote slogan', zh: '远端标语' },
+    promotion: { en: 'Remote promotion', zh: '远端推广' },
+    tooltip: { en: 'Remote tooltip', zh: '远端说明' },
+  }
+}
+
+function secondRecom(): Recom {
+  return { ...remoteRecom(), id: 'second', name: 'Second Model' }
+}
+
+function reply(body: unknown, ok = true): Response {
+  return { ok, json: async () => body } as Response
+}
+
+function pendingRequest(): { calls: number; release(value: Response): void } {
+  let release!: (value: Response) => void
+  const request = { calls: 0, release: (value: Response) => { release(value) } }
+  vi.stubGlobal('fetch', () => {
+    request.calls++
+    return new Promise<Response>((resolve) => { release = resolve })
+  })
+  return request
+}
+
+function card(locale: 'en' | 'zh'): () => ReturnType<ReturnType<typeof makeRecomCard>> {
+  const ctx = new TestClientCtx({ locale })
+  return makeRecomCard(makeKit(locale), asClientCtx(ctx))
+}
+
+afterEach(() => {
+  resetRecomCache()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
+describe('RecomCard', () => {
+  test('the default paints immediately, then the validated remote pool replaces it', async () => {
+    let release!: (value: Response) => void
+    const pending = new Promise<Response>((resolve) => { release = resolve })
+    const calls: { url: string; init?: RequestInit }[] = []
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      return pending
+    })
+    const RecomCard = card('en')
+    const m = await mount(h(RecomCard))
+    assert.ok(m.container.querySelector('.lc-card-title') === null)
+    assert.ok(m.container.querySelector('.lc-recom-link > .lc-recom-arrow') !== null)
+    assert.equal(query(m.container, '.lc-recom-sponsor').textContent, DICT_EN['recom.sponsor'])
+    assert.ok(text(m.container).includes(DEFAULT_RECOM.slogan.en))
+    assert.ok(m.container.querySelector('.lc-recom-degraded') === null)
+    release(reply({ ok: true, value: [remoteRecom()], degraded: false }))
+    await flush()
+    assert.ok(text(m.container).includes('Remote Model'))
+    assert.ok(text(m.container).includes('Remote slogan'))
+    assert.ok(text(m.container).includes('Remote promotion'))
+    assert.ok(m.container.querySelector('.lc-recom-degraded') === null)
+    const tooltip = query(m.container, '[role="tooltip"]')
+    assert.equal(tooltip.textContent, 'Remote tooltip')
+    const link = query<HTMLAnchorElement>(m.container, 'a')
+    assert.equal(link.href, DEFAULT_RECOM.url)
+    assert.equal(link.target, '_blank')
+    assert.equal(link.rel, 'noreferrer')
+    assert.equal(link.getAttribute('aria-describedby'), query(m.container, '[role="tooltip"]').id)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]?.url, 'api/dsh-context/recom')
+    assert.equal(calls[0]?.init?.method, 'POST')
+    assert.equal(calls[0]?.init?.body, '{}')
+    assert.equal(query<HTMLImageElement>(m.container, 'img').src, DEFAULT_RECOM.icon)
+    await m.unmount()
+  })
+
+  test('Chinese content renders locally and HTTP or payload failures preserve the default', async () => {
+    const responses = [
+      reply({}, false),
+      reply({ ok: true, value: { bad: true } }),
+      { ok: true, json: () => Promise.reject(new Error('bad json')) } as unknown as Response,
+    ]
+    for (const response of responses) {
+      vi.stubGlobal('fetch', async () => response)
+      const RecomCard = card('zh')
+      const m = await mount(h(RecomCard))
+      await flush()
+      assert.ok(text(m.container).includes(DEFAULT_RECOM.slogan.zh))
+      assert.equal(query(m.container, '.lc-recom-sponsor').textContent, DICT_ZH['recom.sponsor'])
+      assert.equal(query(m.container, '[role="tooltip"]').textContent, DEFAULT_RECOM.tooltip.zh)
+      assert.ok(m.container.querySelector('.lc-recom-degraded') !== null)
+      await m.unmount()
+    }
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')))
+    const RecomCard = card('zh')
+    const m = await mount(h(RecomCard))
+    await flush()
+    assert.ok(text(m.container).includes(DEFAULT_RECOM.promotion.zh))
+    await m.unmount()
+  })
+
+  test('the brand initial covers icon states and a settled pool survives unmount', async () => {
+    const request = pendingRequest()
+    const RecomCard = card('en')
+    const m = await mount(h(RecomCard))
+    const mark = query(m.container, '.lc-recom-mark')
+    assert.equal(mark.querySelector('.lc-recom-fallback')?.textContent, 'D')
+    assert.ok(!mark.classList.contains('lc-recom-mark-loaded'))
+    await act(async () => {
+      query(m.container, 'img').dispatchEvent(new Event('load'))
+    })
+    assert.ok(mark.classList.contains('lc-recom-mark-loaded'))
+    await act(async () => {
+      query(m.container, 'img').dispatchEvent(new Event('error'))
+    })
+    assert.ok(!mark.classList.contains('lc-recom-mark-loaded'))
+    assert.ok(mark.querySelector('img') === null)
+    await m.unmount()
+    request.release(reply({ ok: true, value: [remoteRecom()] }))
+    await flush()
+    assert.equal(m.container.isConnected, false)
+    const second = await mount(h(RecomCard))
+    assert.ok(text(second.container).includes('Remote Model'))
+    assert.equal(request.calls, 1)
+    await second.unmount()
+  })
+
+  test('the first pool picks randomly and later mounts rotate immediately with one fetch', async () => {
+    const request = pendingRequest()
+    vi.spyOn(Math, 'random').mockReturnValue(0.99)
+    const RecomCard = card('en')
+    const first = await mount(h(RecomCard))
+    assert.ok(text(first.container).includes(DEFAULT_RECOM.name))
+    request.release(reply({ ok: true, value: [remoteRecom(), secondRecom()], degraded: false }))
+    await flush()
+    assert.ok(text(first.container).includes('Second Model'))
+    await first.unmount()
+    const second = await mount(h(RecomCard))
+    assert.ok(text(second.container).includes('Remote Model'), 'the next entry paints synchronously')
+    await second.unmount()
+    const third = await mount(h(RecomCard))
+    assert.ok(text(third.container).includes('Second Model'), 'rotation wraps within the cached pool')
+    await third.unmount()
+    assert.equal(request.calls, 1)
+  })
+
+  test('concurrent first mounts share the same pool request', async () => {
+    const request = pendingRequest()
+    const RecomCard = card('en')
+    const first = await mount(h(RecomCard))
+    const second = await mount(h(RecomCard))
+    request.release(reply({ ok: true, value: [remoteRecom()] }))
+    await flush()
+    assert.ok(text(first.container).includes('Remote Model'))
+    assert.ok(text(second.container).includes('Remote Model'))
+    assert.equal(request.calls, 1)
+    await first.unmount()
+    await second.unmount()
+  })
+
+  test('reset during a pending read keeps a later request shared and independent', async () => {
+    const releases: ((value: Response) => void)[] = []
+    vi.stubGlobal('fetch', () => new Promise<Response>((resolve) => { releases.push(resolve) }))
+    const RecomCard = card('en')
+    const first = await mount(h(RecomCard))
+    resetRecomCache()
+    const second = await mount(h(RecomCard))
+    assert.equal(releases.length, 2)
+    releases[0](reply({}, false))
+    await flush()
+    const third = await mount(h(RecomCard))
+    assert.equal(releases.length, 2, 'the stale cleanup leaves the newer request in flight')
+    releases[1](reply({ ok: true, value: [secondRecom()] }))
+    await flush()
+    assert.ok(text(second.container).includes('Second Model'))
+    assert.ok(text(third.container).includes('Second Model'))
+    await first.unmount()
+    await second.unmount()
+    await third.unmount()
+  })
+
+  test('an identical initial selection leaves the painted card untouched', async () => {
+    vi.stubGlobal('fetch', async () => reply({ ok: true, value: [DEFAULT_RECOM] }))
+    const RecomCard = card('en')
+    const m = await mount(h(RecomCard))
+    await flush()
+    assert.ok(text(m.container).includes(DEFAULT_RECOM.slogan.en))
+    assert.ok(text(m.container).includes(DEFAULT_RECOM.promotion.en))
+    assert.ok(m.container.querySelector('.lc-recom-degraded') === null)
+    await m.unmount()
+  })
+
+  test('a degraded pool paints its mark at once and a later mount retries', async () => {
+    vi.stubGlobal('fetch', async () => reply({ ok: true, value: [DEFAULT_RECOM], degraded: true }))
+    const RecomCard = card('zh')
+    const first = await mount(h(RecomCard))
+    await flush()
+    assert.equal(query(first.container, '.lc-recom-brand').textContent, 'DeepSeek')
+    assert.ok(first.container.querySelector('.lc-recom-degraded') !== null)
+    await first.unmount()
+    let release!: (value: Response) => void
+    vi.stubGlobal('fetch', () => new Promise<Response>((resolve) => { release = resolve }))
+    const second = await mount(h(RecomCard))
+    assert.ok(second.container.querySelector('.lc-recom-degraded') !== null, 'the cached degrade paints at once')
+    release(reply({ ok: true, value: [remoteRecom()], degraded: false }))
+    await flush()
+    assert.ok(text(second.container).includes('Remote Model'))
+    assert.ok(second.container.querySelector('.lc-recom-degraded') === null)
+    await second.unmount()
+  })
+})
+
+
+describe('RecomCard cache ttl', () => {
+  test('a degraded read is not served from cache on the next mount', async () => {
+    const RecomCard = card('en')
+    resetRecomCache()
+    let calls = 0
+    vi.stubGlobal('fetch', async () => {
+      calls += 1
+      return calls === 1
+        ? { ok: false, json: async () => ({}) }
+        : { ok: true, json: async () => ({ value: [remoteRecom()], degraded: false }) }
+    })
+    try {
+      const first = await mount(h(RecomCard, {}))
+      await flush()
+      assert.equal(calls, 1)
+      await first.unmount()
+      const second = await mount(h(RecomCard, {}))
+      await flush()
+      assert.equal(calls, 2, 'a degraded read revalidates immediately')
+      await second.unmount()
+    } finally {
+      vi.unstubAllGlobals()
+      resetRecomCache()
+    }
+  })
+
+  test('a mount inside the TTL window keeps the pool; past the TTL it refetches', async () => {
+    const RecomCard = card('en')
+    resetRecomCache()
+    let calls = 0
+    vi.stubGlobal('fetch', async () => {
+      calls += 1
+      return { ok: true, json: async () => ({ value: [{ ...remoteRecom(), id: 'x' + String(calls) }], degraded: false }) }
+    })
+    try {
+      const first = await mount(h(RecomCard, {}))
+      await flush()
+      assert.equal(calls, 1)
+      const second = await mount(h(RecomCard, {}))
+      await flush()
+      assert.equal(calls, 1, 'a fresh cache answers the next mount without a network read')
+      await first.unmount()
+      await second.unmount()
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31 * 60_000)
+      const third = await mount(h(RecomCard, {}))
+      await flush()
+      assert.ok(calls >= 2, 'a mount past the TTL refetches')
+      spy.mockRestore()
+      await third.unmount()
+    } finally {
+      vi.unstubAllGlobals()
+      resetRecomCache()
+    }
+  })
+})
 })

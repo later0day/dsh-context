@@ -10,7 +10,8 @@ import type { ContextSettings } from '../settings'
 import { contextBreakdownOf, contextPressureOf, conversationNodesOf, headersOf, imageLoaderOf, projectionOf, seatKeyOf, seatOf, sessionAddressOf, workspaceOf } from '../services'
 import { makeContentFetcher, makeHeaderFetcher, useHistoryFace } from '../historyPage'
 import { useSessionDetailWarm } from '../prefetch'
-import { useTimelineSource } from '../timelineSource'
+import { COLD_TIMELINE } from '../coldTimeline'
+import { makeDeltaFetcher, useTimelineSource } from '../timelineSource'
 import type { ViewKit } from '../viewkit'
 import { useConversationSurface } from './useConversationSurface'
 import { makeContextBrowser } from './browser'
@@ -58,7 +59,7 @@ export function makeContextModal(
   function ContextModalBody(props: ContextModalProps): ReactElement {
     const sessionId = typeof props.sessionId === 'string' ? props.sessionId : ''
     const source = useTimelineSource(props)
-    const data = source.data
+    const data = source.data ?? COLD_TIMELINE
     const pressure = projectionOf(props, 'contextPressure', contextPressureOf)
     const breakdown = projectionOf(props, 'contextBreakdown', contextBreakdownOf)
     const headers = projectionOf(props, 'contextHeaders', headersOf)
@@ -91,6 +92,10 @@ export function makeContextModal(
         : undefined),
       [ctx, sessionId, historyFace],
     )
+    const fetchDelta = useMemo(
+      () => (sessionId !== '' ? makeDeltaFetcher(sessionId) : undefined),
+      [sessionId],
+    )
 
     const close = useCallback(() => {
       if (sessionId === '') return
@@ -120,8 +125,8 @@ export function makeContextModal(
       return () => { observer.disconnect() }
     }, [])
 
-    const head = data !== null ? headlineOf(data, pressure, breakdown) : null
-    const subtitle = data !== null ? providerModelLabelOf(data.provider, data.model, data.reasoningEffort) : ''
+    const head = headlineOf(data, pressure, breakdown)
+    const subtitle = providerModelLabelOf(data.provider, data.model, data.reasoningEffort)
 
     return (
       <>
@@ -134,16 +139,8 @@ export function makeContextModal(
                 <button className="lc-modal-close hover:text-(--dsw-alias-label-primary) hover:bg-(--dsw-alias-interactive-bg-hover)" aria-label={t('cmd.close')} onClick={close}>×</button>
               </div>
 
-              {data === null || head === null ? (
-                source.detailState === 'failed' ? (
-                  <DetailNote state="failed" onRetry={source.retryDetail} />
-                ) : (
-                  <div className="lc-modal-body">
-                    <div className="lc-card lc-modal-skeleton" style={{ minHeight: 132 }} aria-hidden="true" />
-                    <div className="lc-card lc-modal-skeleton" style={{ minHeight: 320 }} aria-hidden="true" />
-                    <div className="lc-empty">{t('loading')}</div>
-                  </div>
-                )
+              {source.detailState === 'failed' && source.data === null ? (
+                <DetailNote state="failed" onRetry={source.retryDetail} />
               ) : (
                 <div className="lc-modal-body">
                   <CurrentComposition
@@ -158,6 +155,7 @@ export function makeContextModal(
                     convNodes={convNodes}
                     fetchContent={fetchContent}
                     fetchHeader={fetchHeader}
+                    fetchDelta={fetchDelta}
                     loadImage={loadImage}
                     openAttachment={openAttachment}
                     hoverKey={hoverCat}

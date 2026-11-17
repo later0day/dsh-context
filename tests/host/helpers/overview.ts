@@ -70,6 +70,7 @@ export interface Harness {
     foldedAvailable: boolean
     foldedVersion: number
     foldedIds: string[] | null
+    workerFoldedIds: string[] | null
     foldCalls: number[]
     savedRecords: CachedSession[]
     cachedSessions: Map<string, HostSession>
@@ -103,6 +104,8 @@ export interface BootOptions {
   persistence?: unknown
   cache?: OverviewCache
   idleMs?: number
+  captureDelayMs?: number
+  capturePollMs?: number
   yieldEvery?: number
   yieldTo?: () => Promise<void>
   cachePath?: string
@@ -151,6 +154,7 @@ export function fakeCost(ready: boolean): CostSource {
     ready: () => ready,
     read: (usage) => ({ usd: ready ? costOfUsage(usage) : null, ready }),
     usd: (usage) => (ready ? costOfUsage(usage) : null),
+    complete: (usage) => ready && usage !== null && costOfUsage(usage) !== null,
   }
 }
 
@@ -162,12 +166,14 @@ export function fakeBackfill(state: Harness['state']): BackfillHandle {
   }
   if (!state.foldedAvailable) return Object.assign(handle, base)
   return Object.assign(handle, base, {
-    foldedSince: (marker: number): { version: number; ids: string[] | null } => {
+    foldedSince: (marker: number): { version: number; ids: string[] | null; workerIds: string[] | null } => {
       state.foldCalls.push(marker)
-      if (marker === state.foldedVersion) return { version: state.foldedVersion, ids: [] }
+      if (marker === state.foldedVersion) return { version: state.foldedVersion, ids: [], workerIds: [] }
       const ids = state.foldedIds
+      const workerIds = state.workerFoldedIds
       state.foldedIds = []
-      return { version: state.foldedVersion, ids }
+      state.workerFoldedIds = []
+      return { version: state.foldedVersion, ids, workerIds }
     },
   })
 }
@@ -184,6 +190,7 @@ export function fakeState(overrides: Partial<Harness['state']> = {}): Harness['s
     foldedAvailable: true,
     foldedVersion: 0,
     foldedIds: [],
+    workerFoldedIds: [],
     foldCalls: [],
     savedRecords: [],
     cachedSessions: new Map(),
@@ -328,13 +335,15 @@ export function timingOf(wallMs: number, toolCalls: number, toolsMs: number): Ti
   }
 }
 
-export function dayOf(tokens: number, requests: number, options: { cost?: SessionCostUsage; turns?: number; toolCalls?: number; skills?: string[]; tools?: string[]; cmds?: string[] } = {}): ActivityDay {
+export function dayOf(tokens: number, requests: number, options: { cost?: SessionCostUsage; turns?: number; toolCalls?: number; toolsMs?: number; wallMs?: number; skills?: string[]; tools?: string[]; cmds?: string[] } = {}): ActivityDay {
   return {
     tokens,
     requests,
     ...(options.cost === undefined ? {} : { cost: options.cost }),
     ...(options.turns === undefined ? {} : { turns: options.turns }),
     ...(options.toolCalls === undefined ? {} : { toolCalls: options.toolCalls }),
+    ...(options.toolsMs === undefined ? {} : { toolsMs: options.toolsMs }),
+    ...(options.wallMs === undefined ? {} : { wallMs: options.wallMs }),
     ...(options.skills === undefined ? {} : { skills: Object.fromEntries(options.skills.map(name => [name, { n: 1, last: 10 }])) }),
     ...(options.tools === undefined ? {} : { tools: Object.fromEntries(options.tools.map(name => [name, { n: 1, last: 20 }])) }),
     ...(options.cmds === undefined ? {} : { cmds: Object.fromEntries(options.cmds.map(name => [name, { n: 1, last: 30 }])) }),
@@ -362,6 +371,7 @@ export function boot(options: BootOptions = {}): Promise<Harness> {
     foldedAvailable: options.foldedAvailable ?? true,
     foldedVersion: 0,
     foldedIds: [],
+    workerFoldedIds: [],
     foldCalls: [],
     savedRecords: [],
     cachedSessions: new Map(),
@@ -426,6 +436,8 @@ export function boot(options: BootOptions = {}): Promise<Harness> {
     scanTtlMs: options.scanTtlMs ?? 0,
     ...(options.servedKeysMax === undefined ? {} : { servedKeysMax: options.servedKeysMax }),
     ...(options.idleMs === undefined ? {} : { idleMs: options.idleMs }),
+    ...(options.captureDelayMs === undefined ? {} : { captureDelayMs: options.captureDelayMs }),
+    ...(options.capturePollMs === undefined ? {} : { capturePollMs: options.capturePollMs }),
     ...(options.yieldEvery === undefined ? {} : { yieldEvery: options.yieldEvery }),
     ...(options.yieldTo === undefined ? {} : { yieldTo: options.yieldTo }),
     ...(options.cachePath === undefined ? {} : { cachePath: options.cachePath }),
@@ -441,13 +453,27 @@ export function boot(options: BootOptions = {}): Promise<Harness> {
   })()
 }
 
+export const WIDE_RANGE = { start: 0, end: Date.UTC(2100, 0, 1) }
+
+function withWideRange(body: unknown): unknown {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return body
+  const data = body as Record<string, unknown>
+  if (data.part !== 'summary' && data.part !== 'page' && data.part !== 'tally') return body
+  const scope = data.scope
+  if (scope !== undefined && (scope === null || typeof scope !== 'object')) return body
+  const scopeData = scope === undefined || scope === null ? {} : scope as Record<string, unknown>
+  if ('range' in scopeData) return body
+  return { ...data, scope: { ...scopeData, range: WIDE_RANGE } }
+}
+
 export async function call(harness: Harness, body: unknown): Promise<CallResult> {
   const route = harness.routes.get(OVERVIEW_ROUTE)
   assert.ok(route !== undefined && route.fetch !== undefined)
+  const payload = withWideRange(body)
   const response = await route.fetch(new Request(`http://dsh.test${OVERVIEW_ROUTE}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: typeof body === 'string' ? body : JSON.stringify(body),
+    body: typeof payload === 'string' ? payload : JSON.stringify(payload),
   }))
   const text = await response.text()
   return { reply: JSON.parse(text) as RouteReply, bytes: new TextEncoder().encode(text).length }

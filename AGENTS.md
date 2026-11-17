@@ -73,6 +73,7 @@ Complete ALL of these before ANY commit:
 - Review the full diff independently: every change necessary, correct, and not over-engineered.
 - Clean up generated temporary files and temporary or unhelpful comments.
 - Load the [code-review](https://github.com/mattpocock/skills/blob/main/skills/engineering/code-review/SKILL.md) skill, run it to review all the changes.
+  - Replace the "Under 400 words" with "Under 1000 words" in the prompt for subagents. 
   - Independently verify or follow each of its suggestions until ALL of its multi-axis analysis are done. 
   - Tell its subagents to skip typecheck, lint, and test coverage, which the main agent covers.
   - Tell its subagent about background information and related files (and line numbers if collected), eg. user's purposes / intention, untouched but related in-project files, or the facts or related evidences in dsh, in order to skip time for re-collecting them.
@@ -101,8 +102,8 @@ Complete ALL of these before ANY commit:
 - **Watch**: run `pnpm run watch` to hot-reload the local plugin in dsh while developing in the browser. The watch build is the lean profile — unminified JavaScript, no source maps, no declaration file — which keeps the watcher's resident set low; `pnpm run build` emits the full release artifacts.
 - **Windows**: `pnpm run watch` and `pnpm run web` are pure Node; the bash-backed scripts locate Git for Windows automatically, and `DSH_CTX_BASH` overrides the `bash.exe` path.
 - **Web server**: it may already be running at `http://127.0.0.1:3080/`. To restart, run `pnpm run web` (kills the running `dsh web`, then starts `dsh web --no-open`).
-- **Tokenized URL**: always open the full URL printed at startup, `http://127.0.0.1:3080/?token=XXXXXXXXX`. Save it to `.tmp/dsh-web-url.txt` and read it from there for later browser runs; each restart prints a new token and the old URL stops working, so overwrite the file every time.
-- **Auth-token errors**: kill the dsh process, restart with `dsh web --no-open`, and open the newly printed tokenized URL.
+- **Tokenized URL**: always open the full URL printed at startup, `http://127.0.0.1:3080/?token=XXXXXXXXX`, and read it from `.tmp/dsh-web-url.txt` for later browser runs — `pnpm run web` writes the URL there and removes the file when the server stops or restarts.
+- **Auth-token errors**: restart with `pnpm run web` and open the newly printed tokenized URL.
 
 ## Compatibility - Important!
 - MUST install and work correctly on every supported `@deepseek-ai/dsh` release, with no regressions in runtime dependencies, message parsing, or any user-visible behavior.

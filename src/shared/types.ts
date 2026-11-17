@@ -174,7 +174,7 @@ export type DefaultDurationCurve = 'show' | 'hide'
 
 export type OverviewAutoSteps = 'off' | '100' | '200' | '300'
 
-export type DefaultOverviewRange = 'today' | '7d' | '30d' | 'all'
+export type DefaultOverviewRange = 'today' | '7d' | '30d'
 
 export type FleetTab = 'show' | 'hide'
 
@@ -451,6 +451,7 @@ export interface SurfaceNode {
   err?: boolean
   skill?: string
   calls?: string[]
+  agent?: string
 }
 
 export interface SlimRequestRecord {
@@ -483,9 +484,11 @@ export interface ContextEventRecord {
   kind: 'compaction' | 'prune' | 'inject' | 'model' | 'mode'
   form?: string
   tokens?: number
+  grossTokens?: number
   count?: number
   sub?: string
   name?: string
+  agent?: string
   detail?: string
   from?: string
   to?: string
@@ -553,7 +556,7 @@ export type OverviewSort = 'recent' | 'tokens' | 'context'
 
 export type OverviewTallyField = 'skills' | 'tools' | 'cmds'
 
-export type OverviewRange = 'all' | 'today' | '7d' | '30d' | { start: number; end: number }
+export type OverviewRange = 'today' | '7d' | '30d' | { start: number; end: number }
 
 export interface OverviewScope {
   range?: OverviewRange
@@ -583,6 +586,13 @@ export interface OverviewPartTotal {
   value: number
 }
 
+export interface OverviewTimingWindow {
+  calls: number
+  toolCalls: number
+  toolsMs: number
+  wallMs: number
+}
+
 export interface OverviewSummary {
   sessions: number
   sessionsTotal: number
@@ -596,6 +606,7 @@ export interface OverviewSummary {
   cacheHit: string | null
   tokenParts: OverviewPartTotal[] | null
   timing: TimingTotals | null
+  windowTiming: OverviewTimingWindow
   coverage: BackfillCoverage
 }
 

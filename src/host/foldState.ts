@@ -146,6 +146,12 @@ export interface TimelineEvent {
   surfaceOp?: unknown
 }
 
+export interface AgentAlias {
+  catalogName?: string
+  memberName?: string
+  catalogLabel?: string
+}
+
 export interface TimelineState {
   surface: SurfaceNode[]
   sums: Record<Category, number>
@@ -199,22 +205,52 @@ export interface TimelineState {
   programTally?: Record<string, number>
   commandCalls?: string[]
   commandCallsOverflow?: boolean
+  agents?: Record<string, AgentAlias>
   pendingCodeCmds?: Record<string, CommandStateRecord[]>
   pendingCodeOps?: Record<string, FileOpRecord[]>
   pendingCodeStarts?: Record<string, number>
 }
 
-export function surfaceWindowOf(state: TimelineState, tail: number): SurfaceNodeWindow {
+export function archiveWindowOf(
+  state: TimelineState,
+  tail: number,
+): { archive: SurfaceNode[]; archiveFloor?: number } {
+  let drop = 0
+  const oldestReq = state.requests.length > 0 ? state.requests[0].seq : undefined
+  if (oldestReq !== undefined) {
+    while (drop < state.archived.length
+      && (state.archived[drop].gone ?? Infinity) <= oldestReq) drop++
+  }
+  if (state.archived.length - drop > tail) drop = state.archived.length - tail
+  if (drop === 0) {
+    return {
+      archive: state.archived,
+      ...(state.archiveFloor !== undefined ? { archiveFloor: state.archiveFloor } : {}),
+    }
+  }
+  const stateFloor = state.archiveFloor
+  const dropFloor = state.archived[drop - 1].gone
+  if (stateFloor === undefined && dropFloor === undefined) {
+    return { archive: state.archived.slice(drop) }
+  }
+  return {
+    archive: state.archived.slice(drop),
+    archiveFloor: Math.max(stateFloor ?? 0, dropFloor ?? 0),
+  }
+}
+
+export function surfaceWindowOf(state: TimelineState, tail: number, archiveTail: number): SurfaceNodeWindow {
   const overflowCount = Math.max(0, state.surface.length - tail)
   const overflow = state.surface.slice(0, overflowCount)
   const kept = state.surface.slice(overflowCount)
   const pinned = overflow.filter(node => node.cat === 'inject' || node.cat === 'skill')
   const nodes = pinned.length > 0 ? [...pinned, ...kept] : kept
   const droppedNodes = overflowCount - pinned.length
+  const archive = archiveWindowOf(state, archiveTail)
   const window: SurfaceNodeWindow = {
     nodes,
     droppedNodes,
-    archive: state.archived,
+    archive: archive.archive,
   }
   if (droppedNodes > 0) {
     let floor = 0
@@ -223,7 +259,7 @@ export function surfaceWindowOf(state: TimelineState, tail: number): SurfaceNode
     }
     window.surfaceFloor = floor
   }
-  if (state.archiveFloor !== undefined) window.archiveFloor = state.archiveFloor
+  if (archive.archiveFloor !== undefined) window.archiveFloor = archive.archiveFloor
   return window
 }
 
@@ -303,11 +339,9 @@ export function trimState(st: TimelineState, bounds: FoldBounds): void {
       while (drop < st.archived.length
         && (st.archived[drop].gone ?? Infinity) <= oldestReq) drop++
     }
-    if (st.archived.length - drop > bounds.maxArchiveNodes) {
-      drop = st.archived.length - bounds.maxArchiveNodes
-    }
     if (drop > 0) {
       const floor = st.archived[drop - 1].gone
+      /* v8 ignore next 1 */
       if (floor !== undefined) st.archiveFloor = Math.max(st.archiveFloor ?? 0, floor)
       st.archived = st.archived.slice(drop)
     }
@@ -334,6 +368,7 @@ export function noteCommandCall(st: TimelineState, callId: string): void {
 export function trimHeadState(st: TimelineState): void {
   if (st.requests.length > 2) st.requests = st.requests.slice(-2)
   if (st.events.length > 0) st.events = []
+  if (st.agents !== undefined) delete st.agents
   if (st.commands.length > 0) st.commands = st.commands.filter(rec => rec.status === 'running').slice(-16)
   if (st.fileOps.length > 0) st.fileOps = []
   if (st.spans.length > 0) st.spans = []

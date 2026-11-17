@@ -27,6 +27,7 @@ const surfaceNodeSchema = z.object({
   err: z.boolean().optional(),
   skill: z.string().optional(),
   calls: z.array(z.string()).optional(),
+  agent: z.string().optional(),
 }).strict()
 
 const systemPromptNodeSchema = z.object({
@@ -61,9 +62,11 @@ const contextEventSchema = z.object({
   kind: z.enum(['compaction', 'prune', 'inject', 'model', 'mode']),
   form: z.string().optional(),
   tokens: z.number().optional(),
+  grossTokens: z.number().optional(),
   count: z.number().optional(),
   sub: z.string().optional(),
   name: z.string().optional(),
+  agent: z.string().optional(),
   detail: z.string().optional(),
   from: z.string().optional(),
   to: z.string().optional(),
@@ -348,6 +351,11 @@ const timelineStateSchema = z.object({
     argsRaw: z.string().optional(),
     transport: z.literal(true).optional(),
   }).strict()),
+  agents: z.record(z.string(), z.object({
+    catalogName: z.string().optional(),
+    memberName: z.string().optional(),
+    catalogLabel: z.string().optional(),
+  }).strict()).optional(),
   pendingShadowedSeqs: z.array(z.number()).optional(),
   pendingShadowEventSeq: z.number().optional(),
   detailRev: z.number().int().nonnegative().optional(),

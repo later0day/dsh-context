@@ -98,6 +98,14 @@ export interface Baseline {
     providerDirectory: { file: string; needle: string }
     stockIds: { file: string; ids: readonly string[] }
     providerFiles: readonly { file: string; needles: readonly string[] }[]
+    account: {
+      serviceFile: string
+      serviceNeedle: string
+      providerFile: string
+      providerNeedle: string
+      bundleFile: string
+      bundleNeedle: string
+    }
   }
   prompt: {
     serviceFile: string
@@ -141,6 +149,7 @@ function baseline(id: BaselineId, tag: string, session: string, line: {
       'user/message', 'developer/message', 'tool/call', 'tool/result', 'assistant/message', 'assistant/attempt',
       'tool/ptc-dispatch', 'tool/ptc-dispatch-start',
       'plan/mode', 'compaction/summary', 'compaction/prune', 'system/message',
+      'subagent/catalog', 'team/member',
       'approval/asked', 'approval/decided', 'session/end-seed',
       ...(line.extraFoldEvents ?? []),
     ],
@@ -258,6 +267,14 @@ function baseline(id: BaselineId, tag: string, session: string, line: {
           needles: ['baseURL: z.string().volatile()'],
         },
       ],
+      account: {
+        serviceFile: 'packages/credentials/deepseek-account/src/index.ts',
+        serviceNeedle: 'abstract getBalance(client: AccountClientMetadata)',
+        providerFile: 'packages/credentials/deepseek-account-platform/src/index.ts',
+        providerNeedle: 'getBalance(client: AccountClientMetadata)',
+        bundleFile: 'packages/bundle/base/cordis.patch.yml',
+        bundleNeedle: "'@deepseek-ai/dsh-deepseek-account-platform'",
+      },
     },
     stepGuard: {
       loopFile: 'packages/core/agent-loop/src/agent.ts',

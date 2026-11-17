@@ -2,12 +2,13 @@ import { act, createElement as h, Profiler, useCallback, useRef, useState, useSy
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, test, vi } from 'vitest'
 import { makeOverviewPanel } from '../../../src/client/components/overviewPanel'
+import { makeCtx, openPanel, propsOf, settingsWith } from './overviewPanelHarness'
 import { resetInvalidations } from '../../../src/client/invalidation'
 import { createContextSettings, type ContextSettings } from '../../../src/client/settings'
 import type { DefaultOverviewRange } from '../../../src/shared/types'
 import { dayKeyOf } from '../../../src/shared/days'
 import { TestClientCtx, asClientCtx } from '../helpers/harness'
-import { click, flush, hover, makeKit, mount, query, queryAll, settle, text, unhover, type Mounted } from '../helpers/kit'
+import { click, flush, hover, makeKit, mount, query, queryAll, settle, text, unhover } from '../helpers/kit'
 import {
   NOW, TODAY, YESTERDAY, panelDaysValue as daysValueFor, panelRows, panelRowsWithArchivedBeta,
   panelSessionsSnapshot as sessionsSnapshot, panelSummaryRaw as summaryRaw, panelSummaryValue as summaryValueFor, scopeOf,
@@ -53,18 +54,6 @@ function skillsBodyOf(calls: readonly RequestCall[]): Record<string, unknown> {
   return last
 }
 
-function settingsWith(range?: DefaultOverviewRange): ContextSettings {
-  const settings = createContextSettings()
-  if (range !== undefined) {
-    settings.attach({
-      getSnapshot: () => ({ status: 'ready', value: { defaultOverviewRange: range }, writable: true }),
-      subscribe: () => () => {},
-      set: () => Promise.resolve(),
-    })
-  }
-  return settings
-}
-
 function writableSettings(range: DefaultOverviewRange = '30d', writable = true): {
   settings: ContextSettings
   sets: { field: string; value: unknown }[]
@@ -83,37 +72,6 @@ function writableSettings(range: DefaultOverviewRange = '30d', writable = true):
     },
   })
   return { settings, sets }
-}
-
-function makeCtx(sessions: Record<string, unknown> = {}): TestClientCtx {
-  return new TestClientCtx({ services: { sessions } })
-}
-
-function propsOf(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return { useSessions: useHookOf(sessionsSnapshot()), ...over }
-}
-
-async function openPanel(
-  ctx: TestClientCtx,
-  props: Record<string, unknown> = {},
-  settings: ContextSettings = settingsWith(),
-): Promise<{ m: Mounted; Panel: ReturnType<typeof makeOverviewPanel> }> {
-  const Panel = makeOverviewPanel(asClientCtx(ctx), makeKit(), settings)
-  const m = await mount(h(Panel, propsOf(props)))
-  await flush()
-  await settle(5)
-  return { m, Panel }
-}
-
-async function openPanelFake(
-  ctx: TestClientCtx,
-  props: Record<string, unknown> = {},
-  settings: ContextSettings = settingsWith(),
-): Promise<{ m: Mounted; Panel: ReturnType<typeof makeOverviewPanel> }> {
-  const Panel = makeOverviewPanel(asClientCtx(ctx), makeKit(), settings)
-  const m = await mount(h(Panel, propsOf(props)))
-  await act(async () => { await vi.advanceTimersByTimeAsync(1) })
-  return { m, Panel }
 }
 
 function calendarDay(key: string): HTMLElement {
@@ -160,10 +118,10 @@ describe('OverviewPanel', () => {
     assert.ok(query(m.container, '.lc-ov-first > .lc-card.lc-ov-usage') !== null, 'the usage chart rides the row')
     const values = queryAll(m.container, '.lc-stat-value').map(el => el.textContent)
     assert.deepEqual(values, ['2', '1.8k', '$1.50', '33.33%', '14', '3m0s'])
-    assert.ok(text(m.container).includes('tool runs 30.0s'), 'the tool calls cell qualifies with the host busy union')
-    assert.ok(text(m.container).includes('8 model calls'), 'the active-time cell qualifies with the host family call count')
+    assert.ok(text(m.container).includes('tool runs 40.0s'), 'the tool calls cell qualifies with the windowed tool time')
+    assert.ok(text(m.container).includes('8 model calls'), 'the active-time cell qualifies with the windowed call count')
     const subs = queryAll(m.container, '.lc-stat-sub').map(el => el.textContent)
-    assert.deepEqual(subs.slice(0, 4), ['incl. 0 archived', 'Turns 5', '1 of 2 sessions priced', 'across 1 sessions'])
+    assert.deepEqual(subs.slice(0, 4), ['incl. 0 archived', 'Turns 5', '1 of 1 sessions priced', 'across 1 sessions'])
     const statsCards = queryAll(m.container, '.lc-ov-stats > .lc-card')
     assert.equal(statsCards.length, 2)
     assert.equal(query(statsCards[0], '.lc-donut-center b').textContent, '1.8k', 'the hosted token parts total rides the donut')
@@ -196,7 +154,7 @@ describe('OverviewPanel', () => {
     const page = query(m.container, '.lc-ov-page')
     assert.equal(page.getAttribute('aria-busy'), 'true')
     assert.ok(page.className.includes('lc-ov-busy'))
-    assert.deepEqual(queryAll(m.container, '.lc-stat-value').map(el => el.textContent), ['—', '—', '—', '—', '0', '—'])
+    assert.deepEqual(queryAll(m.container, '.lc-stat-value').map(el => el.textContent), ['—', '—', '—', '—', '—', '—'])
     await act(async () => { releaseSummary?.(summaryValueFor({ scope: { range: '30d', coverage: 'all' } })) })
     await flush()
     await settle(1)
@@ -358,6 +316,19 @@ describe('OverviewPanel', () => {
     await late.m.unmount()
   })
 
+  test('a clock outside the day-key range leaves the span unnamed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date(1969, 5, 1))
+      stubRoutes()
+      const { m } = await openPanel(makeCtx())
+      assert.deepEqual(queryAll(m.container, '.lc-dp-half').map(el => el.textContent), ['Start date', 'End date'])
+      await m.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test('picking a range writes it back as the default, so a remount keeps it; a loading or read-only form stays unwritten', async () => {
     stubRoutes()
     const { settings, sets } = writableSettings()
@@ -417,16 +388,10 @@ describe('OverviewPanel', () => {
     const ctx = makeCtx()
     const { m } = await openPanel(ctx)
     const rangeButtons = queryAll<HTMLButtonElement>(m.container, '.lc-ov-range .lc-gran-btn')
-    assert.equal(rangeButtons.length, 4)
+    assert.equal(rangeButtons.length, 3)
     const span = () => queryAll(m.container, '.lc-dp-half').map(el => el.textContent)
     const thirty = new Date(NOW - 30 * 86_400_000)
     assert.deepEqual(span(), [dayKeyOf(thirty.getTime()), TODAY], '30d shows the thirty days it covers')
-    await click(rangeButtons[3])
-    await settle(5)
-    assert.deepEqual(lastBodyOf(calls, 'page').scope, { range: 'all', coverage: 'all' })
-    assert.deepEqual(span(), ['Start date', 'End date'], 'an unbounded scope has no span to print')
-    assert.equal(cardsOf(m.container).length, 3, 'the stale session joins')
-    assert.equal(queryAll(m.container, '.lc-stat-value')[0].textContent, '3', 'the host summary follows the All preset')
     await click(rangeButtons[0])
     await settle(5)
     assert.deepEqual(span(), [TODAY, TODAY], "today's own day on both ends")
@@ -470,9 +435,9 @@ describe('OverviewPanel', () => {
       calendarButtons.every(b => !b.className.includes('lc-gran-on')),
       'a picked range and a preset are never both lit',
     )
-    await click(calendarButtons[3])
+    await click(calendarButtons[2])
     await settle(5)
-    assert.equal(cardsOf(calendar.m.container).length, 3, 'the stale session joins again')
+    assert.equal(cardsOf(calendar.m.container).length, 2, 'the preset leaves the stale session out again')
     assert.ok(!query(calendar.m.container, '.lc-dp-trigger').className.includes('lc-dp-trigger-on'))
     await calendar.m.unmount()
 
@@ -773,7 +738,11 @@ describe('OverviewPanel', () => {
       summary: () => ({
         revision: 's1',
         pricingReady: true,
-        summary: summaryRaw({ sessions: 1, sessionsTotal: 1, tokens: 0, turns: 0, costUsd: null, costSessions: 0, usageSessions: 0, cacheHit: null, tokenParts: null, timing: null }),
+        summary: summaryRaw({
+          sessions: 1, sessionsTotal: 1, tokens: 0, turns: 0, costUsd: null, costSessions: 0, usageSessions: 0,
+          cacheHit: null, tokenParts: null, timing: null,
+          windowTiming: { calls: 0, toolCalls: 0, toolsMs: 0, wallMs: 0 },
+        }),
       }),
       rows: [{
         id: 'x',
@@ -796,13 +765,21 @@ describe('OverviewPanel', () => {
     assert.equal(kpiValues[4], '0', 'no tool calls without timing')
     assert.equal(kpiValues[5], '—', 'no active time without timing')
     assert.ok(text(noTimeline.m.container).includes('No billed tokens in this range'))
-    assert.ok(text(noTimeline.m.container).includes('No timing data yet'))
+    assert.ok(!text(noTimeline.m.container).includes('No timing data yet'), 'the timing card lays out zeros instead')
+    assert.equal(queryAll(noTimeline.m.container, '.lc-sl-row').length, 4, 'the zero timing slots stay in place')
     await noTimeline.m.unmount()
 
     stubRoutes({ rows: panelRows().map(row => ({ ...row, costUsd: null })) })
     const unpriced = await openPanel(ctx)
     assert.equal(miniValues(cardWith(unpriced.m.container, 'alpha session'))[2], '—')
     await unpriced.m.unmount()
+  })
+
+  test('a failed summary read with an empty page states the empty claim instead of stalling', async () => {
+    stubRoutes({ summary: () => null, rows: [] })
+    const { m } = await openPanel(makeCtx())
+    assert.ok(text(m.container).includes('No sessions yet'), 'the list names the empty scope')
+    await m.unmount()
   })
 
   test('the zh locale renders translated chrome and CNY cost from the host USD; a bare locale falls back to USD', async () => {
@@ -859,20 +836,6 @@ describe('OverviewPanel', () => {
     assert.equal(query(pagePending.m.container, '.lc-ov-page').getAttribute('aria-busy'), null)
     await pagePending.m.unmount()
   })
-
-  test('an incomplete coverage posts the warm-up backfill route from the summary hook', async () => {
-    vi.useFakeTimers()
-    const incomplete = { complete: false, running: false, remaining: 2, failed: 0, total: 3, covered: 1, unsupported: 0 }
-    const calls = stubRoutes({
-      summary: () => ({ revision: 's0', pricingReady: true, summary: summaryRaw({ coverage: incomplete }) }),
-    })
-    const { m } = await openPanelFake(makeCtx())
-    assert.equal(calls.filter(c => c.route.endsWith('/overview')).length, 6, 'summary, days, page, and three tallies fetched once')
-    assert.equal(calls.filter(c => c.route.endsWith('/backfill')).length, 0)
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
-    assert.equal(calls.filter(c => c.route.endsWith('/backfill')).length, 1, 'the incomplete coverage posted the backfill route')
-    await m.unmount()
-  })
 })
 
 describe('OverviewPanel — progressive body', () => {
@@ -884,9 +847,8 @@ describe('OverviewPanel — progressive body', () => {
     vi.stubGlobal('IntersectionObserver', IdleObserver)
     const calls = stubRoutes()
     const { m } = await openPanel(makeCtx())
-    assert.equal(queryAll(m.container, '.lc-ov-grid').length, 0, 'the body has not mounted')
     assert.equal(queryAll(m.container, '.lc-ov-tiles > .lc-deferred-skeleton').length, 4, 'the tile row reserves its four cards')
-    assert.equal(queryAll(m.container, '.lc-ov-body > .lc-deferred-skeleton').length, 1, 'the session list reserves its block')
+    assert.equal(queryAll(m.container, '.lc-ov-grid > .lc-ov-skel-card').length, 12, 'the session list reserves its card grid')
     assert.ok(queryAll(m.container, '.lc-ov-first .lc-stat-value').length > 0, 'the KPI band is already live')
     assert.equal(bodyOf(calls, 'tally').length, 0, 'the tally parts wait for the tiles to mount')
     assert.equal(bodyOf(calls, 'page').length, 1, 'the list data is already on its way')

@@ -1,7 +1,7 @@
 import type { Category, ContextHeaders, ContextTimeline, RequestRecord, SurfaceNode } from '../shared/types'
 import { assembleCached } from './components/derivedCache'
-import { headerAt, systemAt } from './assemble'
-import type { Assembled } from './assemble'
+import { headerAt, systemAt } from '../shared/assemble'
+import type { Assembled } from '../shared/assemble'
 import { CAT_COLOR } from './categories'
 import type { Translate } from './i18n'
 import { formLabelOf } from './labels'
@@ -50,7 +50,7 @@ export function trendBandsOf(view: Assembled): TrendBand[] {
   return bands
 }
 
-type DeltaBand =
+export type DeltaBand =
   | { key: string; cat: 'system' | 'tools'; tokens: number; off: number; color: string }
   | { key: string; cat: Category; tokens: number; off: number; color: string; node: SurfaceNode }
 

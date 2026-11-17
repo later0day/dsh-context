@@ -2,9 +2,24 @@ import { act, createElement as h } from 'react'
 import { createRoot } from 'react-dom/client'
 import assert from 'node:assert/strict'
 import { afterEach, describe, test, vi } from 'vitest'
-import type { OverviewRequest, OverviewScope } from '../../src/shared/types'
+import { type OverviewRequest, type OverviewScope } from '../../src/shared/types'
 import { cleanupMounts, flush, mount, settle, type Mounted } from './helpers/kit'
 import { BASE_COVERAGE, coverageOf, daysValue, pageValue, summaryRaw, summaryValue, tallyValue } from './helpers/overviewWire'
+import { currentSessionOf, projectOf, UNGROUPED_KEY } from '../../src/client/overviewModel'
+import { dayRangeWindow, orderedDayRange, rangeWindowOf } from '../../src/client/overviewQuery'
+import { foldStateOf } from '../../src/client/overviewSource'
+
+describe('overviewSource', () => {
+
+test('foldStateOf classifies a running pass before a stale complete flag', () => {
+  assert.equal(foldStateOf(null), 'idle')
+  assert.equal(foldStateOf(coverageOf()), 'idle')
+  assert.equal(foldStateOf(coverageOf({ complete: true, running: true })), 'running')
+  assert.equal(foldStateOf(coverageOf({ complete: false, running: true })), 'running')
+  assert.equal(foldStateOf(coverageOf({ complete: false, total: 0, remaining: 0 })), 'starting')
+  assert.equal(foldStateOf(coverageOf({ complete: false, total: 3, remaining: 2 })), 'folding')
+  assert.equal(foldStateOf(coverageOf({ complete: false, total: 3, remaining: 0, failed: 1 })), 'stalled')
+})
 
 const OVERVIEW_ROUTE = 'api/dsh-context/overview'
 
@@ -190,14 +205,14 @@ describe('useOverviewSummary', () => {
   test('the held revision rides the next fetch; an unchanged reply keeps the painted data', async () => {
     vi.useFakeTimers()
     const mod = await fresh()
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     const calls = stubRoutes((_call, index) => (index === 0 ? summaryValue() : { revision: 'r1', unchanged: true }))
     await advance(0)
     assert.equal(lastOf(probe.states).data?.summary.sessions, 2)
     mod.invalidation.invalidate('overview')
     await advance(250)
     assert.equal(calls.length, 2)
-    assert.deepEqual(calls[1]?.body, { part: 'summary', scope: { range: 'all' }, revision: 'r1' })
+    assert.deepEqual(calls[1]?.body, { part: 'summary', scope: { range: '30d' }, revision: 'r1' })
     const state = lastOf(probe.states)
     assert.equal(state.data?.summary.sessions, 2, 'the unchanged reply leaves the painted summary in place')
     assert.equal(state.revision, 'r1', 'the held revision survives the unchanged reply')
@@ -209,7 +224,7 @@ describe('useOverviewSummary', () => {
   test('invalidation coalesces into one refresh and only overview-carrying kinds trigger it', async () => {
     vi.useFakeTimers()
     const mod = await fresh()
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     const calls = stubRoutes(() => summaryValue())
     await advance(0)
     assert.equal(calls.length, 1)
@@ -231,7 +246,7 @@ describe('useOverviewSummary', () => {
   test('polls while the document is visible and stays quiet while hidden', async () => {
     vi.useFakeTimers()
     const mod = await fresh()
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     const calls = stubRoutes(() => summaryValue())
     await advance(0)
     assert.equal(calls.length, 1)
@@ -253,14 +268,14 @@ describe('useOverviewSummary', () => {
     vi.useFakeTimers()
     const mod = await fresh()
     const calls = stubServed(() => summaryValue())
-    const first = await mountSummary(mod, { range: 'all' })
+    const first = await mountSummary(mod, { range: '30d' })
     await advance(0)
     assert.equal(lastOf(first.states).data?.summary.sessions, 2)
     await first.m.unmount()
-    const second = await mountSummary(mod, { range: 'all' })
+    const second = await mountSummary(mod, { range: '30d' })
     await advance(0)
     assert.equal(calls.length, 2)
-    assert.deepEqual(calls[1]?.body, { part: 'summary', scope: { range: 'all' }, revision: null })
+    assert.deepEqual(calls[1]?.body, { part: 'summary', scope: { range: '30d' }, revision: null })
     assert.equal(lastOf(second.states).data?.summary.sessions, 2, 'the reopened panel paints instead of staying blank')
     await second.m.unmount()
   })
@@ -275,9 +290,9 @@ describe('useOverviewSummary', () => {
     const probe = await mountSummary(mod, { range: 'today' })
     await advance(0)
     assert.equal(lastOf(probe.states).data?.summary.sessions, 1)
-    await probe.update({ range: 'all' })
+    await probe.update({ range: '30d' })
     await advance(0)
-    assert.deepEqual(calls[1]?.body, { part: 'summary', scope: { range: 'all' }, revision: null })
+    assert.deepEqual(calls[1]?.body, { part: 'summary', scope: { range: '30d' }, revision: null })
     assert.equal(lastOf(probe.states).data?.summary.sessions, 3)
     await probe.update({ range: 'today' })
     await advance(0)
@@ -296,7 +311,7 @@ describe('useOverviewSummary', () => {
     await act(async () => { releases[0]?.(summaryValue({ summary: summaryRaw({ sessions: 1 }) })) })
     await flush()
     assert.equal(lastOf(probe.states).data?.summary.sessions, 1)
-    await probe.update({ range: 'all' })
+    await probe.update({ range: '30d' })
     await advance(0)
     assert.equal(lastOf(probe.states).data, null, 'the previous scope data is not painted under the new scope')
     assert.equal(lastOf(probe.states).pending, true)
@@ -312,7 +327,7 @@ describe('useOverviewSummary', () => {
     const { releases } = stubDeferred()
     const probe = await mountSummary(mod, { range: 'today' })
     await advance(0)
-    await probe.update({ range: 'all' })
+    await probe.update({ range: '30d' })
     await advance(0)
     assert.equal(releases.length, 2)
     await act(async () => { releases[0]?.(summaryValue({ summary: summaryRaw({ sessions: 1 }) })) })
@@ -330,7 +345,7 @@ describe('useOverviewSummary', () => {
     vi.useFakeTimers()
     const mod = await fresh()
     const calls = stubRoutes(() => summaryValue())
-    const disabled = await mountSummary(mod, { range: 'all' }, false)
+    const disabled = await mountSummary(mod, { range: '30d' }, false)
     await advance(0)
     assert.equal(lastOf(disabled.states).pending, false)
     assert.equal(lastOf(disabled.states).data, null)
@@ -344,7 +359,7 @@ describe('useOverviewSummary', () => {
   test('an error keeps the painted data and raises the stale flag until the next success', async () => {
     vi.useFakeTimers()
     const mod = await fresh()
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     stubRoutes(() => summaryValue())
     await advance(0)
     assert.equal(lastOf(probe.states).data?.summary.sessions, 2)
@@ -370,7 +385,7 @@ describe('useOverviewSummary', () => {
     for (const failure of ['http', 'envelope', 'malformed'] as const) {
       vi.useFakeTimers()
       const mod = await fresh()
-      const probe = await mountSummary(mod, { range: 'all' })
+      const probe = await mountSummary(mod, { range: '30d' })
       stubFailing(failure)
       await advance(0)
       const state = lastOf(probe.states)
@@ -382,7 +397,7 @@ describe('useOverviewSummary', () => {
     }
     vi.useFakeTimers()
     const mod = await fresh()
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => ({ ok: true, value: null }) }))
     await advance(0)
     assert.equal(lastOf(probe.states).error, true, 'a null value reads as a failed read')
@@ -392,7 +407,7 @@ describe('useOverviewSummary', () => {
   test('a reply for another part leaves the summary unpainted', async () => {
     vi.useFakeTimers()
     const mod = await fresh()
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     stubRoutes(() => daysValue())
     await advance(0)
     const state = lastOf(probe.states)
@@ -405,7 +420,7 @@ describe('useOverviewSummary', () => {
     vi.useFakeTimers()
     const mod = await fresh()
     const { bodies, releases } = stubDeferred()
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     await advance(0)
     assert.equal(bodies.length, 1)
     mod.invalidation.invalidate('overview')
@@ -415,7 +430,7 @@ describe('useOverviewSummary', () => {
     await act(async () => { releases[0]?.(summaryValue({ revision: 'r1' })) })
     await flush()
     assert.equal(bodies.length, 2, 'the queued read fires right after the first settles')
-    assert.deepEqual(bodies[1], { part: 'summary', scope: { range: 'all' }, revision: 'r1' })
+    assert.deepEqual(bodies[1], { part: 'summary', scope: { range: '30d' }, revision: 'r1' })
     await act(async () => { releases[1]?.(summaryValue({ revision: 'r2' })) })
     await flush()
     assert.equal(lastOf(probe.states).revision, 'r2')
@@ -427,7 +442,7 @@ describe('useOverviewSummary', () => {
     const mod = await fresh()
     let release: ((value: unknown) => void) | null = null
     const calls = stubRoutes(() => new Promise<unknown>((resolve) => { release = resolve }))
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     await advance(0)
     assert.equal(calls.length, 1)
     mod.invalidation.invalidate('overview')
@@ -444,7 +459,7 @@ describe('useOverviewSummary', () => {
     const mod = await fresh()
     let rejectLate: ((err: Error) => void) | null = null
     vi.stubGlobal('fetch', () => new Promise<never>((_resolve, reject) => { rejectLate = reject }))
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     await advance(0)
     await probe.m.unmount()
     await act(async () => {
@@ -461,7 +476,7 @@ describe('useOverviewSummary', () => {
     const mod = await fresh()
     const states: ReturnType<typeof mod.source.useOverviewSummary>[] = []
     function Probe(): null {
-      states.push(mod.source.useOverviewSummary({ range: 'all' }, true))
+      states.push(mod.source.useOverviewSummary({ range: '30d' }, true))
       return null
     }
     const container = document.createElement('div')
@@ -593,12 +608,59 @@ describe('summary coverage auto-backfill', () => {
       }
       return summaryValue({ summary: summaryRaw({ coverage: coverageOf({ complete: false, remaining: 2, covered: 1 }) }) })
     })
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     await advance(0)
     assert.equal(backfills.length, 0, 'the first paint arms no backfill before the read lands')
     await advance(2_000)
     assert.deepEqual(backfills.map(c => [c.route, c.method]), [[BACKFILL_ROUTE, 'POST']])
     assert.equal(calls.filter(c => c.route === OVERVIEW_ROUTE).length, 1)
+    await probe.m.unmount()
+  })
+
+  test('a running pass waits for the poll, and an exhausted or failed corpus stops the loader', async () => {
+    vi.useFakeTimers()
+    const mod = await fresh()
+    let coverage = coverageOf({ complete: false, running: true, remaining: 2, covered: 1 })
+    let backfills = 0
+    stubRoutes((call) => {
+      if (call.route === BACKFILL_ROUTE) {
+        backfills++
+        return undefined
+      }
+      return summaryValue({ summary: summaryRaw({ coverage }) })
+    })
+    const probe = await mountSummary(mod, { range: '30d' })
+    await advance(0)
+    await advance(20_000)
+    assert.equal(backfills, 0, 'a running pass is left to finish')
+    coverage = coverageOf({ complete: false, remaining: 0, failed: 1, total: 3, covered: 2 })
+    mod.invalidation.invalidate('overview')
+    await advance(250)
+    await advance(20_000)
+    assert.equal(backfills, 0, 'an exhausted pass with failures does not loop')
+    coverage = coverageOf({ complete: false, remaining: 1, covered: 1 })
+    mod.invalidation.invalidate('overview')
+    await advance(250)
+    await advance(2_000)
+    assert.equal(backfills, 1, 'a later foldable pass requests a fresh run')
+    await probe.m.unmount()
+  })
+
+  test('an unlisted corpus requests its first pass', async () => {
+    vi.useFakeTimers()
+    const mod = await fresh()
+    let backfills = 0
+    stubRoutes((call) => {
+      if (call.route === BACKFILL_ROUTE) {
+        backfills++
+        return undefined
+      }
+      return summaryValue({ summary: summaryRaw({ coverage: coverageOf({ complete: false, remaining: 0, total: 0, covered: 0 }) }) })
+    })
+    const probe = await mountSummary(mod, { range: '30d' })
+    await advance(0)
+    await advance(2_000)
+    assert.equal(backfills, 1, 'an unlisted corpus posts the first pass')
     await probe.m.unmount()
   })
 
@@ -614,7 +676,7 @@ describe('summary coverage auto-backfill', () => {
       }
       return summaryValue({ summary: summaryRaw({ coverage }) })
     })
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     await advance(0)
     await advance(2_000)
     assert.equal(backfillAttempts, 1, 'the rejected POST is swallowed')
@@ -643,7 +705,7 @@ describe('summary coverage auto-backfill', () => {
         }),
       })
     })
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     await advance(0)
     for (let i = 0; i < 9; i++) {
       mod.invalidation.invalidate('overview')
@@ -671,7 +733,7 @@ describe('summary coverage auto-backfill', () => {
       const running = calls % 2 === 0
       return summaryValue({ summary: summaryRaw({ coverage: coverageOf({ complete: false, remaining: 5, covered: 2, running }) }) })
     })
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     await advance(0)
     for (let i = 0; i < 40; i++) {
       mod.invalidation.invalidate('overview')
@@ -702,7 +764,7 @@ describe('summary coverage auto-backfill', () => {
       calls++
       return summaryValue({ summary: summaryRaw({ coverage: coverageOf({ complete: false, remaining: 30 - calls, covered: calls }) }) })
     })
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     await advance(0)
     for (let i = 0; i < 15; i++) {
       mod.invalidation.invalidate('overview')
@@ -725,7 +787,7 @@ describe('summary coverage auto-backfill', () => {
       }
       return summaryValue({ summary: summaryRaw({ coverage }) })
     })
-    const probe = await mountSummary(mod, { range: 'all' })
+    const probe = await mountSummary(mod, { range: '30d' })
     await advance(0)
     await advance(2_000)
     assert.equal(backfills, 1)
@@ -739,4 +801,90 @@ describe('summary coverage auto-backfill', () => {
     assert.equal(backfills, 2, 'the reopened coverage posts again with a fresh attempt counter')
     await probe.m.unmount()
   })
+})
+})
+
+describe('overviewSupport', () => {
+
+const NOW = Date.UTC(2026, 10, 8, 12, 0, 0)
+
+const CURRENT_SESSION_KEY = 'dsh.sessions.current'
+
+function pin(id: string | null): void {
+  if (id === null) localStorage.removeItem(CURRENT_SESSION_KEY)
+  else localStorage.setItem(CURRENT_SESSION_KEY, JSON.stringify({ sessionId: id }))
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  localStorage.clear()
+})
+
+describe('overview current-session seat', () => {
+  test('the persisted ui-workspace selection anchors the id and the sessions seat supplies its cwd', () => {
+    const selectOf = (snapshot: unknown) => ({ useSessions: (select: (value: unknown) => unknown) => select(snapshot) })
+    pin('a')
+    assert.deepEqual(currentSessionOf(selectOf({ byId: { a: { cwd: '/repo/a' } } })), { id: 'a', cwd: '/repo/a' })
+    assert.deepEqual(currentSessionOf(selectOf({ byId: { a: {} } })), { id: 'a' })
+    assert.deepEqual(currentSessionOf(selectOf({ byId: {} })), { id: 'a' })
+    pin('b')
+    assert.deepEqual(currentSessionOf(selectOf({ byId: { a: { cwd: '/repo/a' } } })), { id: 'b' })
+    assert.deepEqual(currentSessionOf(selectOf(null)), { id: 'b' })
+    assert.deepEqual(currentSessionOf({}), { id: 'b' })
+    assert.deepEqual(currentSessionOf({ useSessions: 7 }), { id: 'b' })
+    assert.deepEqual(currentSessionOf({ useSessions: () => { throw new Error('seat down') } }), { id: 'b' })
+  })
+
+  test('a missing, malformed or inaccessible selection degrades to no current session', () => {
+    pin(null)
+    assert.equal(currentSessionOf({}), null)
+    localStorage.setItem(CURRENT_SESSION_KEY, 'not json')
+    assert.equal(currentSessionOf({}), null)
+    localStorage.setItem(CURRENT_SESSION_KEY, '{"sessionId":7}')
+    assert.equal(currentSessionOf({}), null)
+    localStorage.setItem(CURRENT_SESSION_KEY, '{"sessionId":""}')
+    assert.equal(currentSessionOf({}), null)
+    vi.stubGlobal('localStorage', undefined)
+    assert.equal(currentSessionOf({}), null)
+  })
+
+  test('equivalent snapshots produce the same selector key, so unrelated session updates cannot repaint', () => {
+    pin('a')
+    const keyOf = (snapshot: unknown): unknown => {
+      let key: unknown
+      const read = (select: (value: unknown) => unknown): unknown => { key = select(snapshot); return key }
+      currentSessionOf({ useSessions: read })
+      return key
+    }
+    assert.equal(keyOf({ byId: { a: { cwd: '/repo/a' } }, ids: ['a'] }), 'a\u0000/repo/a')
+    assert.equal(keyOf({ byId: { a: { cwd: '/repo/a' } }, ids: ['a', 'b'] }), 'a\u0000/repo/a')
+    pin('b')
+    assert.equal(keyOf({ byId: { a: { cwd: '/repo/a' }, b: { cwd: '/repo/b' } }, ids: ['a', 'b'] }), 'b\u0000/repo/b')
+  })
+
+  test('projectOf folds a workspace path to its title and treats the bare root as unnamed', () => {
+    assert.equal(projectOf(undefined), undefined)
+    assert.equal(projectOf(''), undefined)
+    assert.equal(projectOf('/'), undefined)
+    assert.equal(projectOf('/Users/bw/dev/dsh-context'), 'dsh-context')
+    assert.equal(UNGROUPED_KEY, '__ungrouped__')
+  })
+})
+
+describe('overview range windows', () => {
+  test('range windows start at midnight or the period floor', () => {
+    assert.deepEqual(rangeWindowOf('today', NOW), { start: new Date(NOW).setHours(0, 0, 0, 0), end: null })
+    assert.deepEqual(rangeWindowOf('7d', NOW), { start: NOW - 7 * 86_400_000, end: null })
+    assert.deepEqual(rangeWindowOf('30d', NOW), { start: NOW - 30 * 86_400_000, end: null })
+  })
+
+  test('day ranges order both ends and reject unreadable keys', () => {
+    assert.deepEqual(orderedDayRange('2026-09-16', '2026-09-10'), { from: '2026-09-10', to: '2026-09-16' })
+    assert.deepEqual(orderedDayRange('2026-09-10', '2026-09-16'), { from: '2026-09-10', to: '2026-09-16' })
+    assert.equal(dayRangeWindow({ from: 'junk', to: '2026-09-16' }), null)
+    const window = dayRangeWindow({ from: '2026-09-10', to: '2026-09-16' })
+    assert.ok(window !== null)
+    assert.ok((window.start ?? 0) < (window.end ?? 0))
+  })
+})
 })

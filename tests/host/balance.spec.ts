@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, test, vi } from 'vitest'
-import { BALANCE_ROUTE, balanceOfPayload, resetBalance, setBalanceFetcher, watchBalanceChannel } from '../../src/host/balance'
-import { fakeCtx, responseJson } from './helpers/ctx'
-import type { FakeCtx, FakeRoute } from './helpers/ctx'
+import { BALANCE_ROUTE, accountBalanceOf, balanceOfPayload, resetBalance, setBalanceFetcher, watchBalanceChannel } from '../../src/host/balance'
+import { fakeCtx, responseJson, type FakeCtx, type FakeRoute } from './helpers/ctx'
+
+describe('balance', () => {
 
 interface CtxSpec {
   connection?: unknown
   settings?: unknown
   credentials?: unknown
   llm?: unknown
+  deepseekAccount?: unknown
 }
 
 const ctxOf = (spec: CtxSpec): FakeCtx => fakeCtx(spec)
@@ -572,4 +574,142 @@ describe('balance reads', () => {
     assert.deepEqual(a, b)
     assert.equal(entries, 1)
   })
+})
+
+describe('account balance', () => {
+  const ACCOUNT_BALANCE = {
+    status: 'ready',
+    value: [
+      { currency: 'CNY', balance: '100.50' },
+      { currency: 'USD', balance: '1.25' },
+    ],
+    bonusWallets: [
+      { currency: 'CNY', balance: '10.00' },
+      { currency: 'USD', balance: '0.25' },
+    ],
+  }
+
+  function accountOf(result: unknown, calls: Record<string, unknown>[] = []): { getBalance(client: Record<string, unknown>): Promise<unknown> } {
+    return {
+      getBalance(client) {
+        calls.push(client)
+        return result instanceof Error ? Promise.reject(result) : Promise.resolve(result)
+      },
+    }
+  }
+
+  function accountCtx(deepseekAccount: unknown, spec: CtxSpec = {}): CtxSpec {
+    return {
+      connection: { fetch: { register: () => () => {} } },
+      settings: settingsOf({ apiKeyEnv: 'DEEPSEEK_API_KEY' }),
+      credentials: credentialsOf('sk-test'),
+      deepseekAccount,
+      ...spec,
+    }
+  }
+
+  test('a signed-in account serves its topped-up and granted wallets ahead of any API key', async () => {
+    const refs: string[] = []
+    const calls: Record<string, unknown>[] = []
+    const { ctx, captured } = ctxOf(accountCtx(accountOf(ACCOUNT_BALANCE, calls), {
+      credentials: credentialsOf('sk-test', refs),
+    }))
+    watchBalanceChannel(ctx, '0.2.3')
+    const platform = stubPlatform(CNY_BALANCE)
+    const reply = await serve(captured)
+    assert.deepEqual(calls, [{ version: '0.2.3', locale: 'en', timezoneOffsetSeconds: 0 }])
+    assert.deepEqual(refs, [], 'the API key is never resolved')
+    assert.equal(platform.calls(), 0, 'the API key endpoint is never called')
+    assert.deepEqual(reply, {
+      ok: true,
+      value: {
+        isAvailable: true,
+        balances: [
+          { currency: 'CNY', total: 110.5, granted: 10, toppedUp: 100.5 },
+          { currency: 'USD', total: 1.5, granted: 0.25, toppedUp: 1.25 },
+        ],
+      },
+    })
+  })
+
+  test('signed-out, failed, throwing, or shape-broken account reads fall back to the API key', async () => {
+    const hostile = new Proxy({}, { get() { throw new Error('hostile') } })
+    const variants: [string, unknown][] = [
+      ['signed out', accountOf(null)],
+      ['failed', accountOf({ status: 'failed' })],
+      ['rejected', accountOf(new Error('down'))],
+      ['absent face', undefined],
+      ['no method', {}],
+      ['method not callable', { getBalance: 42 }],
+      ['hostile face', hostile],
+    ]
+    for (const [label, deepseekAccount] of variants) {
+      resetBalance()
+      const { ctx, captured } = ctxOf(accountCtx(deepseekAccount))
+      watchBalanceChannel(ctx)
+      const platform = stubPlatform(CNY_BALANCE)
+      const reply = await serve(captured)
+      assert.deepEqual(reply, {
+        ok: true,
+        value: { isAvailable: true, balances: [{ currency: 'CNY', total: 110, granted: 10, toppedUp: 100 }] },
+      }, label)
+      assert.equal(platform.calls(), 1, label)
+    }
+  })
+
+  test('accountBalanceOf maps wallets, merges currencies, and rejects anything but a ready outcome', () => {
+    assert.deepEqual(accountBalanceOf(ACCOUNT_BALANCE), {
+      isAvailable: true,
+      balances: [
+        { currency: 'CNY', total: 110.5, granted: 10, toppedUp: 100.5 },
+        { currency: 'USD', total: 1.5, granted: 0.25, toppedUp: 1.25 },
+      ],
+    })
+    assert.deepEqual(accountBalanceOf({
+      status: 'ready',
+      value: [{ currency: 'CNY', balance: '2' }],
+      bonusWallets: [{ currency: 'USD', balance: '3' }],
+    }), {
+      isAvailable: true,
+      balances: [
+        { currency: 'CNY', total: 2, granted: 0, toppedUp: 2 },
+        { currency: 'USD', total: 3, granted: 3, toppedUp: 0 },
+      ],
+    })
+    assert.deepEqual(accountBalanceOf({
+      status: 'ready',
+      value: [{ currency: 'CNY', balance: '2' }, { currency: 'CNY', balance: '99' }],
+      bonusWallets: [{ currency: 'CNY', balance: '1' }, { currency: 'CNY', balance: '88' }],
+    })?.balances, [{ currency: 'CNY', total: 3, granted: 1, toppedUp: 2 }], 'the first wallet per currency wins')
+    assert.deepEqual(accountBalanceOf({
+      status: 'ready',
+      value: [{ currency: 'CNY', balance: '0' }],
+      bonusWallets: [],
+    }), { isAvailable: false, balances: [{ currency: 'CNY', total: 0, granted: 0, toppedUp: 0 }] })
+    assert.equal(accountBalanceOf({
+      status: 'ready',
+      value: [{ currency: 'CNY', balance: '-1' }],
+      bonusWallets: [{ currency: 'CNY', balance: '2' }],
+    }), null, 'a negative wallet makes the snapshot unreadable instead of inflating the total')
+    for (const value of [
+      null,
+      undefined,
+      'balance',
+      { status: 'failed' },
+      { status: 'ready' },
+      { status: 'ready', value: [], bonusWallets: [] },
+      { status: 'ready', value: 'CNY', bonusWallets: 'USD' },
+      { status: 'ready', value: [null, 'CNY', {}, { currency: '' }, { currency: 'CNY', balance: 'abc' }, { currency: 'CNY', balance: '-1' }] },
+    ]) {
+      assert.equal(accountBalanceOf(value), null, JSON.stringify(value))
+    }
+    const hostile = new Proxy({}, { get() { throw new Error('hostile') } })
+    assert.equal(accountBalanceOf({ status: 'ready', value: [hostile], bonusWallets: [] }), null)
+    assert.deepEqual(accountBalanceOf({
+      status: 'ready',
+      value: [hostile, { currency: 'CNY', balance: '5' }],
+      bonusWallets: [hostile],
+    })?.balances, [{ currency: 'CNY', total: 5, granted: 0, toppedUp: 5 }])
+  })
+})
 })

@@ -2,13 +2,60 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { watchActivityBackfill } from '../../src/host/backfill'
+import { type SessionEvent } from '@deepseek-ai/dsh-session'
+import { nextSliceSize, watchActivityBackfill, type FoldPool, BACKFILL_ROUTE as HOST_BACKFILL_ROUTE } from '../../src/host/backfill'
+import { userMessage } from './helpers/events'
 import { createContextTimelineDefinition } from '../../src/host/timeline'
 import { createContextActivityDefinition } from '../../src/host/activity'
 import { createContextHeadersDefinition } from '../../src/host/headers'
-import { arm, captureLogs, connectionOf, fakeState, trigger, until } from './helpers/backfill'
-import type { RouteBox } from './helpers/backfill'
+import { activityOf } from '../../src/host/overviewDecode'
+import { type DurableIdentity, type OverviewCache } from '../../src/host/overviewCache'
+import { type HostSession } from '../../src/host/overviewCorpus'
+import { inProcessPool } from './helpers/foldWorker'
+import { arm, captureLogs, connectionOf, fakeState, trigger, until, type RouteBox } from './helpers/backfill'
+import { BALANCE_ROUTE as HOST_BALANCE_ROUTE } from '../../src/host/balance'
+import { DETAIL_ROUTE as HOST_DETAIL_ROUTE } from '../../src/host/detail'
+import { ATTACHMENT_ROUTE as HOST_ATTACHMENT_ROUTE } from '../../src/host/attachment'
+import { COMMANDS_ROUTE as HOST_COMMANDS_ROUTE } from '../../src/host/commandPages'
+import { FLEET_ROUTE as HOST_FLEET_ROUTE } from '../../src/host/fleet'
+import { SKILLS_ROUTE as HOST_SKILLS_ROUTE } from '../../src/host/skills'
+import { OVERVIEW_ROUTE as HOST_OVERVIEW_ROUTE } from '../../src/host/overview'
+import { ATTACHMENT_ROUTE, BACKFILL_ROUTE, BALANCE_ROUTE, COMMANDS_ROUTE, DETAIL_ROUTE, FLEET_ROUTE, OVERVIEW_ROUTE, SKILLS_ROUTE } from '../../src/client/apiRoutes'
+import { serviceIdentityOf } from '../../src/host/serviceIdentity'
+import z from '@deepseek-ai/schemastery'
+import { Config, DEFAULT_BOUNDS, resolveBounds, volatileField } from '../../src/host/config'
+
+describe('backfill-sliced', () => {
+
+interface SavedRecord {
+  session: HostSession
+  identity: DurableIdentity | null
+}
+
+function ownCacheStub(sessions: Map<string, HostSession> = new Map(), captureMissing: string[] = []): OverviewCache & { saved: SavedRecord[] } {
+  const saved: SavedRecord[] = []
+  return {
+    load: async () => ({ sessions, identities: new Map(), rebuild: new Set() }),
+    refresh: async () => ({ identities: new Map(), changed: new Set() }),
+    capture: async (ids: readonly string[]) => new Map(ids
+      .filter(id => !captureMissing.includes(id))
+      .map(id => [id, { path: `/repo/${id}.jsonl`, sizeBytes: 10, mtimeMs: 3 }])),
+    save: (records: readonly SavedRecord[]) => { saved.push(...records) },
+    flush: async () => {},
+    dispose: () => {},
+    saved,
+  } as unknown as OverviewCache & { saved: SavedRecord[] }
+}
+
+function activityReference(events: readonly SessionEvent[]): unknown {
+  const ctx = new Context()
+  const registry = new SessionProjectionRegistry(ctx as never)
+  registry.register(createContextTimelineDefinition({}, () => false) as never)
+  registry.register(createContextActivityDefinition() as never)
+  registry.register(createContextHeadersDefinition() as never)
+  const values = registry.restore({}, events, 0 as never, { id: 'monster', version: 1, createdAt: 1, cwd: '/repo/monster', isSeeded: false } as never, 0 as never).snapshot.values
+  return (values as { contextActivity: unknown }).contextActivity
+}
 
 function fakeEvents(length: number): SessionEvent[] {
   return Array.from({ length }, (_, seq) => ({ type: 'todo/write', seq, time: seq + 1, data: {} })) as unknown as SessionEvent[]
@@ -37,6 +84,7 @@ function armSliced(ctx: Context, eventsById: Map<string, SessionEvent[]>, opts: 
   failWrite?: boolean
   noPrepare?: boolean
   hostileRestoreAt?: number
+  stat?: boolean
 } = {}): SliceRig {
   const route: RouteBox = {}
   const state = fakeState([...eventsById.keys()].map(id => ({ header: { id, cwd: `/repo/${id}` } })))
@@ -71,6 +119,7 @@ function armSliced(ctx: Context, eventsById: Map<string, SessionEvent[]>, opts: 
     },
   })
   ctx.provide('sessionPersistence', {
+    ...(opts.stat === true ? { stat: async (id: string) => ({ path: `/repo/${id}.jsonl`, sizeBytes: 10, mtimeMs: 3 }) } : {}),
     open: async (id: string) => {
       state.coldReads.push(id)
       return {
@@ -254,6 +303,7 @@ describe('the sliced cold fold (issue #145)', () => {
       minRestMs: 25,
       workBudgetMs: 60_000,
       roundPauseMs: 2_000,
+      sliceBudgetMs: 10_000,
     })
     await trigger(rig.route)
     await until(() => (rig.writes.has('monster') ? true : undefined), 'the write-back landed')
@@ -319,6 +369,7 @@ describe('the sliced cold fold (issue #145)', () => {
       minRestMs: 25,
       workBudgetMs: 800,
       roundPauseMs: 2_000,
+      sliceBudgetMs: 10_000,
     })
     await trigger(rig.route)
     await until(() => (rig.writes.has('monster') ? true : undefined), 'the write-back landed')
@@ -330,4 +381,275 @@ describe('the sliced cold fold (issue #145)', () => {
     const marker = { type: 'session/end-seed', seq: events.length, time: 1, data: {} } as SessionEvent
     assert.deepStrictEqual(rig.writes.get('monster'), referenceRows([...events, marker], 'monster'), 'pauses never change the rows')
   })
+
+  test('the slice size adapts to the measured cost and still lands the exact rows', async () => {
+    const ctx = new Context()
+    const events = fakeEvents(4_001)
+    const rig = armSliced(ctx, new Map([['monster', events]]))
+    let clock = 0
+    const dispose = watchActivityBackfill(ctx, undefined, {
+      now: () => (clock += 400),
+      sleep: async () => {},
+      minRestMs: 25,
+      workBudgetMs: 60_000,
+      roundPauseMs: 2_000,
+      sliceBudgetMs: 150,
+    })
+    await trigger(rig.route)
+    await until(() => (rig.writes.has('monster') ? true : undefined), 'the write-back landed')
+    dispose()
+    assert.deepEqual(rig.restoreCalls.slice(0, 11), [2_000, 2_750, 3_031, 3_159, 3_287, 3_415, 3_543, 3_671, 3_799, 3_927, 4_001])
+    const marker = { type: 'session/end-seed', seq: events.length, time: 1, data: {} } as SessionEvent
+    assert.deepStrictEqual(rig.writes.get('monster'), referenceRows([...events, marker], 'monster'), 'shrunk slices never change the rows')
+  })
+
+  test('nextSliceSize shrinks over budget, floors, grows when cheap, and holds in band', () => {
+    assert.equal(nextSliceSize(2_000, 400, 150), 750)
+    assert.equal(nextSliceSize(200, 1_000, 150), 128)
+    assert.equal(nextSliceSize(500, 10, 150), 1_000)
+    assert.equal(nextSliceSize(500, 50, 150), 500)
+    assert.equal(nextSliceSize(500, 0, 150), 1_000)
+    assert.equal(nextSliceSize(4_000, 10, 150), 2_000)
+  })
+
+  test('a session over the worker threshold folds off-thread and lands only in the plugin cache', async () => {
+    const ctx = new Context()
+    const events = [...fakeEvents(30_001), userMessage(30_001, [{ type: 'text', text: 'prompt' }], { kind: 'user' }, { time: 500 }) as unknown as SessionEvent]
+    const rig = armSliced(ctx, new Map([['monster', events]]), { stat: true })
+    const ownCache = ownCacheStub()
+    const pool = inProcessPool()
+    const dispose = watchActivityBackfill(ctx, undefined, undefined, { ownCache, config: {}, pool })
+    await trigger(rig.route)
+    await until(() => (ownCache.saved.length === 1 ? true : undefined), 'the plugin-cache row landed')
+    dispose()
+    assert.deepEqual([...rig.writes.keys()], [], 'the harness projection cache stays untouched')
+    assert.deepEqual(rig.restoreCalls, [], 'the host thread never folds')
+    const record = ownCache.saved[0]
+    assert.equal(record.session.id, 'monster')
+    assert.equal(record.session.blank, false, 'the prompt marks the session non-blank')
+    assert.equal(record.session.updatedAt, 500)
+    assert.equal(record.identity?.path, '/repo/monster.jsonl')
+    assert.deepStrictEqual(record.session.activity, activityOf(activityReference(events)))
+    assert.ok(record.session.timeline !== null)
+    pool.dispose()
+  })
+
+  test('a missing durable identity still lands the worker row with an identity-less signature', async () => {
+    const ctx = new Context()
+    const events = fakeEvents(30_001)
+    const rig = armSliced(ctx, new Map([['monster', events]]), { stat: true })
+    const ownCache = ownCacheStub(new Map(), ['monster'])
+    const pool = inProcessPool()
+    const dispose = watchActivityBackfill(ctx, undefined, undefined, { ownCache, config: {}, pool })
+    await trigger(rig.route)
+    await until(() => (ownCache.saved.length === 1 ? true : undefined), 'the plugin-cache row landed')
+    dispose()
+    assert.equal(ownCache.saved[0].identity, null)
+    assert.ok(ownCache.saved[0].session.signature.startsWith('C'))
+    assert.equal(ownCache.saved[0].session.blank, true, 'a promptless session lands blank')
+    pool.dispose()
+  })
+
+  test('oversize sessions without the worker seam fold on the host thread', async () => {
+    const ctx = new Context()
+    const events = fakeEvents(30_001)
+    const rig = armSliced(ctx, new Map([['monster', events]]))
+    const dispose = watchActivityBackfill(ctx, undefined, {
+      now: () => performance.now(),
+      sleep: async () => {},
+      minRestMs: 0,
+      workBudgetMs: 600_000,
+      roundPauseMs: 1_000,
+    })
+    await trigger(rig.route)
+    await until(() => (rig.writes.has('monster') ? true : undefined), 'the host-thread fold landed')
+    dispose()
+    assert.ok(rig.restoreCalls.length > 1, 'the sliced fold ran')
+  })
+
+  test('an abort during a worker fold lands nothing', async () => {
+    const ctx = new Context()
+    const events = fakeEvents(30_001)
+    const rig = armSliced(ctx, new Map([['monster', events]]), { stat: true })
+    const ownCache = ownCacheStub()
+    let rejectFold!: (error: Error) => void
+    const pool = {
+      fold: () => new Promise((_resolve, reject) => { rejectFold = reject }),
+      dispose: () => {},
+    } as unknown as FoldPool
+    const handle = watchActivityBackfill(ctx, undefined, undefined, { ownCache, config: {}, pool })
+    await trigger(rig.route)
+    await until(() => (rejectFold !== undefined ? true : undefined), 'the worker fold started')
+    handle()
+    rejectFold(new Error('worker died'))
+    await new Promise(resolve => setTimeout(resolve, 40))
+    assert.deepEqual(ownCache.saved, [], 'the aborted fold left no plugin-cache row')
+    assert.deepEqual([...rig.writes.keys()], [], 'the aborted fold left no write-back')
+  })
+
+  test('a worker fold failure falls back to the host-thread sliced fold', async () => {
+    const ctx = new Context()
+    const events = fakeEvents(30_001)
+    const rig = armSliced(ctx, new Map([['monster', events]]), { stat: true })
+    const lines = captureLogs(ctx)
+    const ownCache = ownCacheStub()
+    const dispose = watchActivityBackfill(ctx, undefined, {
+      now: () => performance.now(),
+      sleep: async () => {},
+      minRestMs: 0,
+      workBudgetMs: 600_000,
+      roundPauseMs: 1_000,
+    }, { ownCache, config: {} })
+    await trigger(rig.route)
+    await until(() => (rig.writes.has('monster') ? true : undefined), 'the sliced fallback landed')
+    dispose()
+    assert.deepEqual(ownCache.saved, [], 'the failed worker left no plugin-cache row')
+    const warns = lines.filter(l => l.level === 'warn' && l.text.includes('worker fold for "monster" failed'))
+    assert.equal(warns.length, 1)
+  })
+
+  test('a session already warm in the plugin cache skips the read entirely', async () => {
+    const ctx = new Context()
+    const state = fakeState([
+      { header: { id: 'warm', cwd: '/repo/warm' } },
+      { header: { id: 'cold', cwd: '/repo/cold' } },
+      { header: { id: 'nocwd' } },
+    ])
+    const route = arm(ctx, state)
+    const warm = { id: 'warm', title: 'Warm', updatedAt: 1, blank: false, timeline: null, activity: null, signature: '' }
+    const ownCache = ownCacheStub(new Map([['warm', warm]]))
+    const dispose = watchActivityBackfill(ctx, undefined, undefined, { ownCache })
+    await trigger(route)
+    await until(() => (state.coldSnapshots.length === 1 ? true : undefined), 'only the cold session folded')
+    dispose()
+    assert.deepEqual(state.coldReads, ['cold'])
+    assert.deepEqual(state.coldSnapshots, ['cold'])
+  })
+})
+})
+
+describe('apiRoutes', () => {
+
+describe('apiRoutePairing', () => {
+  test('each client fetch route is its host registration minus the leading slash', () => {
+    for (const [host, client] of [
+      [HOST_DETAIL_ROUTE, DETAIL_ROUTE],
+      [HOST_COMMANDS_ROUTE, COMMANDS_ROUTE],
+      [HOST_BALANCE_ROUTE, BALANCE_ROUTE],
+      [HOST_FLEET_ROUTE, FLEET_ROUTE],
+      [HOST_SKILLS_ROUTE, SKILLS_ROUTE],
+      [HOST_BACKFILL_ROUTE, BACKFILL_ROUTE],
+      [HOST_ATTACHMENT_ROUTE, ATTACHMENT_ROUTE],
+      [HOST_OVERVIEW_ROUTE, OVERVIEW_ROUTE],
+    ]) {
+      assert.equal(client, host.slice(1), `${host} and ${client} lost their pairing`)
+    }
+  })
+})
+})
+
+describe('serviceIdentity', () => {
+
+describe('serviceIdentityOf', () => {
+  test('uses the stable identity of a re-bound service wrapper', () => {
+    assert.equal(serviceIdentityOf({ identity: 'persistence-1', generation: 1 }), 'persistence-1')
+    assert.equal(serviceIdentityOf({ identity: 'persistence-1', generation: 2 }), 'persistence-1')
+  })
+
+  test('falls back to the value itself when no identity is exposed', () => {
+    const service = { id: 'persistence' }
+    assert.equal(serviceIdentityOf(service), service)
+    assert.equal(serviceIdentityOf(undefined), undefined)
+    assert.equal(serviceIdentityOf('persistence'), 'persistence')
+  })
+})
+})
+
+describe('config', () => {
+
+function deref(value: unknown): unknown {
+  return value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function'
+    ? (value as { get: () => unknown }).get()
+    : value
+}
+
+describe('Config validator (cordis Standard Schema face)', () => {
+  test('an absent config resolves to defaults; each bounds field overrides independently', () => {
+    const resolved = Config(undefined) as unknown as Record<string, unknown>
+    const resolvedPrefs = Object.fromEntries(
+      Object.entries(resolved).map(([key, value]) => [key, deref(value)]),
+    )
+    assert.deepEqual(resolvedPrefs, {
+      ...DEFAULT_BOUNDS,
+      defaultPlacement: 'all',
+      defaultGranularity: 'step',
+      defaultTrendMode: 'total',
+      defaultDeltaBase: 'step',
+      defaultToolSort: 'count',
+      defaultFileSort: 'lines',
+      insightsEntry: 'show',
+      defaultDurationCurve: 'show',
+      overviewAutoSteps: '100',
+      defaultOverviewRange: '30d',
+      fleetTab: 'show',
+      promptPrefix: '',
+      promptSuffix: '',
+    })
+    assert.deepEqual(resolveBounds(undefined), DEFAULT_BOUNDS)
+    assert.deepEqual(resolveBounds({}), DEFAULT_BOUNDS)
+    assert.equal(resolveBounds({ maxRequestSteps: 7 }).maxRequestSteps, 7)
+    assert.equal(resolveBounds({ maxKeptTurns: 7 }).maxKeptTurns, 7)
+    assert.equal(resolveBounds({ maxEvents: 7 }).maxEvents, 7)
+    assert.equal(resolveBounds({ maxNodes: 7 }).maxNodes, 7)
+    assert.equal(resolveBounds({ maxArchiveNodes: 7 }).maxArchiveNodes, 7)
+    assert.equal(resolveBounds({ maxNodes: 7 }).maxEvents, DEFAULT_BOUNDS.maxEvents)
+  })
+
+  test('rejects bounds below 1, non-integers, and non-numbers', () => {
+    assert.throws(() => Config({ maxRequestSteps: 0 }))
+    assert.throws(() => Config({ maxNodes: -1 }))
+    assert.throws(() => Config({ maxEvents: 1.5 }))
+    assert.throws(() => Config({ maxKeptTurns: '300' } as unknown as Config))
+  })
+
+  test('unknown keys merge through (schemastery objects are not key-strict)', () => {
+    assert.equal(deref(Config({ unknown: 1 } as unknown as Config).maxEvents), DEFAULT_BOUNDS.maxEvents)
+  })
+})
+
+describe('preference fields (the Config-form generation surface)', () => {
+  test('every preference is volatile-marked; the bounds are not', () => {
+    const dict = Config.dict ?? {}
+    for (const pref of ['defaultPlacement', 'defaultGranularity', 'defaultTrendMode', 'defaultDeltaBase', 'defaultToolSort', 'defaultFileSort', 'insightsEntry', 'defaultDurationCurve', 'overviewAutoSteps', 'defaultOverviewRange', 'fleetTab', 'promptPrefix', 'promptSuffix']) {
+      assert.equal((dict[pref] as z['dict'] extends undefined ? never : { meta?: { volatile?: boolean } }).meta?.volatile, true, pref)
+    }
+    for (const bound of ['maxRequestSteps', 'maxKeptTurns', 'maxEvents', 'maxNodes', 'maxArchiveNodes', 'maxFileOps']) {
+      assert.notEqual((dict[bound] as { meta?: { volatile?: boolean } }).meta?.volatile, true, bound)
+    }
+  })
+
+  test('preferences resolve to defaults, stale values degrade, and stored values survive', () => {
+    const resolved = Config({ defaultGranularity: 'bogus', overviewAutoSteps: '50', defaultOverviewRange: 'bogus', promptPrefix: 7, promptSuffix: {} } as unknown as Config)
+    assert.equal(deref(resolved.defaultGranularity), 'step')
+    assert.equal(deref(resolved.overviewAutoSteps), '100')
+    assert.equal(deref(resolved.defaultOverviewRange), '30d')
+    assert.equal(deref(resolved.promptPrefix), '', 'a non-string prompt value degrades to the empty default')
+    assert.equal(deref(resolved.promptSuffix), '')
+    const stored = Config({ defaultPlacement: 'hide', defaultFileSort: 'count', insightsEntry: 'hide', overviewAutoSteps: 'off', defaultOverviewRange: '7d', fleetTab: 'hide', promptPrefix: 'Be terse.', promptSuffix: 'Sign as Atlas.' }) as unknown as Record<string, unknown>
+    assert.deepEqual(
+      ['defaultPlacement', 'defaultFileSort', 'insightsEntry', 'overviewAutoSteps', 'defaultOverviewRange', 'fleetTab', 'promptPrefix', 'promptSuffix'].map(key => deref(stored[key])),
+      ['hide', 'count', 'hide', 'off', '7d', 'hide', 'Be terse.', 'Sign as Atlas.'],
+    )
+  })
+})
+
+describe('volatileField', () => {
+  test('marks the field where schemastery ships the modifier; returns it unchanged on an older schemastery', () => {
+    assert.equal(volatileField(z.union(['a', 'b']).default('a')).meta?.volatile, true)
+    const plain = z.union(['a', 'b']).default('a')
+    const legacy = { meta: plain.meta } as typeof plain
+    assert.equal(volatileField(legacy), legacy)
+    assert.equal(legacy.meta?.volatile, undefined)
+  })
+})
 })

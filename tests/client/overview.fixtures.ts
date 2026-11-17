@@ -150,6 +150,7 @@ export function panelSummaryRaw(over: Record<string, unknown> = {}): Record<stri
       { key: 'zero', value: 0 },
     ],
     timing: { wallMs: 180_000, ttftMs: 2_000, genMs: 60_000, calls: 8, toolsMs: 40_000, toolBusyMs: 30_000, toolCalls: 14, tools: {} },
+    windowTiming: { calls: 8, toolCalls: 14, toolsMs: 40_000, wallMs: 180_000 },
     coverage: COMPLETE_COVERAGE,
     ...over,
   }
@@ -167,12 +168,12 @@ function dayInWindow(key: string, window: { start?: number | null; end?: number 
 }
 
 function inRangeOf(row: ServerRow, range: OverviewScope['range']): boolean {
-  if (range === undefined || range === 'all') return true
-  const window = typeof range === 'object'
-    ? range
-    : range === 'today'
+  const effective = range ?? '30d'
+  const window = typeof effective === 'object'
+    ? effective
+    : effective === 'today'
       ? { start: MIDNIGHT, end: null }
-      : { start: NOW - (range === '7d' ? 7 : 30) * 86_400_000, end: null }
+      : { start: NOW - (effective === '7d' ? 7 : 30) * 86_400_000, end: null }
   if (row.updatedAt >= (window.start ?? 0) && (window.end === null || row.updatedAt <= window.end)) return true
   return row.activeDays.some(key => dayInWindow(key, window))
 }

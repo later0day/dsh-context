@@ -11,6 +11,7 @@ import type { DetailState } from '../timelineSource'
 import type { ViewKit } from '../viewkit'
 import { ClearableInput } from './clearableInput'
 import { makeDetailNote } from './detailNote'
+import { LoadingLane } from './skeleton'
 import { makeRichText } from './richText'
 import { IconApi, IconShare } from '../primitives'
 import { Section } from './section'
@@ -293,13 +294,19 @@ export function makeCommandPanel(kit: ViewKit): ComponentType<CommandPanelProps>
         <div className="lc-cmd-rail-sec">
           <div className="lc-cmd-rail-h" title={t('cmds.rail.summaryTip')}>{t('cmds.rail.summary')}</div>
           <div className="lc-cmd-kpis">
-            <div className="lc-cmd-kpi"><b>{fmt(tally.runs)}</b><span>{t('cmds.rail.runs')}</span></div>
-            <div className="lc-cmd-kpi lc-cmd-kpi-time"><b>{totalTime}</b><span>{t('cmds.rail.totalTime')}</span></div>
-            <div className="lc-cmd-kpi lc-cmd-kpi-fail">
+            <button type="button" className="lc-cmd-kpi" onClick={() => { applyLens({ filter: 'all' }) }}>
+              <b>{fmt(tally.runs)}</b><span>{t('cmds.rail.runs')}</span>
+            </button>
+            <button type="button" className="lc-cmd-kpi lc-cmd-kpi-time" onClick={() => { applyLens({ filter: 'all' }) }}>
+              <b>{totalTime}</b><span>{t('cmds.rail.totalTime')}</span>
+            </button>
+            <button type="button" className="lc-cmd-kpi lc-cmd-kpi-fail" onClick={() => { applyLens({ filter: 'failed' }) }}>
               <b>{fmt(tally.failed)}</b>
               <span>{t('cmds.rail.failed')}{tally.runs > 0 ? ' · ' + kit.fmtShare(tally.failed, tally.runs) : ''}</span>
-            </div>
-            <div className="lc-cmd-kpi lc-cmd-kpi-bg"><b>{fmt(tally.bg)}</b><span>{t('cmds.rail.background')}</span></div>
+            </button>
+            <button type="button" className="lc-cmd-kpi lc-cmd-kpi-bg" onClick={() => { applyLens({ filter: 'background' }) }}>
+              <b>{fmt(tally.bg)}</b><span>{t('cmds.rail.background')}</span>
+            </button>
           </div>
         </div>
         {attentionRows.length > 0 ? (
@@ -577,7 +584,7 @@ export function makeCommandPanel(kit: ViewKit): ComponentType<CommandPanelProps>
             </div>
             {fillNote}
             {remote.kind === 'loading' ? (
-              <DetailNote state="loading" className="lc-empty lc-lane" />
+              <LoadingLane className="lc-cmd-lane" />
             ) : remote.kind === 'failed' ? (
               <DetailNote state="failed" onRetry={remote.retry} className="lc-empty lc-lane" />
             ) : shown.length === 0 ? (
