@@ -6,7 +6,6 @@ import type { ViewKit } from '../viewkit'
 import { SkeletonRows } from './skeleton'
 
 const MAX_ROWS = 24
-
 export interface TallyCardProps {
   icon: ReactElement
   title: string

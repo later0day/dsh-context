@@ -104,6 +104,7 @@ describe('OverviewPanel', () => {
     assert.deepEqual(bodyOf(calls, 'summary')[0], { part: 'summary', scope: { range: '30d', coverage: 'all' } })
     assert.deepEqual(bodyOf(calls, 'days')[0], { part: 'days', scope: { coverage: 'all' } })
     assert.deepEqual(bodyOf(calls, 'page')[0], { part: 'page', scope: { range: '30d', coverage: 'all' }, sort: 'recent', page: 0 })
+    assert.deepEqual(bodyOf(calls, 'projects')[0], { part: 'projects', scope: { range: '30d', coverage: 'all' } })
     const tallyBodies = bodyOf(calls, 'tally')
     assert.equal(tallyBodies.length, 3, 'skills, tools, and commands each read their own tally')
     assert.deepEqual(tallyBodies.map(body => [body.tally, body.scope]), [
@@ -129,9 +130,14 @@ describe('OverviewPanel', () => {
     assert.ok(text(statsCards[1]).includes('14 runs'))
     assert.ok(text(statsCards[1]).includes('LLM Gen'))
     assert.ok(queryAll(m.container, 'button.lc-heat-cell').length >= 2)
+    assert.equal(queryAll(m.container, '.lc-ov-first > *').length, 3, 'the KPI band, heatmap, and usage chart share the first row')
+    assert.ok(query(m.container, '.lc-ov-first > .lc-ov-kpis') !== null, 'the KPI band rides the first row')
+    assert.ok(query(m.container, '.lc-ov-first > .lc-card.lc-ov-heat-card') !== null, 'the heatmap rides the first row')
     const tiles = queryAll(m.container, '.lc-ov-tiles > .lc-card')
-    assert.equal(tiles.length, 4, 'the heat, skills, tools, and commands cards share one row')
-    assert.ok(tiles[0].classList.contains('lc-ov-heat-card'))
+    assert.equal(tiles.length, 4, 'the project, skills, tools, and commands cards share one row')
+    assert.equal(text(query(tiles[0], '.lc-ov-tally-note')), '2 projects · 1.8k')
+    assert.deepEqual(queryAll(tiles[0], '.lc-ov-tally-name').map(el => text(el)), ['workspace-one', 'Ungrouped'])
+    assert.deepEqual(queryAll(tiles[0], '.lc-ov-tally-count').map(el => text(el)), ['×1 · 1.8k', '×1 · 25'])
     assert.equal(queryAll(tiles[1], 'button.lc-ov-tally').length, 0, 'no skill loads in this fixture')
     assert.equal(text(query(tiles[2], '.lc-ov-tally-note')), '3 tools · 10 calls')
     assert.deepEqual(queryAll(tiles[2], '.lc-ov-tally-name').map(el => text(el)), ['read', 'grep', 'bash'])
@@ -233,6 +239,8 @@ describe('OverviewPanel', () => {
     const { m } = await openPanel(makeCtx())
     const tiles = queryAll(m.container, '.lc-ov-tiles > .lc-card')
     assert.equal(tiles.length, 4)
+    assert.deepEqual(queryAll(m.container, '.lc-ov-chip').map(el => text(el)), ['All0'])
+    assert.equal(text(query(tiles[0], '.lc-ov-tally-note')), '0 projects · 0')
     assert.equal(text(query(tiles[1], '.lc-ov-tally-note')), '0 skills · 0 loads')
     assert.equal(text(query(tiles[2], '.lc-ov-tally-note')), '0 tools · 0 calls')
     assert.equal(text(query(tiles[3], '.lc-ov-tally-note')), '0 programs · 0 runs')
@@ -421,8 +429,9 @@ describe('OverviewPanel', () => {
     assert.ok(pickedWindow !== null)
     assert.deepEqual(lastBodyOf(calls, 'page').scope, {
       range: { start: pickedWindow.start, end: pickedWindow.end },
+      calendar: { from: YESTERDAY, to: TODAY },
       coverage: 'all',
-    }, 'the page request carries the picked window bounds')
+    }, 'the page request carries both the legacy bounds and host calendar keys')
     assert.ok(query(calendar.m.container, '.lc-dp-trigger').className.includes('lc-dp-trigger-on'), 'the chip carries the picked range')
     assert.deepEqual(
       queryAll(calendar.m.container, '.lc-dp-trigger .lc-dp-half').map(el => el.textContent),
@@ -466,6 +475,7 @@ describe('OverviewPanel', () => {
     await click(todayCell)
     await settle(5)
     assert.equal(scopeOf(lastBodyOf(calls, 'page')).day, TODAY)
+    assert.equal(scopeOf(lastBodyOf(calls, 'summary')).day, TODAY, 'the KPI band follows the pinned day')
     assert.equal(scopeOf(lastBodyOf(calls, 'tally')).day, TODAY, 'the tallies follow the pinned day too')
     assert.ok(query(m.container, '.lc-ov-day-chip'), 'the day chip appears')
     const cards = cardsOf(m.container)
@@ -529,12 +539,13 @@ describe('OverviewPanel', () => {
     assert.deepEqual(skillsCalls, [{ cwd: '/repo/alpha', sessionId: 'a' }], 'the catalog read anchors on the current session')
     assert.ok(query(cardWith(m.container, 'alpha session'), '.lc-ov-current') !== null)
     assert.equal(queryAll(cardWith(m.container, 'beta session'), '.lc-ov-current').length, 0)
-    const skillRow = query<HTMLButtonElement>(m.container, 'button.lc-ov-tally')
-    assert.ok(text(skillRow).includes('tdd'))
-    await hover(skillRow)
+    const skillsCard = queryAll(m.container, '.lc-ov-tiles > .lc-card')[1]
+    const skillRow = (): HTMLButtonElement => query<HTMLButtonElement>(skillsCard, 'button.lc-ov-tally')
+    assert.ok(text(skillRow()).includes('tdd'))
+    await hover(skillRow())
     assert.ok(text(document.querySelector('#lc-skilltip-bubble') as HTMLElement).includes('Test-driven.'), 'the catalog’s description joins the hover card')
-    await unhover(skillRow)
-    await click(skillRow)
+    await unhover(skillRow())
+    await click(skillRow())
     await settle(5)
     assert.deepEqual(lastBodyOf(calls, 'page').pick, { field: 'skills', name: 'tdd' })
     const cards = cardsOf(m.container)
@@ -547,10 +558,10 @@ describe('OverviewPanel', () => {
     await settle(5)
     assert.equal(cardsOf(m.container).length, 2)
     assert.equal(queryAll(m.container, '.lc-ov-skill-detail').length, 0, 'the detail block leaves with the pin')
-    await click(query<HTMLButtonElement>(m.container, 'button.lc-ov-tally'))
+    await click(skillRow())
     await settle(5)
     assert.equal(cardsOf(m.container).length, 1)
-    await click(query<HTMLButtonElement>(m.container, 'button.lc-ov-tally'))
+    await click(skillRow())
     await settle(5)
     assert.equal(cardsOf(m.container).length, 2)
     await m.unmount()
@@ -593,6 +604,7 @@ describe('OverviewPanel', () => {
     await actType(input, 'beta')
     await settle(5)
     assert.equal(scopeOf(lastBodyOf(calls, 'page')).query, 'beta')
+    assert.equal(scopeOf(lastBodyOf(calls, 'summary')).query, 'beta', 'the KPI band follows the search')
     assert.equal(cardsOf(m.container).length, 1)
     assert.ok(text(m.container).includes('beta session'))
     await actType(input, '/repo/a')
@@ -668,6 +680,7 @@ describe('OverviewPanel', () => {
     await click(chips[1])
     await settle(5)
     assert.equal(scopeOf(lastBodyOf(calls, 'page')).group, 'workspace-one')
+    assert.equal(scopeOf(lastBodyOf(calls, 'summary')).group, 'workspace-one', 'the KPI band follows the workspace group')
     let cards = cardsOf(m.container)
     assert.equal(cards.length, 1)
     assert.ok(text(cards[0]).includes('alpha session'))
@@ -695,6 +708,70 @@ describe('OverviewPanel', () => {
     assert.deepEqual(phantom.map(c => c.textContent), ['All0', 'workspace-one0'])
     assert.ok(phantom[1].className.includes('lc-ov-chip-on'))
     assert.equal(cardsOf(m.container).length, 0)
+    await m.unmount()
+  })
+
+  test('every project renders in the scrollable tile body', async () => {
+    stubRoutes({
+      projects: () => ({
+        revision: 'rev-projects',
+        pricingReady: true,
+        projects: Array.from({ length: 25 }, (_, index) => ({ key: `project-${index}`, tokens: 100 - index, sessions: 1 })),
+      }),
+    })
+    const { m } = await openPanel(makeCtx())
+    const project = queryAll(m.container, '.lc-ov-tiles > .lc-card')[0]
+    assert.equal(queryAll(project, 'button.lc-ov-tally').length, 25)
+    assert.equal(queryAll(project, '.lc-ov-tally-more').length, 0)
+    await m.unmount()
+  })
+
+  test('a project row filters the page and summary by workspace, and toggles off', async () => {
+    const calls = stubRoutes()
+    const { m } = await openPanel(makeCtx())
+    const project = queryAll(m.container, '.lc-ov-tiles > .lc-card')[0]
+    const rowOf = (): HTMLButtonElement | undefined => queryAll<HTMLButtonElement>(project, 'button.lc-ov-tally').find(row => text(row).includes('workspace-one'))
+    assert.equal(rowOf()?.getAttribute('aria-pressed'), 'false')
+    await click(rowOf()!)
+    await settle(5)
+    assert.equal(scopeOf(lastBodyOf(calls, 'page')).group, 'workspace-one', 'the project row reuses the workspace group filter')
+    assert.equal(scopeOf(lastBodyOf(calls, 'summary')).group, 'workspace-one', 'the KPI band follows the project filter')
+    assert.equal(cardsOf(m.container).length, 1)
+    assert.ok(text(cardsOf(m.container)[0]).includes('alpha session'))
+    assert.equal(rowOf()?.getAttribute('aria-pressed'), 'true')
+    await click(rowOf()!)
+    await settle(5)
+    assert.equal(scopeOf(lastBodyOf(calls, 'page')).group, undefined)
+    assert.equal(cardsOf(m.container).length, 2)
+    await m.unmount()
+  })
+
+  test('a pending page keeps the previous grid and group chips painted', async () => {
+    let release: ((value: unknown) => void) | null = null
+    let pendingBody: Record<string, unknown> | null = null
+    let pageCalls = 0
+    const rows = panelRows()
+    stubRoutes({
+      page: (body) => {
+        pageCalls++
+        if (pageCalls === 1) return pageValueFor(body, rows)
+        pendingBody = body
+        return new Promise<unknown>((resolve) => { release = resolve })
+      },
+    })
+    const { m } = await openPanel(makeCtx())
+    assert.equal(cardsOf(m.container).length, 2)
+    const chips = queryAll<HTMLButtonElement>(m.container, '.lc-ov-chip')
+    assert.equal(chips.length, 3)
+    await click(chips[1])
+    await settle(0)
+    assert.equal(cardsOf(m.container).length, 2, 'the previous grid remains while the page read is in flight')
+    assert.equal(queryAll(m.container, '.lc-ov-skel-card').length, 0, 'no skeleton replaces the painted grid')
+    assert.equal(queryAll(m.container, '.lc-ov-chip').length, 3, 'the chips row stays painted')
+    assert.ok(pendingBody !== null)
+    await act(async () => { release?.(pageValueFor(pendingBody!, rows)) })
+    await settle(5)
+    assert.equal(cardsOf(m.container).length, 1)
     await m.unmount()
   })
 

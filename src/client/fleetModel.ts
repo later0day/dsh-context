@@ -51,7 +51,8 @@ export function teamOfSnapshot(snapshot: unknown, forest: AgentForest | null): F
   if (byId === null) return null
   for (const n of forest.nodes) {
     const row = asRecord(byId[n.id])
-    const team = teamOf(asRecord(row?.projectionValues)?.agentTeam)
+    const values = asRecord(row?.projectionValues)
+    const team = teamOf(values?.agentTeam, values?.subagentCatalog, n.id)
     if (team !== null) return team
   }
   return null

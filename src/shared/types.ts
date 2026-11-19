@@ -538,6 +538,11 @@ export interface PlatformBalance {
   balances: PlatformBalanceEntry[]
 }
 
+export interface BackfillUnreadableSession {
+  id: string
+  reason: string
+}
+
 export interface BackfillCoverage {
   complete: boolean
   remaining: number
@@ -546,9 +551,11 @@ export interface BackfillCoverage {
   total: number
   covered: number
   unsupported: number
+  unreadable: number
+  unreadableSessions?: BackfillUnreadableSession[]
 }
 
-export type OverviewPart = 'summary' | 'days' | 'page' | 'tally'
+export type OverviewPart = 'summary' | 'days' | 'page' | 'tally' | 'projects'
 
 export type OverviewCoverage = 'all' | 'active' | 'archived'
 
@@ -561,6 +568,7 @@ export type OverviewRange = 'today' | '7d' | '30d' | { start: number; end: numbe
 export interface OverviewScope {
   range?: OverviewRange
   day?: string | null
+  calendar?: { from: string; to: string }
   coverage?: OverviewCoverage
   group?: string | null
   query?: string
@@ -593,6 +601,13 @@ export interface OverviewTimingWindow {
   wallMs: number
 }
 
+export interface OverviewResolvedWindow {
+  start: number
+  end: number | null
+  from: string | null
+  to: string | null
+}
+
 export interface OverviewSummary {
   sessions: number
   sessionsTotal: number
@@ -607,6 +622,7 @@ export interface OverviewSummary {
   tokenParts: OverviewPartTotal[] | null
   timing: TimingTotals | null
   windowTiming: OverviewTimingWindow
+  window?: OverviewResolvedWindow
   coverage: BackfillCoverage
 }
 
@@ -664,6 +680,12 @@ export interface OverviewTally {
   stats: OverviewTallyStat[]
 }
 
+export interface OverviewProjectStat {
+  key: string
+  tokens: number
+  sessions: number
+}
+
 export interface OverviewUnchanged {
   revision: string
   unchanged: true
@@ -693,4 +715,11 @@ export interface OverviewTallyValue {
   tally: OverviewTally
 }
 
-export type OverviewValue = OverviewUnchanged | OverviewSummaryValue | OverviewDaysValue | OverviewPageValue | OverviewTallyValue
+export interface OverviewProjectsValue {
+  revision: string
+  pricingReady: boolean
+  projects: OverviewProjectStat[]
+}
+
+export type OverviewValue = OverviewUnchanged | OverviewSummaryValue | OverviewDaysValue | OverviewPageValue
+  | OverviewTallyValue | OverviewProjectsValue

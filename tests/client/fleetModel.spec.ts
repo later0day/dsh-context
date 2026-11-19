@@ -73,6 +73,29 @@ describe('teamOfSnapshot', () => {
     assert.equal(teamOfSnapshot({ byId: { root: null } }, forest), null)
     assert.equal(teamOfSnapshot({ byId: { root: { projectionValues: { agentTeam: team } } } }, null), null)
   })
+
+  test('a members-less carrier synthesizes its Lead and named continuable children from its own catalog', () => {
+    const forest = { nodes: [nodeOf('root'), nodeOf('kid', { parentId: 'root' })], edges: [], solo: false }
+    const snapshot = {
+      byId: {
+        root: {
+          projectionValues: {
+            agentTeam: { enabled: true, tasks: [] },
+            subagentCatalog: [
+              { id: 'kid', createdAt: 1, mode: 'continuable', label: 'parse', name: 'agent-1' },
+              { id: 's9', createdAt: 2, mode: 'one-shot', name: 'agent-2' },
+            ],
+          },
+        },
+      },
+    }
+    assert.deepEqual(teamOfSnapshot(snapshot, forest)?.members, [
+      { id: 'root', name: 'lead', role: 'lead', phase: 'active' },
+      { id: 'kid', name: 'agent-1', role: 'teammate', phase: 'active' },
+    ])
+    assert.equal(teamOfSnapshot({ byId: { root: { projectionValues: { agentTeam: { enabled: false, tasks: [] } } } } }, forest), null,
+      'Team mode off keeps the plain fleet')
+  })
 })
 
 describe('useFleetModel', () => {

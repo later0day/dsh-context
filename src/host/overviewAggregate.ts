@@ -10,6 +10,7 @@ import type {
   OverviewPageRow,
   OverviewPartTotal,
   OverviewPick,
+  OverviewProjectStat,
   OverviewRange,
   OverviewSort,
   OverviewSummary,
@@ -49,10 +50,23 @@ export interface Filters {
 }
 
 
-export function windowOf(range: OverviewRange, day: string | null, now: number): Window {
+export function windowOf(
+  range: OverviewRange,
+  day: string | null,
+  now: number,
+  calendar?: { from: string; to: string },
+): Window {
   if (day !== null) {
     const start = startOfDayKey(day)
     const end = endOfDayKey(day)
+    if (start !== null && end !== null) return { start, end }
+  }
+  if (calendar !== undefined) {
+    const [from, to] = calendar.from <= calendar.to
+      ? [calendar.from, calendar.to]
+      : [calendar.to, calendar.from]
+    const start = startOfDayKey(from)
+    const end = endOfDayKey(to)
     if (start !== null && end !== null) return { start, end }
   }
   if (typeof range === 'object') {
@@ -250,6 +264,7 @@ export function summaryOf(
   const admit = dayPredicate(filters)
   const tokenParts = partsOf(rows, admit)
   let usage: SessionCostUsage | null = null
+  let tokens = 0
   let turns = 0
   const windowTiming = { calls: 0, toolCalls: 0, toolsMs: 0, wallMs: 0 }
   let costSessions = 0
@@ -258,6 +273,7 @@ export function summaryOf(
   for (const row of rows) {
     const totals = activityTotalsOf(row.activity, admit)
     usage = mergeCostUsage(usage, totals.usage)
+    tokens += totals.tokens
     turns += totals.turns
     windowTiming.calls += totals.calls
     windowTiming.toolCalls += totals.toolCalls
@@ -273,7 +289,7 @@ export function summaryOf(
     sessionsTotal: allRows.length,
     sessionsArchived,
     archivedScoped: sessionsArchived,
-    tokens: usageTotals?.total ?? 0,
+    tokens,
     turns,
     costUsd: cost.usd(usage),
     costSessions,
@@ -282,6 +298,12 @@ export function summaryOf(
     tokenParts,
     timing: timingSumOf(rows),
     windowTiming,
+    window: {
+      start: filters.window.start,
+      end: filters.window.end,
+      from: dayKeyOf(filters.window.start),
+      to: dayKeyOf(filters.window.end ?? Date.now()),
+    },
     coverage,
   }
 }
@@ -376,6 +398,29 @@ export function groupCountsOf(rows: readonly HostRow[], workspace: WorkspaceStat
   }
   if (ungrouped > 0) groups.push({ key: UNGROUPED_KEY, count: ungrouped })
   return groups
+}
+
+export function projectStatsOf(rows: readonly HostRow[], filters: Filters): OverviewProjectStat[] {
+  const admit = dayPredicate(filters)
+  const stats = new Map<string, OverviewProjectStat>()
+  for (const row of rows) {
+    const key = row.group ?? UNGROUPED_KEY
+    const days = row.activity?.days
+    let tokens = 0
+    if (days !== undefined) {
+      for (const day of Object.keys(days)) {
+        if (admit(day)) tokens += days[day].tokens
+      }
+    }
+    const prev = stats.get(key)
+    if (prev === undefined) stats.set(key, { key, tokens, sessions: 1 })
+    else {
+      prev.tokens += tokens
+      prev.sessions += 1
+    }
+  }
+  return [...stats.values()].filter(stat => stat.tokens > 0).sort((left, right) => (right.tokens - left.tokens)
+    || left.key.localeCompare(right.key))
 }
 
 export function tallyStatsOf(rows: readonly HostRow[], filters: Filters, field: OverviewTallyField): OverviewTallyStat[] {

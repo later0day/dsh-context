@@ -7,7 +7,7 @@ export const BASE_COVERAGE: BackfillCoverage = {
   failed: 0,
   total: 2,
   covered: 2,
-  unsupported: 0,
+  unsupported: 0, unreadable: 0,
 }
 
 export function coverageOf(over: Partial<BackfillCoverage> = {}): BackfillCoverage {
@@ -82,6 +82,15 @@ export function tallyValue(over: Record<string, unknown> = {}): Record<string, u
     revision: 'r1',
     pricingReady: true,
     tally: { field: 'tools', stats: [{ name: 'read', n: 2, sessions: 1, last: 5 }] },
+    ...over,
+  }
+}
+
+export function projectsValue(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    revision: 'r1',
+    pricingReady: true,
+    projects: [{ key: 'w', tokens: 100, sessions: 2 }],
     ...over,
   }
 }

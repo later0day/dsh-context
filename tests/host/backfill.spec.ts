@@ -8,18 +8,11 @@ import { BACKFILL_ROUTE, watchActivityBackfill } from '../../src/host/backfill'
 import { createContextTimelineDefinition } from '../../src/host/timeline'
 import { createContextActivityDefinition } from '../../src/host/activity'
 import { createContextHeadersDefinition } from '../../src/host/headers'
-import { arm, captureLogs, coldFaces, connectionOf, fakeState, trigger, unsupportedFormatError, until } from './helpers/backfill'
+import { arm, captureLogs, coldFaces, connectionOf, FAST_PACING, fakeState, trigger, unsupportedFormatError, until } from './helpers/backfill'
 import type { RouteBox } from './helpers/backfill'
+import type { ColdReadGate } from '../../src/host/coldRead'
 
 const settle = (ms = 30): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
-
-const FAST_PACING = {
-  now: () => performance.now(),
-  sleep: () => Promise.resolve(),
-  minRestMs: 1,
-  workBudgetMs: 1_000_000,
-  roundPauseMs: 1,
-}
 
 function crashTailEvents(filler: number): SessionEvent[] {
   const events: SessionEvent[] = Array.from({ length: filler }, (_, seq) => ({
@@ -159,6 +152,127 @@ describe('watchActivityBackfill', () => {
       dispose()
       assert.deepEqual(state.coldReads, [], 'a route half that never registers leaves the pass unarmed')
     }
+  })
+
+  test('app readiness starts backfill without a connection or browser route', async () => {
+    const ctx = new Context()
+    const state = fakeState([{ header: { id: 'a', cwd: '/repo/a' } }])
+    coldFaces(ctx, state)
+    let ready: (() => void) | null = null
+    let cancelled = false
+    ctx.provide('appReady', {
+      onReady: (listener: () => void) => {
+        ready = listener
+        return () => { cancelled = true }
+      },
+    })
+    let started = 0
+    const handle = watchActivityBackfill(ctx, undefined, undefined, { autoStart: true, onStart: () => { started++ } })
+    await settle()
+    assert.equal(started, 0, 'catalog warm-up waits for readiness too')
+    assert.deepEqual(state.coldReads, [], 'startup work waits for the readiness commit')
+    assert.equal(typeof ready, 'function')
+    ;(ready as unknown as () => void)()
+    await until(() => (state.coldSnapshots.length === 1 ? true : undefined), 'readiness started the cold fold')
+    assert.equal(started, 1)
+    handle()
+    assert.equal(cancelled, true, 'the readiness listener is disposed with backfill')
+    assert.equal(typeof handle.request, 'function')
+  })
+
+  test('a throwing readiness face falls back to an immediate startup request', async () => {
+    const ctx = new Context()
+    const state = fakeState([{ header: { id: 'a', cwd: '/repo/a' } }])
+    coldFaces(ctx, state)
+    ctx.provide('appReady', { onReady: () => { throw new Error('not ready') } })
+    const handle = watchActivityBackfill(ctx, undefined, FAST_PACING, { autoStart: true })
+    await until(() => (state.coldSnapshots.length === 1 ? true : undefined), 'the readiness failure did not block startup')
+    handle()
+  })
+
+  test('a manual request clears a pending default retry and runs immediately', async () => {
+    const ctx = new Context()
+    const state = fakeState([{ header: { id: 'a', cwd: '/repo/a' } }])
+    coldFaces(ctx, state)
+    let admissions = 0
+    const gate: ColdReadGate = {
+      admit: async <T,>(read: () => Promise<T>): Promise<T | undefined> => {
+        admissions++
+        return admissions === 1 ? undefined : await read()
+      },
+    }
+    const handle = watchActivityBackfill(ctx, gate, FAST_PACING, { autoStart: true })
+    await until(() => (admissions === 1 && !handle.coverage().running ? true : undefined), 'the default retry was scheduled')
+    handle.request()
+    await until(() => (state.coldSnapshots.length === 1 ? true : undefined), 'the manual nudge completed without waiting for the timer')
+    handle()
+  })
+
+  test('a fully warm startup still publishes materialization readiness', async () => {
+    const ctx = new Context()
+    const state = fakeState([{ header: { id: 'a', cwd: '/repo/a' } }])
+    state.served.add('a')
+    coldFaces(ctx, state)
+    let changes = 0
+    const handle = watchActivityBackfill(ctx, undefined, FAST_PACING, { autoStart: true, onChange: () => { changes++ } })
+    await until(() => (changes > 0 ? true : undefined), 'the warm pass published its completion')
+    handle()
+    assert.deepEqual(state.coldReads, [])
+  })
+
+  test('a disposed live session schedules its cold materialization', async () => {
+    const ctx = new Context()
+    const listed = [{ header: { id: 'a', cwd: '/repo/a' } }]
+    const state = fakeState(listed)
+    coldFaces(ctx, state)
+    const handle = watchActivityBackfill(ctx, undefined, FAST_PACING, { autoStart: true })
+    await until(() => (state.coldSnapshots.length === 1 ? true : undefined), 'startup folded the first session')
+    state.served.add('a')
+    listed.push({ header: { id: 'b', cwd: '/repo/b' } })
+    let observed = 0
+    ctx.on('session/disposed', () => { observed++ })
+    ctx.emit('session/disposed', { id: 'b' } as never)
+    assert.equal(observed, 1, 'the test context emits the lifecycle event')
+    await until(() => (state.coldSnapshots.length === 2 ? true : undefined), 'disposal scheduled the new cold session')
+    handle()
+    assert.deepEqual(state.coldSnapshots, ['a', 'b'])
+  })
+
+  test('startup fallback resumes after heap admission without a browser retry', async () => {
+    const ctx = new Context()
+    const state = fakeState([{ header: { id: 'a', cwd: '/repo/a' } }])
+    coldFaces(ctx, state)
+    let admissions = 0
+    const gate: ColdReadGate = {
+      admit: async <T,>(read: () => Promise<T>): Promise<T | undefined> => {
+        admissions++
+        return admissions === 1 ? undefined : await read()
+      },
+    }
+    const handle = watchActivityBackfill(ctx, gate, FAST_PACING, { autoStart: true, retryBaseMs: 2 })
+    await until(() => (state.coldSnapshots.length === 1 ? true : undefined), 'the host resumed the paused startup pass')
+    handle()
+    assert.ok(admissions >= 2)
+    assert.equal(handle.coverage().complete, true)
+  })
+
+  test('a permanent admission failure exhausts the host retry budget', async () => {
+    const ctx = new Context()
+    const state = fakeState([{ header: { id: 'a', cwd: '/repo/a' } }])
+    coldFaces(ctx, state)
+    let admissions = 0
+    const gate: ColdReadGate = {
+      admit: async <T,>(): Promise<T | undefined> => {
+        admissions++
+        return undefined
+      },
+    }
+    const handle = watchActivityBackfill(ctx, gate, FAST_PACING, { autoStart: true, retryBaseMs: 0 })
+    await until(() => (admissions >= 11 ? true : undefined), 'the bounded retries ran')
+    await settle()
+    assert.equal(admissions, 11)
+    assert.equal(handle.coverage().complete, false)
+    handle()
   })
 
   test('incomplete faces are re-proved away — an armed request waits, then never launches', async () => {
@@ -400,7 +514,7 @@ describe('watchActivityBackfill', () => {
       },
     })
     const handle = watchActivityBackfill(ctx, undefined, FAST_PACING)
-    assert.deepEqual(handle.coverage(), { complete: false, remaining: 0, failed: 0, running: false, total: 0, covered: 0, unsupported: 0 })
+    assert.deepEqual(handle.coverage(), { complete: false, remaining: 0, failed: 0, running: false, total: 0, covered: 0, unsupported: 0, unreadable: 0 })
     assert.equal(handle.version(), 0)
     const first = await trigger(route)
     assert.equal(route.path, BACKFILL_ROUTE)
@@ -408,7 +522,7 @@ describe('watchActivityBackfill', () => {
     assert.equal(firstBody.ok, true)
     assert.equal(firstBody.coverage.running, true, 'the reply carries the running coverage')
     await until(() => (handle.coverage().complete ? true : undefined), 'the first pass finished')
-    assert.deepEqual(handle.coverage(), { complete: true, remaining: 0, failed: 0, running: false, total: 1, covered: 1, unsupported: 0 })
+    assert.deepEqual(handle.coverage(), { complete: true, remaining: 0, failed: 0, running: false, total: 1, covered: 1, unsupported: 0, unreadable: 0 })
     assert.equal(handle.version(), 1)
     state.served.add('a')
     const second = await trigger(route)
@@ -416,7 +530,7 @@ describe('watchActivityBackfill', () => {
     assert.equal(secondBody.ok, true)
     await until(() => (listed >= 2 ? true : undefined), 'the verified rerun listed the corpus')
     await until(() => (!handle.coverage().running ? true : undefined), 'the verified-warm rerun ends without probing')
-    assert.deepEqual(handle.coverage(), { complete: true, remaining: 0, failed: 0, running: false, total: 1, covered: 1, unsupported: 0 })
+    assert.deepEqual(handle.coverage(), { complete: true, remaining: 0, failed: 0, running: false, total: 1, covered: 1, unsupported: 0, unreadable: 0 })
     assert.deepEqual(state.coldReads, ['a'], 'the warm session is not read again')
     assert.equal(handle.version(), 1, 'a skipped pass keeps the revision')
     ;(state.listed as { header: Record<string, unknown> }[]).push({ header: { id: 'new', cwd: '/repo/new' } })
@@ -425,6 +539,46 @@ describe('watchActivityBackfill', () => {
     await until(() => (!handle.coverage().running ? true : undefined), 'the corpus-change pass finished')
     assert.equal(handle.version(), 2, 'the new folded row bumped the version')
     assert.deepEqual(state.coldReads, ['a', 'new'], 'only the new session was folded')
+    handle()
+  })
+
+  test('a running pass publishes its coverage before it settles', async () => {
+    const ctx = new Context()
+    const state = fakeState([
+      { header: { id: 'a', cwd: '/repo/a' } },
+      { header: { id: 'b', cwd: '/repo/b' } },
+      { header: { id: 'c', cwd: '/repo/c' } },
+    ])
+    let opens = 0
+    let release: (() => void) | null = null
+    const route = arm(ctx, state, {
+      sessionPersistence: {
+        open: async (id: string) => {
+          opens++
+          if (opens === 2) await new Promise<void>(resolve => { release = resolve })
+          return {
+            header: { id, version: 1, createdAt: 1, cwd: '/repo', isSeeded: false },
+            inheritedEventCount: 0,
+            read: async () => ({ events: [] }),
+            close: async () => {},
+          }
+        },
+      },
+    })
+    const handle = watchActivityBackfill(ctx, undefined, FAST_PACING)
+    await trigger(route)
+    await until(
+      () => (handle.coverage().total === 3 && handle.coverage().covered === 1 ? true : undefined),
+      'the pass published the corpus total and the first folded session',
+    )
+    assert.deepEqual(handle.coverage(), {
+      complete: false, remaining: 2, failed: 0, running: true, total: 3, covered: 1, unsupported: 0, unreadable: 0,
+    })
+    release!()
+    await until(() => (handle.coverage().complete ? true : undefined), 'the pass settled')
+    assert.deepEqual(handle.coverage(), {
+      complete: true, remaining: 0, failed: 0, running: false, total: 3, covered: 3, unsupported: 0, unreadable: 0,
+    })
     handle()
   })
 
