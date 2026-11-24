@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 import { buildTimelineHead, createTimelineState, trimToLastTurns, type TimelineEvent, buildTimelineDetail } from '../../src/host/fold'
-import { type TimelineState } from '../../src/host/foldState'
+import { stateBytesOf, trimState, type TimelineState } from '../../src/host/foldState'
 import { type RequestRecord } from '../../src/shared/types'
 import { assistantMessage, compaction, planMode, toolCall, toolResult, userMessage, stepEnd, stepStart, assistantAttempt, header } from './helpers/events'
 import { assertStatesPlainJson, driveTimeline, timelineDef, assertPlainJson, assertStable, requestsOf } from './helpers/projection'
-import { resolveBounds } from '../../src/host/config'
+import { historyBounds, resolveBounds } from '../../src/host/config'
 import { estimateSystemContent } from '../../src/shared/estimate'
 
 describe('fold-retention', () => {
@@ -131,7 +131,61 @@ describe('trimState archive pruning', () => {
     const last = buildTimelineDetail(drive.state, bounds)
     assert.deepEqual(last.archive.map(n => n.seq), [7], 'the newest removal still rides the payload')
     assert.equal(last.archiveFloor, 6, 'the payload floor names the newest dropped removal')
+    trimState(drive.state, historyBounds(bounds))
+    assert.deepEqual(drive.state.archived.map(n => n.seq), [1, 4, 7], 'history folds keep every removal')
+    const bare = createTimelineState()
+    bare.archived.push({ seq: 5, cat: 'user', tokens: 1 }, { seq: 6, cat: 'user', tokens: 1 })
+    trimState(bare, historyBounds(bounds))
+    assert.equal(bare.archived.length, 2)
+    assert.equal(bare.archiveFloor, undefined)
     assertStatesPlainJson(drive)
+  })
+
+  test('history bounds keep removals older than the first retained request', () => {
+    const state = createTimelineState()
+    state.requests.push({ seq: 10, time: 10, total: 1 })
+    state.archived.push({ seq: 1, cat: 'user', tokens: 1, gone: 5 })
+    trimState(state, historyBounds(resolveBounds({})))
+    assert.deepEqual(state.archived.map(node => node.seq), [1])
+    assert.equal(state.archiveFloor, undefined)
+    const narrow = createTimelineState()
+    narrow.requests.push({ seq: 10, time: 10, total: 1 })
+    narrow.archived.push({ seq: 1, cat: 'user', tokens: 1, gone: 5 })
+    trimState(narrow, resolveBounds({}))
+    assert.deepEqual(narrow.archived, [])
+    assert.equal(narrow.archiveFloor, 5)
+  })
+
+  test('the byte estimate counts strings, maps and pending records once', () => {
+    const base = createTimelineState()
+    const small = stateBytesOf(base)
+    const rich: TimelineState = {
+      ...base,
+      lastUser: 'question',
+      systems: [{ seq: 1, text: 'system' } as never],
+      stepWaits: [{ start: 1, end: 2 }],
+      stepBeats: [1, 2],
+      stepSpans: [{ kind: 'ttft', start: 1, end: 2 }],
+      pendingShadowedSeqs: [1],
+      commandCalls: ['c1'],
+      surface: [{ seq: 1, cat: 'user', tokens: 1, text: 'surface' }],
+      archived: [{ seq: 2, cat: 'tool', tokens: 1, text: 'gone' }],
+      fileOps: [{ seq: 3, path: 'a.ts', kind: 'read', tool: 'read', err: false, added: 0, removed: 0, detail: 'd', program: 'cat' }],
+      commands: [{ seq: 4, time: 4, tool: 'bash', cmd: 'ls', description: 'list', cwd: '/w', start: 4, status: 'running', err: false }],
+      events: [{ seq: 5, time: 5, kind: 'ask', name: 'q', detail: 'd', agent: 'a', items: ['one', 'two'] }],
+      callNames: { c1: { name: 'read', start: 1, argsRaw: '{"path":"a"}' } },
+      agents: { a: { catalogName: 'explorer', memberName: 'm', catalogLabel: 'Explorer' } },
+      todoItems: { todo: 'pending' },
+      teamTasks: { task: 'completed' },
+      totals: { turns: 1, steps: 1, events: 1, injects: 0, compactions: 0, prunes: 0, modelSwitches: 0, skills: { build: true } },
+      pendingCodeCmds: { root: [{ seq: 6, time: 6, tool: 'bash', cmd: 'pwd', start: 6, status: 'running', err: false }] },
+      pendingCodeOps: { root: [{ seq: 7, path: 'b.ts', kind: 'write', tool: 'write', err: false, added: 1, removed: 0, detail: 'd' }] },
+    }
+    const bytes = stateBytesOf(rich)
+    assert.ok(bytes > small)
+    assert.equal(stateBytesOf(rich), bytes)
+    const noSkills = { ...base, totals: { turns: 0, steps: 0, events: 0, injects: 0, compactions: 0, prunes: 0, modelSwitches: 0 } as never }
+    assert.ok(stateBytesOf(noSkills) >= small)
   })
 })
 
@@ -184,6 +238,21 @@ describe('the full-session head counters', () => {
     assert.equal(drive.state.events.length, 3)
     const counts = buildTimelineHead(drive.state).counts
     assert.deepEqual([counts?.injects, counts?.compactions, counts?.prunes], [2, 1, 2])
+    assert.equal(counts?.events, 6, 'the event total spans the whole session, not the retained tail')
+  })
+
+  test('model-switch counters stay full-session past the event cap', () => {
+    const drive = driveTimeline([
+      header(1, { model: 'deepseek-v4-flash', provider: 'deepseek' }),
+      header(2, { model: 'deepseek-v4-pro', provider: 'deepseek', reason: 'change' }),
+      compaction(3, 'summary', { shadowedTokenCount: 1 }),
+      compaction(4, 'prune', { shadowedTokenCount: 1 }),
+      planMode(5, { active: true }),
+    ], { maxEvents: 2 })
+    assert.equal(drive.state.events.length, 2)
+    const counts = buildTimelineHead(drive.state).counts
+    assert.equal(counts?.modelSwitches, 1)
+    assert.equal(counts?.events, 4)
   })
 
   test('distinct skill names stay full-session and the name ledger is bounded', () => {
@@ -270,9 +339,10 @@ describe('the full-session head counters', () => {
       { seq: 5, time: 5, kind: 'prune' },
       { seq: 6, time: 6, kind: 'inject', form: 'context' },
       { seq: 7, time: 7, kind: 'mode' },
+      { seq: 8, time: 8, kind: 'model', from: 'a', to: 'b' },
     ] as TimelineState['events']
     delete state.totals
-    assert.deepEqual(buildTimelineHead(state).counts, { turns: 2, steps: 3, injects: 2, compactions: 1, prunes: 1, skills: 1 })
+    assert.deepEqual(buildTimelineHead(state).counts, { turns: 2, steps: 3, events: 6, injects: 2, compactions: 1, prunes: 1, modelSwitches: 1, skills: 1 })
   })
 
   test('a counter-less state continuing forward restarts its counters at its own cut', () => {
@@ -285,12 +355,12 @@ describe('the full-session head counters', () => {
     state = def.apply(state, toolResult(4, { callId: 'c1', content: [{ type: 'text', text: '<skill_content name="pdf">x</skill_content>' }] }))
     state = def.apply(state, compaction(5, 'summary', { shadowedTokenCount: 1 }))
     state = def.apply(state, compaction(6, 'prune', { shadowedTokenCount: 1 }))
-    assert.deepEqual(buildTimelineHead(state).counts, { turns: 1, steps: 1, injects: 2, compactions: 1, prunes: 1, skills: 2 })
+    assert.deepEqual(buildTimelineHead(state).counts, { turns: 1, steps: 1, events: 4, injects: 2, compactions: 1, prunes: 1, modelSwitches: 0, skills: 2 })
     const skillResult = def.apply(
       def.apply(legacy, toolCall(1, { callId: 'c9', name: 'skill' })),
       toolResult(2, { callId: 'c9', content: [{ type: 'text', text: '<skill_content name="pdf">x</skill_content>' }] }),
     )
-    assert.deepEqual(buildTimelineHead(skillResult).counts, { turns: 0, steps: 0, injects: 1, compactions: 0, prunes: 0, skills: 1 })
+    assert.deepEqual(buildTimelineHead(skillResult).counts, { turns: 0, steps: 0, events: 1, injects: 1, compactions: 0, prunes: 0, modelSwitches: 0, skills: 1 })
   })
 
   test('the state schema round-trips every field including the counters', () => {

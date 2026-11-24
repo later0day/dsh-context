@@ -10,7 +10,7 @@ A DeepSeek Harness plugin for context insight, actions, and management.
   - NPM: @deepseek-ai/dsh
   - MUST ensure the full clone of the DeepSeek Harness repository is available locally. Otherwise, stop all the work and refuse to continue any question or task.
   - MUST always dive deep into the details and full diffs of dsh source code and dependencies, for its mechanisms, lifecycles, and modules. Ensure every decision is based on the full and actual truth of the dsh source code.
-  - Local clone at `~/dev/deepseek-harness`: `git pull` on `master` to update, and run `pnpm install` after pulling or switching commit/tag. Commits and version tags are available for reference and diff.
+  - Local clone at `~/dev/deepseek-harness`: `git pull && codegraph sync` on `master` to update, and run `pnpm install` after pulling or switching commit/tag. Commits and version tags are available for reference and diff.
 
 ## Coding Standard
   
@@ -74,6 +74,7 @@ Complete ALL of these before ANY commit:
 - Clean up generated temporary files and temporary or unhelpful comments.
 - Load the [code-review](https://github.com/mattpocock/skills/blob/main/skills/engineering/code-review/SKILL.md) skill, run it to review all the changes.
   - Replace the "Under 400 words" with "Under 1000 words" in the prompt for subagents.
+  - Keep waiting for the review feedbacks from the subagents. Do nothing until all the subagents return.
   - Independently verify or follow each of its suggestions until ALL of its multi-axis analysis are done. 
   - Tell its subagents to skip typecheck, lint, and test coverage, which the main agent covers.
   - Tell its subagent about background information and related files (and line numbers if collected), eg. user's purposes / intention, untouched but related in-project files, or the facts or related evidences in dsh, in order to skip time for re-collecting them.
@@ -98,11 +99,12 @@ Complete ALL of these before ANY commit:
 - Verify layout changes visually before shipping: a spread of widths from desktop down to phone (~390px), in both locales (English labels are the truncation stress case), on a long session, including the `/context` modal.
 
 ## Build & run
-- **Build**: run `pnpm run build` after applying code changes.
-- **Watch**: run `pnpm run watch` to hot-reload the local plugin in dsh while developing in the browser. The watch build is the lean profile — unminified JavaScript, no source maps, no declaration file — which keeps the watcher's resident set low; `pnpm run build` emits the full release artifacts.
+- **Build**: run `pnpm run build` to emit the full release artifacts after applying code changes; a running `pnpm run watch` rebuilds `lib/` itself.
+- **Watch**: run `pnpm run watch` to hot-reload the local plugin in dsh while developing in the browser. The watch script kills stale watch instances before starting. The watch build is the lean profile — unminified JavaScript, no source maps, no declaration file — which keeps the watcher's resident set low. While running it writes a `pid:` / `start time:` record to `.tmp/dsh-context-watch.txt` and removes the file on exit or interruption.
 - **Windows**: `pnpm run watch` and `pnpm run web` are pure Node; the bash-backed scripts locate Git for Windows automatically, and `DSH_CTX_BASH` overrides the `bash.exe` path.
 - **Web server**: it may already be running at `http://127.0.0.1:3080/`. To restart, run `pnpm run web` (kills the running `dsh web`, then starts `dsh web --no-open`).
-- **Tokenized URL**: always open the full URL printed at startup, `http://127.0.0.1:3080/?token=XXXXXXXXX`, and read it from `.tmp/dsh-web-url.txt` for later browser runs — `pnpm run web` writes the URL there and removes the file when the server stops or restarts.
+- **Tokenized URL**: always open the full URL printed at startup, `http://127.0.0.1:3080/?token=XXXXXXXXX`, and read it from the `url:` line of `.tmp/dsh-web-url.txt` (`sed -n 's/^url: //p' .tmp/dsh-web-url.txt`) for later browser runs — `pnpm run web` writes `pid:`, `start time:` and `url:` lines for the spawned `dsh web` process (on Windows, the `cmd.exe` that hosts it), and removes the file when the server stops, restarts, or is interrupted.
+- **Reuse the running stack**: before a browser run, check that the first line of `.tmp/dsh-context-watch.txt` and of `.tmp/dsh-web-url.txt` names a live PID — POSIX shell: `ps -p "$(sed -n '1s/^pid: //p' .tmp/dsh-context-watch.txt)"` and `ps -p "$(sed -n '1s/^pid: //p' .tmp/dsh-web-url.txt)"`; Windows: `tasklist /FI "PID eq <pid>"`. A file whose first line is not `pid: <pid>` is stale. When both PIDs are alive, dsh is already serving the local plugin and the watcher keeps hot-reloading it: do not kill `dsh web`, rerun `pnpm run build`, or start another `pnpm run watch`; just open the URL. Only when a PID file is missing or its PID is dead, start `pnpm run watch` and/or `pnpm run web`; `pnpm run web` refuses to replace a `dsh web` that hosts the current session, so restart that one from outside the session. Executing either script still kills the instance it replaces — this check only spares an unnecessary restart.
 - **Auth-token errors**: restart with `pnpm run web` and open the newly printed tokenized URL.
 
 ## Compatibility - Important!

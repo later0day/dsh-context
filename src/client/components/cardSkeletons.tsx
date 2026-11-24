@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
-import { IconApi, IconBrowse, IconContextInjection, IconFolderOpen } from '../primitives'
+import { IconApi, IconBrowse, IconFlatList, IconWorkspaceTree } from '../primitives'
 import type { ViewKit } from '../viewkit'
-import { EVENT_KINDS } from './events'
+import { EVENT_FILTERS, eventFilterLabelOf } from './events'
 import { LoadingLane, SkeletonRows } from './skeleton'
 
 export interface CardSkeletons {
@@ -39,13 +39,13 @@ export function makeCardSkeletons(kit: ViewKit): CardSkeletons {
       <div className="lc-card lc-events-card lc-col flex-1 min-w-[min(360px,100%)]">
         <div className="lc-card-title">
           <span className="lc-card-title-text">
-            <IconContextInjection size={14} />
+            <IconFlatList size={14} />
             {t('events.title')}
           </span>
           <div className="lc-kinds @max-[380px]/lc-card:flex-wrap">
-            {EVENT_KINDS.map(k => (
-              <span key={k} className="lc-gran-btn">
-                {t('kind.' + k)}
+            {EVENT_FILTERS.map(k => (
+              <span key={k} className={'lc-gran-btn lc-kind-' + k + (k === 'all' ? ' lc-gran-on' : '')}>
+                {eventFilterLabelOf(t, k)}
                 <span className="lc-kind-n">0</span>
               </span>
             ))}
@@ -60,7 +60,7 @@ export function makeCardSkeletons(kit: ViewKit): CardSkeletons {
       <div className="lc-card lc-fa-card lc-col flex-1 min-w-[min(360px,100%)]">
         <div className="lc-card-title">
           <span className="lc-card-title-text">
-            <IconFolderOpen size={14} />
+            <IconWorkspaceTree size={14} />
             {t('files.title')}
           </span>
           <span className="lc-fa-meta"><span>{t('files.files', { n: 0 })}</span></span>

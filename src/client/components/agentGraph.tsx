@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from 'react'
-import { IconWorkspaceTreeOutlineRegular, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconAgentPresetOutlineRegular, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import { CATS } from '../categories'
 import type { AgentHeads } from '../agentHeads'
 import { makeAgentHeads } from '../agentHeads'
@@ -208,7 +208,7 @@ export function makeAgentGraph(
       <div className={'lc-card lc-agents' + (props.compact === true ? ' lc-agents-compact' : '')}>
         <div className="lc-card-title">
           <span className="lc-card-title-text">
-            <IconWorkspaceTreeOutlineRegular size={14} />
+            <IconAgentPresetOutlineRegular size={14} />
             {t('agents.title')}
           </span>
           <span className="lc-agents-tools">
@@ -307,7 +307,7 @@ export function makeAgentGraph(
                           fill="none"
                         />
                         {link.running
-                          ? <path className="lc-agents-flow animate-lc-agent-flow fill-none stroke-2" d={d} stroke={color} />
+                          ? <path className="lc-agents-flow animate-lc-agent-flow motion-reduce:animate-none fill-none stroke-2" d={d} stroke={color} />
                           : null}
                         <circle className="lc-agents-joint" cx={link.x1} cy={link.y1} r={2} fill={color} />
                         <circle className="lc-agents-joint" cx={link.x2} cy={link.y2} r={3} fill={color} />

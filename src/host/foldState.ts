@@ -1,6 +1,7 @@
 import type { Category, CommandRecord, CommandStats, ContextEventRecord, FileOpRecord, SessionCostUsage, SurfaceNode, SurfaceNodeWindow, SystemPromptNode, TimingSpan, TimingTotals } from '../shared/types'
 import type { SlimRequestRecord } from '../shared/types'
-import type { FoldBounds } from './config'
+import { textBytes, WIRE_BYTES } from '../shared/bytes'
+import { HISTORY_LIMIT, type FoldBounds } from './config'
 
 const SURFACE_CATS: readonly Category[] = ['user', 'inject', 'skill', 'assistant', 'tool']
 
@@ -152,6 +153,10 @@ export interface AgentAlias {
   catalogLabel?: string
 }
 
+export type WorkflowTodoStatus = 'pending' | 'in_progress' | 'completed'
+
+export type WorkflowTeamTaskStatus = WorkflowTodoStatus | 'deleted'
+
 export interface TimelineState {
   surface: SurfaceNode[]
   sums: Record<Category, number>
@@ -206,9 +211,77 @@ export interface TimelineState {
   commandCalls?: string[]
   commandCallsOverflow?: boolean
   agents?: Record<string, AgentAlias>
+  todoItems?: Record<string, WorkflowTodoStatus>
+  teamTasks?: Record<string, WorkflowTeamTaskStatus>
   pendingCodeCmds?: Record<string, CommandStateRecord[]>
   pendingCodeOps?: Record<string, FileOpRecord[]>
   pendingCodeStarts?: Record<string, number>
+}
+
+const stateBytes = new WeakMap<TimelineState, number>()
+
+function nodeBytesOf(node: SurfaceNode): number {
+  return WIRE_BYTES.node + textBytes(node.text) + textBytes(node.name) + textBytes(node.tool)
+    + textBytes(node.skill) + textBytes(node.agent) + textBytes(node.form)
+}
+
+function commandBytesOf(rec: CommandStateRecord): number {
+  return WIRE_BYTES.command + textBytes(rec.cmd) + textBytes(rec.tool) + textBytes(rec.description)
+    + textBytes(rec.cwd)
+}
+
+export function stateBytesOf(state: TimelineState): number {
+  const known = stateBytes.get(state)
+  if (known !== undefined) return known
+  let bytes = WIRE_BYTES.base
+    + state.requests.length * WIRE_BYTES.request
+    + state.events.length * WIRE_BYTES.event
+    + state.fileOps.length * WIRE_BYTES.fileOp
+    + state.commands.length * WIRE_BYTES.command
+    + state.spans.length * WIRE_BYTES.span
+    + (state.systems?.length ?? 0) * WIRE_BYTES.system
+    + (state.stepWaits?.length ?? 0) * 16
+    + (state.stepBeats?.length ?? 0) * 8
+    + (state.stepSpans?.length ?? 0) * WIRE_BYTES.span
+    + (state.pendingShadowedSeqs?.length ?? 0) * 8
+    + (state.commandCalls?.length ?? 0) * 24
+    + textBytes(state.lastUser)
+  for (const node of state.surface) bytes += nodeBytesOf(node)
+  for (const node of state.archived) bytes += nodeBytesOf(node)
+  for (const op of state.fileOps) {
+    bytes += WIRE_BYTES.fileOp + textBytes(op.path) + textBytes(op.tool) + textBytes(op.detail) + textBytes(op.program)
+  }
+  for (const rec of state.commands) bytes += commandBytesOf(rec)
+  for (const event of state.events) {
+    bytes += WIRE_BYTES.event + textBytes(event.name) + textBytes(event.detail) + textBytes(event.agent)
+    if (event.items !== undefined) {
+      for (const item of event.items) bytes += textBytes(item)
+    }
+  }
+  for (const key in state.callNames) {
+    const entry = state.callNames[key]
+    bytes += WIRE_BYTES.entry + textBytes(key) + textBytes(entry.name) + textBytes(entry.argsRaw)
+  }
+  const agents = state.agents ?? {}
+  for (const key in agents) {
+    const entry = agents[key]
+    bytes += WIRE_BYTES.entry + textBytes(key) + textBytes(entry.catalogName) + textBytes(entry.memberName) + textBytes(entry.catalogLabel)
+  }
+  for (const key in state.todoItems ?? {}) bytes += WIRE_BYTES.entry + textBytes(key)
+  for (const key in state.teamTasks ?? {}) bytes += WIRE_BYTES.entry + textBytes(key)
+  for (const key in state.totals?.skills ?? {}) bytes += WIRE_BYTES.entry + textBytes(key)
+  const pendingCmds = state.pendingCodeCmds ?? {}
+  for (const key in pendingCmds) {
+    bytes += WIRE_BYTES.entry + textBytes(key)
+    for (const rec of pendingCmds[key]) bytes += commandBytesOf(rec)
+  }
+  const pendingOps = state.pendingCodeOps ?? {}
+  for (const key in pendingOps) {
+    bytes += WIRE_BYTES.entry + textBytes(key)
+    for (const op of pendingOps[key]) bytes += WIRE_BYTES.fileOp + textBytes(op.path) + textBytes(op.detail)
+  }
+  stateBytes.set(state, bytes)
+  return bytes
 }
 
 export function archiveWindowOf(
@@ -302,7 +375,7 @@ export function trimState(st: TimelineState, bounds: FoldBounds): void {
     st.turnRuns = countTurnRuns(st.requests)
   }
   if (st.events.length > bounds.maxEvents) st.events = st.events.slice(-bounds.maxEvents)
-  if (st.spans.length > TIMING_SPANS_MAX) st.spans = st.spans.slice(-TIMING_SPANS_MAX)
+  if (st.spans.length > bounds.maxSpans) st.spans = st.spans.slice(-bounds.maxSpans)
   if (st.fileOps.length > bounds.maxFileOps) {
     const drop = st.fileOps.length - bounds.maxFileOps
     st.fileOpsFloor = Math.max(st.fileOpsFloor ?? 0, st.fileOps[drop - 1].seq)
@@ -332,7 +405,7 @@ export function trimState(st: TimelineState, bounds: FoldBounds): void {
     trimHeadState(st)
     return
   }
-  if (st.archived.length > 0) {
+  if (st.archived.length > 0 && bounds.maxRequestSteps !== HISTORY_LIMIT) {
     let drop = 0
     const oldestReq = st.requests.length > 0 ? st.requests[0].seq : undefined
     if (oldestReq !== undefined) {
@@ -375,26 +448,30 @@ export function trimHeadState(st: TimelineState): void {
   if (st.archived.length > 0) st.archived = []
 }
 
-export const TIMING_SPANS_MAX = 2_000
-
 export const SKILL_NAMES_MAX = 500
 
 export const TALLY_NAMES_MAX = 128
 
 export const TALLY_NAME_CHARS_MAX = 120
 
+export const TODO_ITEMS_MAX = 128
+
+export const TEAM_TASKS_MAX = 256
+
 export interface CumulativeTotals {
   turns: number
   steps: number
+  events: number
   injects: number
   compactions: number
   prunes: number
+  modelSwitches: number
   skills: Record<string, true>
   lastTurn?: number
 }
 
 function emptyTotals(): CumulativeTotals {
-  return { turns: 0, steps: 0, injects: 0, compactions: 0, prunes: 0, skills: {} }
+  return { turns: 0, steps: 0, events: 0, injects: 0, compactions: 0, prunes: 0, modelSwitches: 0, skills: {} }
 }
 
 function ownedTotals(st: TimelineState): CumulativeTotals {
@@ -418,6 +495,19 @@ export function countCompaction(st: TimelineState, kind: 'compaction' | 'prune')
   if (kind === 'compaction') totals.compactions += 1
   else totals.prunes += 1
   st.totals = totals
+}
+
+export function countModelSwitch(st: TimelineState): void {
+  const totals = ownedTotals(st)
+  totals.modelSwitches += 1
+  st.totals = totals
+}
+
+export function pushEvent(st: TimelineState, record: ContextEventRecord): void {
+  const totals = ownedTotals(st)
+  totals.events += 1
+  st.totals = totals
+  st.events.push(record)
 }
 
 export function noteTurn(st: TimelineState, turn: number | undefined): void {

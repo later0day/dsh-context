@@ -215,7 +215,7 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
             { id: 'total', label: t('gran.total') },
             { id: 'delta', label: t('gran.delta') },
           ]}
-          onPick={(id) => { set?.('defaultTrendMode', id) }}
+          onPick={(id) => { set?.('defaultTimelineMode', id) }}
         />
         <ShowHideRow t={t} label={t('settings.durationCurve')} value={state.durationCurve} disabled={disabled}
           onPick={(id) => { set?.('defaultDurationCurve', id) }} />
@@ -264,6 +264,16 @@ function PreferenceRows(props: { t: Translate; state: SettingsState; set?: Setti
             { id: 'name', label: t('files.sort.name') },
           ]}
           onPick={(id) => { set?.('defaultFileSort', id) }}
+        />
+        <PrefRow
+          label={t('settings.balanceSource')}
+          value={state.balanceSource}
+          disabled={disabled}
+          options={[
+            { id: 'account', label: t('balance.account') },
+            { id: 'api', label: t('balance.api') },
+          ]}
+          onPick={(id) => { set?.('balanceSource', id) }}
         />
       </Group>
       <Group title={t('settings.group.prompt')}>

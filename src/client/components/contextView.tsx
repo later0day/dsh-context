@@ -1,6 +1,6 @@
 import { createElement as h, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import type { Category, ContextEventRecord, RequestRecord, SurfaceNode, TimelineCounts } from '../../shared/types'
-import { TrendReserved } from './trendReserved'
+import { TimelineReserved } from './timelineReserved'
 import { briefNodes, briefOf } from '../brief'
 import { headlineOf } from '../headline'
 import type { ContextViewProps } from '../services'
@@ -21,7 +21,8 @@ import type { Command } from '../commands'
 import type { ContextSettings } from '../settings'
 import { overviewThresholdOf } from '../settings'
 import type { ViewKit } from '../viewkit'
-import { IconCompareSplit, IconContextInjection } from '../primitives'
+import { IconFlatList } from '../primitives'
+import { TimelineIcon } from './timelineIcon'
 import type { AgentHeads } from '../agentHeads'
 import { agentSelfOf, providerModelLabelOf } from '../agentTree'
 import { makeContextBrowser } from './browser'
@@ -29,7 +30,8 @@ import type { CatFocus } from './browser'
 import { makeAgentGraph } from './agentGraph'
 import { Donut } from './donut'
 import { makeCurrentComposition } from './currentComposition'
-import { EVENT_KINDS, makeEventList } from './events'
+import { EVENT_FILTERS, eventFilterLabelOf, makeEventList } from './events'
+import type { EventKindFilter } from './events'
 import { makeFileCard } from './fileCard'
 import type { FileFilter } from './fileCard'
 import { makeCardSkeletons } from './cardSkeletons'
@@ -46,15 +48,15 @@ import type { StatsEventKind, StatsJump } from './statsContext'
 import { makeStatsTiming } from './statsTiming'
 import { makeStatsTokens } from './statsTokens'
 import { makeLegend, makeStackedBar } from './stackedBar'
-import { makeTrendChart } from './trendChart'
-import { aggregateByTurn, attachMarkers, boundaryIndex, jumpTargetOf, turnStepsOf } from './trendModel'
-import { makeTrendOverview } from './trendOverview'
+import { makeTimelineChart } from './timelineChart'
+import { aggregateByTurn, attachMarkers, boundaryIndex, jumpTargetOf, turnStepsOf } from './timelineModel'
+import { makeTimelineOverview } from './timelineOverview'
 import { stepStampOf } from './browserHelpers'
 import { assembleCached, cachedByData } from './derivedCache'
 import { useLazyMount } from './useLazyMount'
 import { useConversationSurface } from './useConversationSurface'
-import { dnaDeltaMaximaOf, trendBandsOf } from '../dna'
-import type { TrendBand } from '../dna'
+import { dnaDeltaMaximaOf, timelineBandsOf } from '../dna'
+import type { TimelineBand } from '../dna'
 
 import { activateViewTab, openContextSidebar, subscribeContextFocus, takeContextFocus, useFleetMemberFocus } from '../viewFocus'
 import { revealInScrollParent } from '../revealScroll'
@@ -68,7 +70,12 @@ const HOVER_DELAY_MS = 140
 const HOVER_LOCK_MS = 320
 const DNA_HOVER_DELAY = 220
 const DNA_LAZY_MIN = 512
-const NO_COUNTS: TimelineCounts = { turns: 0, steps: 0, injects: 0, compactions: 0, prunes: 0, skills: 0 }
+const NO_COUNTS: TimelineCounts = { turns: 0, steps: 0, injects: 0, compactions: 0, prunes: 0, skills: 0, events: 0, modelSwitches: 0 }
+const BOUNDARY_EVENT_KINDS: ReadonlySet<ContextEventRecord['kind']> = new Set([
+  'compaction', 'prune', 'agent',
+  'goal-create', 'goal-complete', 'todo-add', 'todo-done', 'ask',
+  'team-task-create', 'team-task-complete',
+])
 function revealCard(root: HTMLElement | null, selector: string): void {
   /* v8 ignore start */
   const card = root?.querySelector(selector) ?? null
@@ -108,8 +115,8 @@ export function makeContextView(
   const StackedBar = makeStackedBar(kit)
   const Legend = makeLegend(kit)
   const CurrentComposition = makeCurrentComposition(kit, StackedBar, Legend)
-  const TrendChart = makeTrendChart(kit)
-  const TrendOverview = makeTrendOverview(kit)
+  const TimelineChart = makeTimelineChart(kit)
+  const TimelineOverview = makeTimelineOverview(kit)
   const RequestDetail = makeRequestDetail(kit, StackedBar, Legend)
   const EventList = makeEventList(kit)
   const FileCard = makeFileCard(kit, settings)
@@ -137,9 +144,9 @@ export function makeContextView(
     const [hoveredSeq, setHoveredSeq] = useState<number | null>(null)
     const [hoverTurn, setHoverTurn] = useState<number | null>(null)
     const [granularity, setGranularity] = useState<'step' | 'turn'>(() => settings.defaultGranularity())
-    const [trendMode, setTrendMode] = useState<'total' | 'delta'>(() => settings.defaultTrendMode())
+    const [timelineMode, setTimelineMode] = useState<'total' | 'delta'>(() => settings.defaultTimelineMode())
     const [dna, setDna] = useState(false)
-    const [adaptive, setAdaptive] = useState(trendMode === 'delta')
+    const [adaptive, setAdaptive] = useState(timelineMode === 'delta')
     const [overview, setOverview] = useState(false)
     const overviewAutoAt = overviewThresholdOf(settings.overviewAutoSteps())
     const overviewAutoFired = useRef(new Set<string | undefined>())
@@ -151,9 +158,9 @@ export function makeContextView(
       setDna(false)
       setAdaptive(false)
     }, [data, sessionId, overviewAutoAt])
-    const switchTrendMode = (mode: 'total' | 'delta'): void => {
-      if (mode === trendMode) return
-      setTrendMode(mode)
+    const switchTimelineMode = (mode: 'total' | 'delta'): void => {
+      if (mode === timelineMode) return
+      setTimelineMode(mode)
       if (mode === 'delta' && !overview) setAdaptive(true)
     }
     const [durationCurve, setDurationCurve] = useState(() => settings.defaultDurationCurve() === 'show')
@@ -219,14 +226,7 @@ export function makeContextView(
       return () => { observer.disconnect() }
     }, [inSidebar, data])
     /* v8 ignore stop */
-    const [pickedKinds, setPickedKinds] = useState<string[]>([...EVENT_KINDS])
-    const toggleKind = (k: string) => {
-      setPickedKinds((p) => {
-        if (p.length === EVENT_KINDS.length) return [k]
-        if (!p.includes(k)) return [...p, k]
-        return p.length === 1 ? [...EVENT_KINDS] : p.filter(x => x !== k)
-      })
-    }
+    const [kindFilter, setKindFilter] = useState<EventKindFilter>('all')
     const [nodeFocus, setNodeFocus] = useState<{ step: number | 'live'; key: string; cat: Category | 'system' | 'tools' } | null>(null)
     const clearNodeFocus = useCallback(() => { setNodeFocus(null) }, [])
 
@@ -268,7 +268,7 @@ export function makeContextView(
     const clearFilterFocus = useCallback(() => { setFilterFocus(null) }, [])
     const [eventsFocus, setEventsFocus] = useState(0)
     const onEventsClick = useCallback((kind: StatsEventKind | null): void => {
-      if (kind !== null) setPickedKinds([kind])
+      if (kind !== null) setKindFilter(kind)
       setEventsFocus(n => n + 1)
     }, [])
     const [commandFocus, setCommandFocus] = useState<string | null>(null)
@@ -281,22 +281,23 @@ export function makeContextView(
 
     useEffect(() => {
       if (source.detailState !== 'ready') return
-      ensurePart('files')
       const timer = setTimeout(() => { ensurePart('spans') }, 0)
       return () => { clearTimeout(timer) }
     }, [source.detailState, ensurePart])
     useEffect(() => {
+      if (!belowFoldMounted || source.detailState !== 'ready') return
+      ensurePart('files')
+      ensurePart('events')
+    }, [belowFoldMounted, source.detailState, ensurePart])
+    useEffect(() => {
       if (browserMounted) ensurePart('nodes')
     }, [browserMounted, ensurePart])
-    useEffect(() => {
-      if (belowFoldMounted) ensurePart('events')
-    }, [belowFoldMounted, ensurePart])
     useEffect(() => {
       if (cmdsMounted) ensurePart('commands')
     }, [cmdsMounted, ensurePart])
     useEffect(() => {
-      if (dna || trendMode === 'delta') ensurePart('requests')
-    }, [dna, trendMode, ensurePart])
+      if (dna || timelineMode === 'delta') ensurePart('requests')
+    }, [dna, timelineMode, ensurePart])
 
     const leftColRef = useRef<HTMLDivElement | null>(null)
     const [browserCap, setBrowserCap] = useState<number | null>(null)
@@ -325,7 +326,7 @@ export function makeContextView(
         hoverLock.current = performance.now() + HOVER_LOCK_MS
         handleHover(null)
         handleHoverTurn(null)
-        revealCard(rootRef.current, '[data-lc-trend]')
+        revealCard(rootRef.current, '[data-lc-timeline]')
         return
       }
       if (jump === 'read' || jump === 'write' || jump === 'search' || jump === 'image') {
@@ -385,8 +386,14 @@ export function makeContextView(
     const requests = data.requests
     const events = data.events
     const counts = data.counts ?? NO_COUNTS
-    const kindCounts: Record<string, number | undefined> = { inject: counts.injects, compaction: counts.compactions, prune: counts.prunes }
-    const shownEvents = pickedKinds.length === EVENT_KINDS.length ? events : events.filter(e => pickedKinds.includes(e.kind))
+    const kindCounts: Record<EventKindFilter, number | undefined> = {
+      all: counts.events,
+      inject: counts.injects,
+      compaction: counts.compactions,
+      prune: counts.prunes,
+      model: counts.modelSwitches,
+    }
+    const shownEvents = kindFilter === 'all' ? events : events.filter(e => e.kind === kindFilter)
     const displayRequests = useMemo(
       () => (granularity === 'turn' ? aggregateByTurn(requests) : requests),
       [requests, granularity],
@@ -401,18 +408,18 @@ export function makeContextView(
     const dnaCacheOwner = useMemo(() => ({ data, headers }), [data, headers])
     const dnaBands = useMemo(
       () => (dnaEager
-        ? cachedByData(dnaCacheOwner, `dna:${granularity}`, () => displayRequests.map(req => trendBandsOf(assembleCached(data, headers, req.seq))))
+        ? cachedByData(dnaCacheOwner, `dna:${granularity}`, () => displayRequests.map(req => timelineBandsOf(assembleCached(data, headers, req.seq))))
         : null),
       [dnaEager, dnaCacheOwner, data, headers, displayRequests, granularity],
     )
     const dnaAt = useMemo(() => {
       if (!dnaAllowed || displayRequests.length <= DNA_LAZY_MIN) return null
-      return (seq: number): TrendBand[] => trendBandsOf(assembleCached(data, headers, seq))
+      return (seq: number): TimelineBand[] => timelineBandsOf(assembleCached(data, headers, seq))
     }, [dnaAllowed, data, headers, displayRequests.length])
     const deltaMaxima = useMemo(() => {
-      if (!dnaAllowed || trendMode !== 'delta') return null
+      if (!dnaAllowed || timelineMode !== 'delta') return null
       return cachedByData(dnaCacheOwner, `dnaDeltaMax:${granularity}`, () => dnaDeltaMaximaOf(data, headers, displayRequests))
-    }, [dnaAllowed, trendMode, dnaCacheOwner, data, headers, displayRequests, granularity])
+    }, [dnaAllowed, timelineMode, dnaCacheOwner, data, headers, displayRequests, granularity])
     const revealBand = useCallback((seq: number, band: { key: string; cat: Category | 'system' | 'tools' }): void => {
       setNodeFocus({ step: seq, key: band.key, cat: band.cat })
     }, [])
@@ -589,19 +596,26 @@ export function makeContextView(
       })
     }, [data])
     const canEventFocus = useCallback((ev: ContextEventRecord): boolean => (
-      ev.kind !== 'compaction' && ev.kind !== 'prune' ? true : boundaryIndex(requests, ev.seq) >= 0
+      BOUNDARY_EVENT_KINDS.has(ev.kind) ? boundaryIndex(requests, ev.seq) >= 0 : true
     ), [requests])
+    const revealStep = useCallback((seq: number): void => {
+      const idx = boundaryIndex(requests, seq)
+      /* v8 ignore next 1 */
+      if (idx < 0) return
+      const target = requests[idx].seq
+      setOverview(false)
+      setGranularity('step')
+      setSelectedSeq(target)
+      setFocusSeq(target)
+      revealCard(rootRef.current, '[data-lc-timeline]')
+    }, [requests])
+    const pickMilestone = useCallback((seq: number): void => {
+      revealStep(seq)
+      revealBrowserIfOffscreen(rootRef.current)
+    }, [revealStep])
     const focusEvent = useCallback((ev: ContextEventRecord): void => {
-      if (ev.kind === 'compaction' || ev.kind === 'prune') {
-        const idx = boundaryIndex(requests, ev.seq)
-        /* v8 ignore next 1 */
-        if (idx < 0) return
-        const seq = requests[idx].seq
-        setOverview(false)
-        setGranularity('step')
-        setSelectedSeq(seq)
-        setFocusSeq(seq)
-        revealCard(rootRef.current, '[data-lc-trend]')
+      if (BOUNDARY_EVENT_KINDS.has(ev.kind)) {
+        revealStep(ev.seq)
         return
       }
       const node = nodeOfSeq.get(ev.seq)
@@ -609,7 +623,11 @@ export function makeContextView(
       if (step === null) return
       setNodeFocus({ step, key: 'n' + String(ev.seq), cat: node?.cat ?? 'inject' })
       revealCard(rootRef.current, '.lc-col-browser')
-    }, [requests, nodeOfSeq])
+    }, [requests, nodeOfSeq, revealStep])
+    const selectStep = useCallback((seq: number | null): void => {
+      setSelectedSeq(seq)
+      if (seq !== null) revealBrowserIfOffscreen(rootRef.current)
+    }, [])
 
     const markerOf = (req: RequestRecord): ContextEventRecord | undefined => {
       const i = displayRequests.indexOf(req)
@@ -625,7 +643,7 @@ export function makeContextView(
       for (const req of displayRequests) if (req.seq === hoveredSeq) { activeTurn = req.turn ?? null; break }
     }
 
-    const trendHoverCat = hoverCat !== null && hoverCat !== 'free' ? hoverCat : null
+    const timelineHoverCat = hoverCat !== null && hoverCat !== 'free' ? hoverCat : null
 
     const localeSvc = typeof ctx.get === 'function' ? ctx.get('locale') : undefined
     const activeLocale = localeSvc !== undefined && typeof localeSvc.getLocale === 'function'
@@ -645,119 +663,129 @@ export function makeContextView(
         onHoverKey={handleHoverKey}
       />
     )
-    const trendBase = {
+    const timelineBase = {
       requests: displayRequests,
-      markers,
       selectedSeq: pinnedReq ? pinnedReq.seq : null,
       hoveredSeq,
       activeTurn,
       granularity,
-      mode: trendMode,
-      hoverCat: trendHoverCat,
+      mode: timelineMode,
+      hoverCat: timelineHoverCat,
       focusCat,
       durationCurve,
       hoverLock,
-      onSelect: setSelectedSeq,
+      onSelect: selectStep,
       onHover: handleHover,
       onHoverTurn: handleHoverTurn,
     }
-    const trendCard = (
-      <div className="lc-card" data-lc-trend>
+    const timelineCard = (
+      <div className="lc-card" data-lc-timeline>
         <div className="lc-card-title">
           <span className="lc-card-title-text">
-            <IconCompareSplit size={14} />
-            {t('trend.title')}
+            <TimelineIcon />
+            {t('timeline.title')}
           </span>
-          <span className="lc-gran lc-trend-mods" role="group">
+          <span className="lc-gran lc-timeline-mods" role="group">
             <button
               type="button"
               className={'lc-gran-btn' + (dna ? ' lc-gran-on' : '')}
-              title={t('trend.dnaTip')}
+              aria-pressed={dna}
+              title={t('timeline.dnaTip')}
               onClick={() => {
                 const on = !dna
                 setDna(on)
                 if (on) setOverview(false)
               }}
-            >{t('trend.dna')}</button>
+            >{t('timeline.dna')}</button>
             <button
               type="button"
               className={'lc-gran-btn' + (adaptive ? ' lc-gran-on' : '')}
-              title={t('trend.adaptiveHint')}
+              aria-pressed={adaptive}
+              title={t('timeline.adaptiveHint')}
               onClick={() => {
                 const on = !adaptive
                 setAdaptive(on)
                 if (on) setOverview(false)
               }}
-            >{t('trend.adaptive')}</button>
+            >{t('timeline.adaptive')}</button>
             <button
               type="button"
               className={'lc-gran-btn' + (durationCurve ? ' lc-gran-on' : '')}
-              title={t('trend.durationTip')}
+              aria-pressed={durationCurve}
+              title={t('timeline.durationTip')}
               onClick={() => { setDurationCurve(on => !on) }}
-            >{t('trend.duration')}</button>
+            >{t('timeline.duration')}</button>
             <button
               type="button"
               className={'lc-gran-btn' + (overview ? ' lc-gran-on' : '')}
-              title={t('trend.overviewTip')}
+              aria-pressed={overview}
+              title={t('timeline.overviewTip')}
               onClick={() => {
                 const on = !overview
                 setOverview(on)
                 if (on) { setDna(false); setAdaptive(false) }
               }}
-            >{t('trend.overview')}</button>
+            >{t('timeline.overview')}</button>
           </span>
-          <div className="lc-trend-ctl">
+          <div className="lc-timeline-ctl">
             <div className="lc-gran">
               <button
                 className={'lc-gran-btn' + (granularity === 'step' ? ' lc-gran-on' : '')}
+                aria-pressed={granularity === 'step'}
                 onClick={() => { setGranularity('step') }}
               >{t('gran.step')}</button>
               <button
                 className={'lc-gran-btn' + (granularity === 'turn' ? ' lc-gran-on' : '')}
+                aria-pressed={granularity === 'turn'}
                 onClick={() => { setGranularity('turn') }}
               >{t('gran.turn')}</button>
             </div>
             <div className="lc-gran" title={t('gran.modeHint')}>
               <button
-                className={'lc-gran-btn' + (trendMode === 'total' ? ' lc-gran-on' : '')}
-                onClick={() => { switchTrendMode('total') }}
+                className={'lc-gran-btn' + (timelineMode === 'total' ? ' lc-gran-on' : '')}
+                aria-pressed={timelineMode === 'total'}
+                onClick={() => { switchTimelineMode('total') }}
               >{t('gran.total')}</button>
               <button
-                className={'lc-gran-btn' + (trendMode === 'delta' ? ' lc-gran-on' : '')}
-                onClick={() => { switchTrendMode('delta') }}
+                className={'lc-gran-btn' + (timelineMode === 'delta' ? ' lc-gran-on' : '')}
+                aria-pressed={timelineMode === 'delta'}
+                onClick={() => { switchTimelineMode('delta') }}
               >{t('gran.delta')}</button>
             </div>
           </div>
         </div>
         {displayRequests.length === 0
           ? (detailReady
-            ? <TrendReserved catLabel={catLabel}><div className="lc-empty">{t('trend.empty')}</div></TrendReserved>
-            : <TrendReserved catLabel={catLabel}>
+            ? <TimelineReserved catLabel={catLabel}><div className="lc-empty">{t('timeline.empty')}</div></TimelineReserved>
+            : <TimelineReserved catLabel={catLabel}>
               {remote.kind === 'failed'
                 ? <DetailNote state="failed" onRetry={remote.retry} />
                 : <SkeletonPlot />}
-            </TrendReserved>)
+            </TimelineReserved>)
           : (
             <div>
               {overview
                 ? (
-                  <TrendOverview
+                  <TimelineOverview
                     key={sessionId}
-                    {...trendBase}
+                    {...timelineBase}
+                    events={events}
+                    onPickMilestone={pickMilestone}
                     onPickCat={revealCat}
                     onPickTurn={(turn) => {
                       setGranularity('turn')
                       let seq: number | null = null
                       for (const req of displayRequests) if ((req.turn ?? 0) === turn) seq = req.seq
                       /* v8 ignore next 1 */
-                      if (seq !== null) setSelectedSeq(seq)
+                      if (seq !== null) selectStep(seq)
                     }}
                   />
                 )
                 : (
-                  <TrendChart
+                  <TimelineChart
                     key={sessionId}
-                    {...trendBase}
+                    {...timelineBase}
+                    events={events}
                     focusTurn={focusTurn}
                     focusSeq={focusSeq}
                     adaptive={adaptive}
@@ -772,14 +800,14 @@ export function makeContextView(
                 )}
               <RequestDetail
                 request={activeReq}
-                prev={trendMode === 'delta' && activeIdx >= 0 ? (activeIdx > 0 ? displayRequests[activeIdx - 1] : null) : undefined}
+                prev={timelineMode === 'delta' && activeIdx >= 0 ? (activeIdx > 0 ? displayRequests[activeIdx - 1] : null) : undefined}
                 /* v8 ignore next 1 */
                 marker={activeReq !== null ? markerOf(activeReq) : undefined}
                 brief={brief}
                 convOf={convOf}
                 stepsOf={stepsOf}
                 onLocate={locateNode}
-                hoverKey={trendHoverCat}
+                hoverKey={timelineHoverCat}
                 onHoverKey={handleHoverKey}
               />
             </div>
@@ -809,8 +837,8 @@ export function makeContextView(
         onCatFocusHandled={clearCatFocus}
         dna={dna}
         onDnaChange={setDna}
-        delta={trendMode === 'delta'}
-        onDeltaChange={(on) => { switchTrendMode(on ? 'delta' : 'total') }}
+        delta={timelineMode === 'delta'}
+        onDeltaChange={(on) => { switchTimelineMode(on ? 'delta' : 'total') }}
         locale={activeLocale}
         session={sessionKey}
       />
@@ -844,7 +872,7 @@ export function makeContextView(
         </div>
 
         <div className="lc-cols lc-cols-main">
-          <div className="lc-col flex-1 min-w-[min(360px,100%)]" ref={leftColRef}>{compositionCard}{trendCard}</div>
+          <div className="lc-col flex-1 min-w-[min(360px,100%)]" ref={leftColRef}>{compositionCard}{timelineCard}</div>
           <div
             ref={browserRef}
             className="lc-col lc-col-browser flex-1 min-w-[min(360px,100%)]"
@@ -857,20 +885,22 @@ export function makeContextView(
             <div className="lc-card lc-events-card lc-col flex-1 min-w-[min(360px,100%)]">
               <div className="lc-card-title">
                 <span className="lc-card-title-text">
-                  <IconContextInjection size={14} />
+                  <IconFlatList size={14} />
                   {t('events.title')}
                 </span>
                 <div className="lc-kinds @max-[380px]/lc-card:flex-wrap">
-                  {EVENT_KINDS.map((k) => {
+                  {EVENT_FILTERS.map((k) => {
                     const n = kindCounts[k]
+                    const active = kindFilter === k
                     return (
                       <button
                         key={k}
                         data-kind={k}
-                        className={'lc-gran-btn' + (pickedKinds.includes(k) ? ' lc-gran-on lc-kind-' + k : '')}
-                        onClick={() => { toggleKind(k) }}
+                        className={'lc-gran-btn lc-kind-' + k + (active ? ' lc-gran-on' : '')}
+                        aria-pressed={active}
+                        onClick={() => { setKindFilter(k) }}
                       >
-                        {t('kind.' + k)}
+                        {eventFilterLabelOf(t, k)}
                         {n !== undefined ? <span className="lc-kind-n">{kit.fmt(n)}</span> : null}
                       </button>
                     )

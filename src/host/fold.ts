@@ -12,11 +12,10 @@ import {
   injectionSourceName,
   isInjection,
   toolCallNames,
+  type MessageSource,
 } from './pricing'
-import type { MessageSource } from './pricing'
 import { deriveEventMessage } from '@deepseek-ai/dsh-session'
-import { firstTokenTimeOfStream, replaceRangeOf, streamTimingOf } from './logShapes'
-import type { DecodeSpan } from './logShapes'
+import { firstTokenTimeOfStream, replaceRangeOf, streamTimingOf, type DecodeSpan } from './logShapes'
 import { opBearingTool, opsOfCall, parseCallArgs, rawArgsNeeded } from '../shared/fileOps'
 import { commandArgsOf, commandArgsRecordOf, commandProgramsOf, commandTool, markersOfText, outcomeOfMarkers } from '../shared/commands'
 import {
@@ -31,12 +30,10 @@ import {
   setCommand,
   tallyRun,
 } from './foldCommands'
-import { TALLY_NAME_CHARS_MAX, TALLY_NAMES_MAX, countCompaction, countInject, countStep, countTurnRuns, noteCommandCall, noteSkillName, noteTurn, trimState } from './foldState'
-import { slimSurfaceNode } from './foldState'
-import type { CommandStateRecord, TimelineEvent, TimelineState } from './foldState'
-import { agentOfInjection, applyAgentAliasEvent, messageOf, skillNameOf, type MessageLike } from './foldInjections'
-import { accumulateCost, addDecodeSpan, bumpToolTotals, carveWindows, durOf, ensureTiming, idleGapWindows, mergeWindows, tokenCountOf } from './foldMetering'
-import type { UsageLike } from './foldMetering'
+import { TALLY_NAME_CHARS_MAX, TALLY_NAMES_MAX, countCompaction, countInject, countModelSwitch, countStep, countTurnRuns, noteCommandCall, noteSkillName, noteTurn, pushEvent, slimSurfaceNode, trimState, type CommandStateRecord, type TimelineEvent, type TimelineState } from './foldState'
+import { agentOfInjection, applyCatalogEvent, messageOf, skillNameOf, type MessageLike } from './foldInjections'
+import { applyWorkflowEvent, askRecordOf } from './foldWorkflow'
+import { accumulateCost, addDecodeSpan, bumpToolTotals, carveWindows, durOf, ensureTiming, idleGapWindows, mergeWindows, tokenCountOf, type UsageLike } from './foldMetering'
 
 function categoryOf(type: string, message: { source?: MessageSource } | undefined): Category {
   if (type === 'assistant/message') return 'assistant'
@@ -191,8 +188,7 @@ function applySurface(
   const imgs = imageCountOf(message?.content)
   if (imgs > 0) node.imgs = imgs
   const source = message?.source
-  const form = source?.form
-  if (typeof form === 'string') node.form = form
+  if (typeof source?.form === 'string') node.form = source.form
   if (type === 'assistant/message') {
     const text = firstText(message?.content)
     if (text !== '') node.text = text
@@ -212,9 +208,7 @@ function applySurface(
         timing.toolCalls += 1
         bumpToolTotals(timing, toolEntry.name, dur)
       }
-      if (st.stepStart !== undefined) {
-        st.stepSpans = [...(st.stepSpans ?? []), { kind: 'tools', start: toolEntry.start, end: ev.time }]
-      }
+      if (st.stepStart !== undefined) st.stepSpans = [...(st.stepSpans ?? []), { kind: 'tools', start: toolEntry.start, end: ev.time }]
     }
     if (typeof srcId === 'string') {
       const kept: Record<string, { name: string; start: number; argsRaw?: string; transport?: true }> = {}
@@ -290,9 +284,9 @@ function applySurface(
 
 const ASK_USER_TOOL = 'ask_user_question'
 
-type CloneKey = 'surface' | 'sums' | 'requests' | 'events' | 'archived' | 'callNames' | 'fileOps' | 'timing' | 'commands'
+type CloneKey = 'surface' | 'sums' | 'requests' | 'events' | 'archived' | 'callNames' | 'fileOps' | 'timing' | 'commands' | 'commandCalls'
 
-const CLONE_ALL: readonly CloneKey[] = ['surface', 'sums', 'requests', 'events', 'archived', 'callNames', 'fileOps', 'timing', 'commands']
+const CLONE_ALL: readonly CloneKey[] = ['surface', 'sums', 'requests', 'events', 'archived', 'callNames', 'fileOps', 'timing', 'commands', 'commandCalls']
 
 const STEP_BEATS_MAX = 1024
 
@@ -323,6 +317,7 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
       else if (key === 'callNames') st.callNames = { ...state.callNames }
       else if (key === 'fileOps') st.fileOps = [...state.fileOps]
       else if (key === 'commands') st.commands = [...state.commands]
+      else if (key === 'commandCalls' && state.commandCalls !== undefined) st.commandCalls = [...state.commandCalls]
       else if (state.timing !== undefined) st.timing = { ...state.timing, tools: { ...state.timing.tools } }
     }
     return st
@@ -360,7 +355,8 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
           delete s.maxOutputTokens
         }
         if ((data?.reason === 'change' || data?.reason === 'resume') && s.model && s.lastModel && s.model !== s.lastModel) {
-          s.events.push({ seq: event.seq, time: event.time, kind: 'model', from: s.lastModel, to: s.model })
+          pushEvent(s, { seq: event.seq, time: event.time, kind: 'model', from: s.lastModel, to: s.model })
+          countModelSwitch(s)
           bumpDetailRev(s)
         }
         if (s.model) s.lastModel = s.model
@@ -400,7 +396,11 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
       case 'tool/call': {
         if (data && typeof data.callId === 'string' && typeof data.name === 'string') {
           const cmdTool = commandTool(data.name)
-          const s = ensure(cmdTool === null ? ['callNames'] : ['callNames', 'commands'])
+          const ask = data.name === ASK_USER_TOOL ? askRecordOf(event.seq, event.time, data) : undefined
+          const keys: CloneKey[] = cmdTool === null ? ['callNames'] : ['callNames', 'commands']
+          if (ask !== undefined) keys.push('events')
+          if (cmdTool !== null && bounds.headOnly === true) keys.push('commandCalls')
+          const s = ensure(keys)
           const argsRaw = bounds.headOnly === true || !rawArgsNeeded(data.name) ? undefined : argsRawOf(data.arguments)
           if (data.callId !== '__proto__') {
             s.callNames[data.callId] = {
@@ -426,6 +426,10 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
               if (parsed.background === true) bumpBg(s)
               bumpDetailRev(s)
             }
+          }
+          if (ask !== undefined) {
+            pushEvent(s, ask)
+            bumpDetailRev(s)
           }
         }
         break
@@ -493,7 +497,7 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
           ? parentCallId
           : undefined
         if (!buffered && transportParent === undefined && bounded === starts) return state
-        const s = ensure([])
+        const s = ensure(buffered && bounds.headOnly === true ? ['commandCalls'] : [])
         if (bounded !== starts) s.pendingCodeStarts = bounded
         if (transportParent !== undefined) {
           s.callNames = { ...state.callNames, [transportParent]: { ...state.callNames[transportParent], transport: true } }
@@ -676,8 +680,8 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
       }
       case 'subagent/catalog':
       case 'team/member': {
-        const applied = applyAgentAliasEvent(state, event.type, data)
-        if (applied !== undefined) st = applied
+        const next = applyCatalogEvent(state, event.type, event.seq, event.time, data)
+        if (next !== undefined) st = next
         break
       }
       case 'user/message':
@@ -715,7 +719,7 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
               rec.detail = source.summary
             }
           }
-          s.events.push(rec)
+          pushEvent(s, rec)
           countInject(s)
           if (rec.sub === 'skill' && typeof rec.name === 'string') noteSkillName(s, rec.name)
         } else {
@@ -820,7 +824,7 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
             s.sums.tool -= node.tokens
             node.cat = 'skill'
             s.sums.skill += node.tokens
-            s.events.push({ seq: event.seq, time: event.time, kind: 'inject', form: 'instructions', sub: 'skill', name, tokens: node.tokens })
+            pushEvent(s, { seq: event.seq, time: event.time, kind: 'inject', form: 'instructions', sub: 'skill', name, tokens: node.tokens })
             countInject(s)
             noteSkillName(s, name)
             if (bounds.headOnly === true) {
@@ -944,11 +948,16 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
       case 'plan/mode': {
         if (data && typeof data.active === 'boolean') {
           const s = ensure(['events'])
-          s.events.push({ seq: event.seq, time: event.time, kind: 'mode', name: data.active ? 'plan.on' : 'plan.off' })
+          pushEvent(s, { seq: event.seq, time: event.time, kind: 'mode', name: data.active ? 'plan.on' : 'plan.off' })
           bumpDetailRev(s)
         }
         break
       }
+      case 'goal/change':
+      case 'todo/write':
+      case 'team/task':
+        st = applyWorkflowEvent(state, event)
+        break
       case 'compaction/summary':
       case 'compaction/prune': {
         const s = ensure(['events'])
@@ -958,7 +967,7 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
           s.pendingShadowEventSeq = event.seq
         }
         countCompaction(s, event.type === 'compaction/summary' ? 'compaction' : 'prune')
-        s.events.push({
+        pushEvent(s, {
           seq: event.seq,
           time: event.time,
           kind: event.type === 'compaction/summary' ? 'compaction' : 'prune',
@@ -984,8 +993,6 @@ function applyTimelineEvent(state: TimelineState, event: TimelineEvent, bounds: 
 }
 
 export { skillNameOf }
-export { createTimelineState, trimToLastTurns } from './foldState'
-export type { TimelineEvent, TimelineState } from './foldState'
-export { addBilledUsage, isBeijingPeak, tokenCountOf } from './foldMetering'
-export type { BilledUsage, UsageLike } from './foldMetering'
+export { createTimelineState, trimToLastTurns, type TimelineEvent, type TimelineState } from './foldState'
+export { addBilledUsage, isBeijingPeak, tokenCountOf, type BilledUsage, type UsageLike } from './foldMetering'
 export { buildTimelineDetail, buildTimelineHead, buildTimelineView } from './foldWire'

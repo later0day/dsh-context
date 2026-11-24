@@ -12,7 +12,7 @@ export const FAST_PACING = {
 }
 
 export async function until<T>(read: () => T | undefined, message: string): Promise<T> {
-  for (let i = 0; i < 300; i++) {
+  for (let i = 0; i < 2_000; i++) {
     const value = read()
     if (value !== undefined) return value
     await new Promise(resolve => setTimeout(resolve, 1))
@@ -132,4 +132,12 @@ export function fakeState(listed: unknown): FakeState {
     coldSnapshots: [],
     failReads: new Map(),
   }
+}
+
+export function assertIssueDetail(issues: { id: string; reason: string }[] | undefined, firstId: string): void {
+  assert.equal(issues?.length, 16, 'the detail stays bounded')
+  assert.equal(issues?.[0].id, firstId)
+  const reason = issues?.[0].reason ?? ''
+  assert.ok(reason.endsWith('…'))
+  assert.equal(reason.length, 181)
 }

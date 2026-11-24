@@ -3,15 +3,18 @@ import type { Category, ContextEventRecord, RequestRecord } from '../../shared/t
 import { CATS } from '../categories'
 import { bandsMaximaOf, deltaBandsOf, deltaTotalsOf, dnaBaseLabel } from '../dna'
 import { lruTouch, lruTrim } from '../boundedCache'
-import type { DeltaMaxima, DnaDelta, TrendBand } from '../dna'
+import type { DeltaMaxima, DnaDelta, TimelineBand } from '../dna'
 import { containHorizontalOverscroll } from '../overscroll'
 import { scrollToPos } from '../revealScroll'
 import type { ViewKit } from '../viewkit'
-import { DnaBar, DnaDeltaBar, DnaHighlights, RISE_CLASS, STAGGER_CAP } from './trendDnaBars'
-import { DurationCurve } from './trendDurationCurve'
-import { BAR_GAP, BAR_W, TREND_WINDOW_MIN, WINDOW_HYSTERESIS_BARS, WINDOW_OVERSCAN_BARS, initialBarWindow, nextBarWindow, windowPads, windowRangeFor } from './trendWindow'
-import type { BarWindow } from './trendWindow'
-import { preprocessTrend, TURN_FILLS, trendMaxima, trendTipRows, turnStepsOf } from './trendModel'
+import { DnaBar, DnaDeltaBar, DnaHighlights, RISE_CLASS, STAGGER_CAP } from './timelineDnaBars'
+import { DurationCurve } from './timelineDurationCurve'
+import { TimelineMilestoneBand } from './timelineMilestoneBand'
+import { bandItemsOf, milestonesOf, type MilestoneBandItem } from './timelineMilestones'
+import { milestoneLabel, milestoneTipRows } from './timelineMilestoneText'
+import { BAR_GAP, BAR_W, TIMELINE_WINDOW_MIN, WINDOW_HYSTERESIS_BARS, WINDOW_OVERSCAN_BARS, initialBarWindow, nextBarWindow, windowPads, windowRangeFor } from './timelineWindow'
+import type { BarWindow } from './timelineWindow'
+import { preprocessTimeline, riseKeyOf, TURN_FILLS, timelineMaxima, timelineTipRows, turnStepsOf } from './timelineModel'
 import { clampTipLeft } from './tip'
 import { useElementSize } from './useElementMetrics'
 
@@ -22,9 +25,9 @@ const DNA_WINDOW_HYSTERESIS = 2
 
 const BAND_STORE_MAX = 512
 
-export interface TrendChartProps {
+export interface TimelineChartProps {
   requests: RequestRecord[]
-  markers: (ContextEventRecord | undefined)[]
+  events: ContextEventRecord[]
   selectedSeq: number | null
   hoveredSeq: number | null
   activeTurn: number | null
@@ -36,8 +39,8 @@ export interface TrendChartProps {
   focusCat?: string | null
   adaptive?: boolean
   durationCurve?: boolean
-  dna?: TrendBand[][] | null
-  dnaAt?: ((seq: number) => TrendBand[]) | null
+  dna?: TimelineBand[][] | null
+  dnaAt?: ((seq: number) => TimelineBand[]) | null
   deltaMaxima?: DeltaMaxima | null
   onPickBand?: (seq: number, band: { key: string; cat: Category | 'system' | 'tools' }) => void
   onSelect: (seq: number | null) => void
@@ -49,8 +52,8 @@ export interface TrendChartProps {
   onFocusSeqHandled: () => void
 }
 
-export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactElement {
-  const { t, fmt, fmtDuration, eventLabel, eventAt, catLabel } = kit
+export function makeTimelineChart(kit: ViewKit): (props: TimelineChartProps) => ReactElement {
+  const { t, fmt, fmtDuration, catLabel } = kit
 
   const centerBar = (el: HTMLDivElement, idx: number): void => {
     scrollToPos(el, { left: Math.max(0, idx * (BAR_W + BAR_GAP) + BAR_W / 2 - el.clientWidth / 2) })
@@ -73,7 +76,6 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
 
   interface ChartBarProps {
     req: RequestRecord
-    marker: ContextEventRecord | undefined
     selected: boolean
     hovered: boolean
     inTurn: boolean
@@ -82,7 +84,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     enterIndex: number
     rise: boolean
     flag: number | null
-    dna: TrendBand[] | null
+    dna: TimelineBand[] | null
     dnaDelta: DnaDelta | null
     dnaScale: number | undefined
     onDnaHit: (key: string | null) => void
@@ -93,8 +95,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
 
   const ChartBar = memo(function ChartBar(props: ChartBarProps): ReactElement {
     kit.useLocaleTick()
-    const { req, marker } = props
-    const markerAt = marker !== undefined ? eventAt(marker) : null
+    const { req } = props
     const deltaBar = props.deltaScale !== undefined
     const enterStyle = { '--lc-i': Math.min(props.enterIndex, STAGGER_CAP) } as CSSProperties
     const riseCls = props.rise ? RISE_CLASS : ''
@@ -122,13 +123,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
         onMouseEnter={() => { props.onHover(req.seq) }}
       >
         {props.flag !== null ? (
-          <span className="lc-trend-flag" aria-hidden="true"><span className="lc-trend-flag-label">{props.flag}</span></span>
-        ) : null}
-        {marker !== undefined ? (
-          <span
-            className="lc-bar-marker"
-            title={'✂ ' + (markerAt !== null ? markerAt + ' — ' : '') + eventLabel(marker)}
-          >{'✂'}</span>
+          <span className="lc-timeline-flag" aria-hidden="true"><span className="lc-timeline-flag-label">{props.flag}</span></span>
         ) : null}
         {props.dna !== null ? (
           props.dnaDelta !== null && props.dnaScale !== undefined ? (
@@ -175,7 +170,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     )
   })
 
-  return function TrendChart(props: TrendChartProps): ReactElement {
+  return function TimelineChart(props: TimelineChartProps): ReactElement {
     const dnaArray = props.dna ?? null
     const dnaAt = props.dnaAt ?? null
     const dnaOn = dnaArray !== null || dnaAt !== null
@@ -184,31 +179,47 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     const durationOn = props.durationCurve === true
     const [dnaHit, setDnaHit] = useState<string | null>(null)
     const [localHover, setLocalHover] = useState<number | null>(null)
+    const [msHoverKey, setMsHoverKey] = useState<string | null>(null)
     const hoverSeq = localHover ?? props.hoveredSeq
-    const handleBarHover = useCallback((seq: number | null): void => {
+    const rawBarHover = useCallback((seq: number | null): void => {
       if (seq !== null && props.hoverLock !== undefined && performance.now() < props.hoverLock.current) return
       setLocalHover(seq)
       props.onHover(seq)
     }, [props.onHover, props.hoverLock])
+    const handleBarHover = useCallback((seq: number | null): void => {
+      setMsHoverKey(null)
+      rawBarHover(seq)
+    }, [rawBarHover])
+    const handleMilestoneHover = useCallback((item: MilestoneBandItem): void => {
+      setMsHoverKey(item.key)
+      rawBarHover(item.group.targetSeq)
+    }, [rawBarHover])
+    const handleMilestoneLeave = useCallback((): void => {
+      setMsHoverKey(null)
+      rawBarHover(null)
+    }, [rawBarHover])
+    const handleMilestonePick = useCallback((item: MilestoneBandItem): void => {
+      props.onSelect(item.group.targetSeq)
+    }, [props.onSelect])
     useEffect(() => {
       setLocalHover(prev => (prev === null || props.hoveredSeq === prev ? prev : null))
     }, [props.hoveredSeq])
     const { requests, focus } = useMemo(
-      () => preprocessTrend(props.requests, delta, dnaOn ? null : props.focusCat),
+      () => preprocessTimeline(props.requests, delta, dnaOn ? null : props.focusCat),
       [props.requests, delta, props.focusCat, dnaOn],
     )
     const bandStore = useMemo(() => ({
-      bands: new Map<number, TrendBand[]>(),
+      bands: new Map<number, TimelineBand[]>(),
       deltas: new Map<number, DnaDelta>(),
     }), [dnaAt, dnaArray])
-    const bandAt = useCallback((idx: number): TrendBand[] => {
+    const bandAt = useCallback((idx: number): TimelineBand[] => {
       const seq = requests[idx].seq
       const hit = bandStore.bands.get(seq)
       if (hit !== undefined) {
         lruTouch(bandStore.bands, seq)
         return hit
       }
-      const bands = dnaAt !== null ? dnaAt(seq) : (dnaArray as TrendBand[][])[idx]
+      const bands = dnaAt !== null ? dnaAt(seq) : (dnaArray as TimelineBand[][])[idx]
       bandStore.bands.set(seq, bands)
       lruTrim(bandStore.bands, BAND_STORE_MAX)
       return bands
@@ -224,7 +235,6 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
       lruTrim(bandStore.deltas, BAND_STORE_MAX)
       return d
     }, [bandStore, bandAt])
-    const markers = props.markers
     const adaptive = props.adaptive === true
     const [visMax, setVisMax] = useState<VisibleMax | null>(null)
     const measureVisible = (el: HTMLDivElement): void => {
@@ -269,7 +279,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
       if (props.deltaMaxima !== undefined && props.deltaMaxima !== null) return props.deltaMaxima.up
       let up = 0
       if (dnaDeltaOn && dnaAt !== null && (!adaptive || visMax === null)) {
-        let prev: TrendBand[] | null = null
+        let prev: TimelineBand[] | null = null
         for (let i = 0; i < requests.length; i++) {
           const bands = dnaAt(requests[i].seq)
           const totals = deltaTotalsOf(bands, prev)
@@ -284,7 +294,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     if (dnaDeltaOn) {
       maxUp = dnaMaxUp
     } else {
-      const maxima = trendMaxima(requests, delta)
+      const maxima = timelineMaxima(requests, delta)
       maxTotal = maxima.maxTotal
       maxUp = maxima.maxUp
     }
@@ -372,7 +382,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     const prevScrollWidthRef = useRef(0)
     const cwRef = useRef(0)
     const slRef = useRef(0)
-    const windowed = requests.length > TREND_WINDOW_MIN
+    const windowed = requests.length > TIMELINE_WINDOW_MIN
     const windowOverscan = dnaOn ? DNA_WINDOW_OVERSCAN : WINDOW_OVERSCAN_BARS
     const windowHysteresis = dnaOn ? DNA_WINDOW_HYSTERESIS : WINDOW_HYSTERESIS_BARS
     const [barWindow, setBarWindow] = useState<BarWindow>(() => initialBarWindow(requests.length, windowOverscan))
@@ -380,7 +390,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     useLayoutEffect(() => { barWindowRef.current = barWindow }, [barWindow])
     const winRafRef = useRef<number | null>(null)
     const syncWindow = (el: HTMLDivElement): void => {
-      if (requests.length <= TREND_WINDOW_MIN) return
+      if (requests.length <= TIMELINE_WINDOW_MIN) return
       const desired = windowRangeFor(el.scrollLeft, el.clientWidth, requests.length, windowOverscan)
       const prev = barWindowRef.current
       const next = nextBarWindow(prev, desired, requests.length, windowHysteresis)
@@ -406,7 +416,7 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
       const changed = prevDnaOn.current !== dnaOn
       prevDnaOn.current = dnaOn
       const el = scrollRef.current
-      if (el === null || requests.length <= TREND_WINDOW_MIN || (first && !dnaOn) || (!first && !changed)) return
+      if (el === null || requests.length <= TIMELINE_WINDOW_MIN || (first && !dnaOn) || (!first && !changed)) return
       const overscan = dnaOn ? DNA_WINDOW_OVERSCAN : WINDOW_OVERSCAN_BARS
       const hysteresis = dnaOn ? DNA_WINDOW_HYSTERESIS : WINDOW_HYSTERESIS_BARS
       const desired = windowRangeFor(el.scrollLeft, el.clientWidth, requests.length, overscan)
@@ -515,6 +525,15 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
       : Math.max(0, requests.length - 1)
     const pads = windowPads(shownFrom, shownTo, requests.length)
     const shownBars = requests.slice(shownFrom, shownTo + 1)
+    const milestoneGroups = useMemo(
+      () => milestonesOf(props.requests, props.events, props.granularity),
+      [props.requests, props.events, props.granularity],
+    )
+    const bandItems = useMemo(
+      () => bandItemsOf(milestoneGroups, { shownFrom, shownTo, leftPad: pads.left }),
+      [milestoneGroups, shownFrom, shownTo, pads.left],
+    )
+    const msItem = msHoverKey !== null ? bandItems.find(item => item.key === msHoverKey) ?? null : null
 
     const stepsOf = useMemo(() => turnStepsOf(props.requests), [props.requests])
     const hoveredIdx = hoverSeq !== null ? requests.findIndex(r => r.seq === hoverSeq) : -1
@@ -562,19 +581,27 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
       for (let i = shownFrom; i <= shownTo; i++) slices[i] = dnaSliceIndex.get(i)?.get(dnaHit) ?? null
       return slices
     }, [dnaSliceIndex, dnaHit, shownFrom, shownTo, requests.length])
+    const msTextOptions = { granularity: props.granularity, stepsOf }
+    const milestoneRowsOf = (group: MilestoneBandItem['group'], req: RequestRecord): string[] =>
+      milestoneTipRows(kit, msTextOptions, group, req)
+    const milestoneLabelOf = (item: MilestoneBandItem): string =>
+      milestoneLabel(kit, msTextOptions, item.group, requests[item.group.targetIdx])
     const tipRowsOf = (req: RequestRecord): string[] => {
       const band = hitBand ?? hoveredDelta
-      return trendTipRows(kit, {
+      return timelineTipRows(kit, {
         granularity: props.granularity,
         stepsOf,
         delta,
         focus,
         durationOn,
         metric: band !== null
-          ? t('trend.dnaItem', { label: dnaBaseLabel(band, t, catLabel), n: dnaDeltaOn ? fmtSigned(band.tokens) : fmt(band.tokens) })
+          ? t('timeline.dnaItem', { label: dnaBaseLabel(band, t, catLabel), n: dnaDeltaOn ? fmtSigned(band.tokens) : fmt(band.tokens) })
           : undefined,
       }, req)
     }
+    const tipRows = msHoverKey === null
+      ? (hoveredReq !== null ? tipRowsOf(hoveredReq) : null)
+      : (msItem !== null ? milestoneRowsOf(msItem.group, requests[msItem.group.targetIdx]) : null)
 
     const tipColRef = useRef(0)
 
@@ -591,13 +618,15 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
     useLayoutEffect(() => {
       /* v8 ignore next 1 */
       if (scrollRef.current === null) return
-      tipColRef.current = hoveredIdx >= 0 ? hoveredIdx * (BAR_W + BAR_GAP) + BAR_W / 2 : 0
+      tipColRef.current = msItem !== null
+        ? msItem.x
+        : hoveredIdx >= 0 ? hoveredIdx * (BAR_W + BAR_GAP) + BAR_W / 2 : 0
       syncTip(scrollRef.current)
-    }, [hoveredIdx, dnaHit])
+    }, [hoveredIdx, dnaHit, msItem])
 
     return (
       <div className="lc-chartrow">
-        <div className="lc-axis">
+        <div className="lc-axis lc-axis-milestones">
           {delta ? (
             <>
               <span className="lc-axis-top">{fmtSigned(maxUp)}</span>
@@ -630,10 +659,10 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
             }}
           >
             <div
-              className="lc-chart"
+              className="lc-chart lc-chart-milestones"
               data-lc-bars={requests.length}
               data-catdim={props.hoverCat ?? undefined}
-              onMouseLeave={() => { props.onHover(null); setLocalHover(null); setDnaHit(null) }}
+              onMouseLeave={() => { props.onHover(null); setLocalHover(null); setDnaHit(null); setMsHoverKey(null) }}
             >
               <div className="lc-grid lc-grid-top" />
               <div className="lc-grid lc-grid-q3" />
@@ -645,9 +674,8 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
                 const i = shownFrom + k
                 return (
                   <ChartBar
-                    key={`${req.seq}:${props.granularity}:${props.mode}`}
+                    key={`${req.seq}:${riseKeyOf(props.granularity, props.mode, focus)}`}
                     req={req}
-                    marker={markers[i]}
                     selected={props.selectedSeq === req.seq}
                     hovered={hoverSeq === req.seq}
                     inTurn={props.activeTurn !== null && (req.turn ?? 0) === props.activeTurn}
@@ -676,6 +704,17 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
                   dots={durationGeometry.dots}
                 />
               ) : null}
+              <TimelineMilestoneBand
+                items={bandItems}
+                activeKey={msItem !== null ? msItem.key : null}
+                selectedSeq={props.selectedSeq}
+                activeTurn={props.activeTurn}
+                bandLabel={t('timeline.ms.band')}
+                labelOf={milestoneLabelOf}
+                onHoverItem={handleMilestoneHover}
+                onLeaveItem={handleMilestoneLeave}
+                onPickItem={handleMilestonePick}
+              />
             </div>
             <div className="lc-turns" style={labelFont !== '' ? { fontSize: labelFont } : undefined} onMouseLeave={() => { props.onHoverTurn(null) }}>
               {groups.map((grp, gi) => {
@@ -705,12 +744,12 @@ export function makeTrendChart(kit: ViewKit): (props: TrendChartProps) => ReactE
               })}
             </div>
           </div>
-          {hoveredReq !== null ? (
-            <div className="lc-chart-tip">{tipRowsOf(hoveredReq).map((row, i) => <span key={i}>{row}</span>)}</div>
+          {tipRows !== null ? (
+            <div className="lc-chart-tip">{tipRows.map((row, i) => <span key={i}>{row}</span>)}</div>
           ) : null}
         </div>
         {durationOn ? (
-          <div className="lc-axis lc-axis-r">
+          <div className="lc-axis lc-axis-r lc-axis-milestones">
             <span className="lc-axis-top">{fmtDuration(maxActiveMs)}</span>
             <span className="lc-axis-q3">{fmtDuration(Math.round(maxActiveMs * 3 / 4))}</span>
             <span className="lc-axis-mid">{fmtDuration(Math.round(maxActiveMs / 2))}</span>
