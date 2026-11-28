@@ -473,12 +473,21 @@ describe('the cold fold (issue #145)', () => {
 describe('createDetailGate projection reads', () => {
   const flush = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
 
-  test('a retained handle outranks the registry read', async () => {
+  test('a retained async handle outranks the registry read', async () => {
     const registry = vi.fn(() => 'registry')
     const gate = createDetailGate(ctxOf({ stateOf: registry }).ctx)
     const session = {}
     gate.retain('contextTimeline', Promise.resolve({ stateOf: (s: unknown) => (s === session ? 'handle' : 'other') }))
     await flush()
+    assert.equal(gate.stateOf(session, 'contextTimeline'), 'handle')
+    assert.equal(registry.mock.calls.length, 0)
+  })
+
+  test('a retained synchronous handle supports older projection registries', () => {
+    const registry = vi.fn(() => 'registry')
+    const gate = createDetailGate(ctxOf({ stateOf: registry }).ctx)
+    const session = {}
+    gate.retain('contextTimeline', { stateOf: (s: unknown) => (s === session ? 'handle' : 'other') })
     assert.equal(gate.stateOf(session, 'contextTimeline'), 'handle')
     assert.equal(registry.mock.calls.length, 0)
   })

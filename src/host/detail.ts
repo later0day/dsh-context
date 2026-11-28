@@ -46,13 +46,18 @@ export function createDetailGate(ctx: Context): DetailChannelGate {
   return {
     live: false,
     retain(key: string, registration: unknown): void {
+      const retained = handleOf(registration)
+      if (retained !== undefined) {
+        handles.set(key, retained)
+        return
+      }
       if (registration === null || (typeof registration !== 'object' && typeof registration !== 'function')) return
       const then = (registration as { then?: unknown }).then
       if (typeof then !== 'function') return
       void Promise.resolve(registration as Promise<unknown>).then(
         (handle) => {
-          const retained = handleOf(handle)
-          if (retained !== undefined) handles.set(key, retained)
+          const resolved = handleOf(handle)
+          if (resolved !== undefined) handles.set(key, resolved)
         },
         (error: unknown) => { ctx.logger.error(error) },
       )

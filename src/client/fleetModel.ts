@@ -647,8 +647,10 @@ export function useFleetDetails(cache?: FleetDetailCache, options: { scopeKey?: 
     /* v8 ignore next 1 */
     if (root.current === null) return
     const task = nextTask()
-    /* v8 ignore next 1 */
-    if (task === null) return
+    if (task === null) {
+      schedule(0)
+      return
+    }
     await run(task)
   }
 

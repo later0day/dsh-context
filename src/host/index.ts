@@ -42,7 +42,7 @@ const OVERVIEW_WARM_DELAY_MS = 100
 export const inject = ['sessionProjections']
 
 export { Config } from './config'
-export function apply(ctx: Context, config: Config): void {
+export async function apply(ctx: Context, config: Config): Promise<void> {
   const coldReads = makeColdReadGate()
   const catalog = createCatalogService()
   const pricing = createCostSource(catalog)
@@ -55,9 +55,9 @@ export function apply(ctx: Context, config: Config): void {
   watchFleetChannel(ctx, coldReads)
   watchAttachmentChannel(ctx, coldReads)
   if (harnessVersion !== undefined && !meetsBaseline(harnessVersion)) {
-    ctx.sessionProjections.register(createFallbackTimelineDefinition(harnessVersion) as never)
-    ctx.sessionProjections.register(createFallbackHeadersDefinition() as never)
-    ctx.sessionProjections.register(createFallbackActivityDefinition() as never)
+    await Promise.resolve(ctx.sessionProjections.register(createFallbackTimelineDefinition(harnessVersion) as never))
+    await Promise.resolve(ctx.sessionProjections.register(createFallbackHeadersDefinition() as never))
+    await Promise.resolve(ctx.sessionProjections.register(createFallbackActivityDefinition() as never))
     return
   }
   const attribution = createToolAttribution(ctx, harnessVersion)
@@ -76,9 +76,12 @@ export function apply(ctx: Context, config: Config): void {
   watchCommandPageChannel(ctx, resolveBounds(config), coldReads)
   const cache = createOverviewCache({ config })
   watchHeadsChannel(ctx, { bounds, coldReads, cost: pricing, cache })
-  gate.retain('contextTimeline', ctx.sessionProjections.register(createContextTimelineDefinition(config, () => gate.live, pricing)))
-  ctx.sessionProjections.register(createContextHeadersDefinition(name => attribution.ownerOf(name)))
-  ctx.sessionProjections.register(createContextActivityDefinition())
+  gate.retain(
+    'contextTimeline',
+    await Promise.resolve(ctx.sessionProjections.register(createContextTimelineDefinition(config, () => gate.live, pricing))),
+  )
+  await Promise.resolve(ctx.sessionProjections.register(createContextHeadersDefinition(name => attribution.ownerOf(name))))
+  await Promise.resolve(ctx.sessionProjections.register(createContextActivityDefinition()))
   watchTimelineRowSweep(ctx)
   let overview: ReturnType<typeof watchOverviewRoute> | null = null
   let warmTimer: ReturnType<typeof setTimeout> | null = null
